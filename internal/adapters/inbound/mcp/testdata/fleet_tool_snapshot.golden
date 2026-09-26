@@ -1,0 +1,6 @@
+inventory-storage	check_availability
+inventory-storage	get_bin_occupancy
+inventory-storage	revoke_reservation
+workforce-management	assign_labor
+workforce-management	get_staffing_gap
+workforce-management	propose_path_heads

@@ -154,10 +154,76 @@ Jaeger and Grafana alongside HTTP.
    the platform's ≥90% coverage bar, plus at least one transport-level test.
 2. The MCP adapter **MUST** pass `make check` (fmt, vet, build, lint, test) and
    the arch-go fitness tests.
-3. **Phase-6 CI gate (planned):** a workflow that lints tool schemas, enforces
-   the naming conventions and mandatory annotations, and fails a PR that exceeds
-   the tool-count budget without justification — the left-shift equivalent of
-   `make check` for the MCP surface.
+3. **Phase-6 governance gate:** implemented in this repository as
+   `internal/adapters/inbound/mcp/governance_test.go` — a plain `go test`
+   (so it runs in the CI `test` job) that boots the real server and asserts
+   the tool-count budget, the naming convention, mandatory annotations and
+   non-empty descriptions.
+4. **Eval gate (E1–E3):** the tool surface **MUST** pass the eval suites in
+   `internal/adapters/inbound/mcp/eval_*_test.go` and
+   `evalsuite_test.go`, all plain `go test`s inside the CI `test` job:
+   - **E1 — schema & metadata** (`eval_governance_test.go`): every
+     advertised tool's input schema resolves as a JSON Schema, accepts a
+     schema-shaped arguments object, and REJECTS wrong-typed values (it
+     constrains model input, not just decorates it); every parameter
+     carries a non-empty description; the advertised surface matches
+     `testdata/tool_registry.golden` (which pins the DEFAULT surface — the
+     curated report tool's conditional registration is pinned by its own
+     eval); and this repo's tools are present, correctly credited, and
+     globally unique in `testdata/fleet_tool_snapshot.golden` (the
+     federated registry kept identical across all fleet repos — a model
+     host mounts several of these servers together, so tool names MUST NOT
+     collide).
+   - **E2 — wire conformance** (`eval_conformance_test.go`): over the real
+     Streamable HTTP handler — initialize handshake carries server info
+     and non-empty instructions; unknown tools, wrong-typed arguments,
+     unknown extra arguments, unknown resources and prompts are rejected;
+     resource templates and prompts are discoverable; a closed session
+     fails loudly.
+   - **E3 — behavioral evals** (`evalsuite_test.go` +
+     `testdata/features/mcp_tools.feature`): Gherkin scenarios driving
+     `tools/call` with model-realistic arguments (stray keys, wrong types,
+     unknown ids) against seeded state, pinning structured results and
+     side effects (domain events, state visible through other tools).
+
+### Pinned behavioral contracts the evals found
+
+- Typed tool schemas are **strict** (`additionalProperties: false`, the
+  SDK default): stray model-generated argument keys are rejected with a
+  validation error, not silently ignored.
+- `get_staffing_gap` cannot distinguish a path absent from the committed
+  plan from one planned for zero heads — both report planned 0 / active 0
+  / not understaffed. An unknown **building or shift** is a clean
+  `not found` tool error; an unknown **path** inside a committed plan is
+  zeros, not an error. Pinned as the visible contract.
+- Reading an understaffed path via `get_staffing_gap` **publishes
+  `PathUnderstaffed`** — a read with a domain-event side effect (the
+  analytics audit trail). Likewise `propose_path_heads` publishes
+  `ShiftPlanProposed` on every call: the proposal commits nothing but
+  still leaves an audit event.
+- `assign_labor`'s single-active invariant is enforced **by construction**:
+  assigning an associate who already holds an active assignment to a
+  different path is a *reassignment* (prior assignment ended,
+  `LaborReassigned` raised), never a double-booking rejection.
+- `get_workforce_labor_report`'s optional filters (`pathId`,
+  `granularity`) are schema-**required** (no Go field carries `omitempty`,
+  so every parameter lands in `required`): a model must pass them,
+  possibly as empty strings, which the handler treats as "unset". The
+  tool itself is registered only when a reports client is wired into
+  `Deps`; the golden registry pins the default three-tool surface.
+- Tool handler errors surface as **tool-level error results** carrying the
+  domain error text (the SDK's `ToolHandlerFor` mapping) — the clean
+  structured tool errors §8.3 requires, never a silent failure.
+
+### Status in this repository
+
+`workforce-management-mcp` exposes 3 tools (`get_staffing_gap`,
+`propose_path_heads`, `assign_labor`) plus `get_workforce_labor_report`
+when a reports client is configured, one resource template
+(`staffing://{buildingId}/{shiftId}/{pathId}/gap`) and one prompt
+(`cover_staffing_gaps`). Each tool call gets an OTel span
+(`mcp.tool <name>`). Not yet implemented here: write-tool rate limiting
+(§8.2) and a dedicated audit record per call (§9).
 
 ## 11. Changing this charter
 
