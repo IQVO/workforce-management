@@ -94,6 +94,61 @@ func TestRecordLaborAssignmentEmitsOutcomeAttributes(t *testing.T) {
 	}
 }
 
+// recordingErrorHandler captures whatever otel.Handle was called with.
+type recordingErrorHandler struct {
+	errs []error
+}
+
+func (h *recordingErrorHandler) Handle(err error) { h.errs = append(h.errs, err) }
+
+// TestNewLaborAssignmentsCounterCreationErrorIsHandledNotFatal proves the
+// guard branch: when the provider cannot create the instrument (here: a
+// view assigns the counter an incompatible aggregation), the error is
+// surfaced through otel.Handle and the returned instrument is still usable —
+// a metric must never fail a domain operation.
+func TestNewLaborAssignmentsCounterCreationErrorIsHandledNotFatal(t *testing.T) {
+	// A reader is required for views to be applied at instrument creation;
+	// last-value aggregation is incompatible with a counter, so the SDK
+	// rejects the creation synchronously.
+	provider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewManualReader()),
+		sdkmetric.WithView(sdkmetric.NewView(
+			sdkmetric.Instrument{Name: "workforce.labor_assignments"},
+			sdkmetric.Stream{Aggregation: sdkmetric.AggregationLastValue{}},
+		)),
+	)
+	otel.SetMeterProvider(provider)
+
+	handler := &recordingErrorHandler{}
+	otel.SetErrorHandler(handler)
+
+	counter := newLaborAssignmentsCounter()
+	if counter == nil {
+		t.Fatal("the metric API contract guarantees a usable instrument alongside the error")
+	}
+	if len(handler.errs) == 0 {
+		t.Fatal("expected the instrument-creation error to reach otel.Handle")
+	}
+	// The returned instrument must be usable, not a panic hazard.
+	counter.Add(context.Background(), 1)
+
+	// Leave the package in a working state for any later instrument
+	// creation: hand back a clean SDK provider.
+	otel.SetMeterProvider(sdkmetric.NewMeterProvider())
+}
+
+// TestRecordLaborAssignmentNilCounterIsNoOp proves the nil-meter guard: a
+// counter that failed to be created must make recording a silent no-op for
+// BOTH outcomes, never a panic.
+func TestRecordLaborAssignmentNilCounterIsNoOp(t *testing.T) {
+	prev := laborAssignments
+	laborAssignments = nil
+	defer func() { laborAssignments = prev }()
+
+	recordLaborAssignment(context.Background(), "nil-counter-guard", nil)
+	recordLaborAssignment(context.Background(), "nil-counter-guard", assignment.ErrCertificationRequired)
+}
+
 // laborAssignmentPoints digs the workforce.labor_assignments sum out of a
 // collected ResourceMetrics.
 func laborAssignmentPoints(t *testing.T, rm *metricdata.ResourceMetrics) []metricdata.DataPoint[int64] {
