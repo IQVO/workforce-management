@@ -694,7 +694,8 @@ components:
       description: >-
         Malformed JSON body, or a required field was missing/empty
         (empty-associate-id, empty-path-id, empty-certification,
-        missing-building-id, missing-shift-id, or malformed-request-body).
+        missing-building-id, missing-shift-id, missing-charge, or
+        malformed-request-body).
       content:
         application/problem+json:
           schema:
@@ -779,11 +780,13 @@ components:
       properties:
         certifications:
           type: array
+          nullable: true
           description: >-
             Initial certifications the associate holds at shift start.
-            May be empty — certifications can be added later via
-            POST /associates/{id}/certifications. Each entry must be
-            non-empty.
+            May be empty or null (both mean "none yet" — null is treated
+            exactly like omitting the field) — certifications can be
+            added later via POST /associates/{id}/certifications. Each
+            entry must be non-empty.
           items:
             type: string
             minLength: 1
@@ -820,7 +823,11 @@ components:
         charge:
           type: number
           format: double
-          description: The volume of work (units) to be covered on this path.
+          description: >-
+            The volume of work (units) to be covered on this path.
+            Required: omitting it (or sending null) is rejected with a
+            400 missing-charge problem; an explicit 0 is a valid
+            "nothing to do" charge.
           example: 100
         plannedRate:
           type: number

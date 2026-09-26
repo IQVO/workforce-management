@@ -19,6 +19,12 @@ import (
 var (
 	errMissingBuildingId = errors.New("buildingId is required")
 	errMissingShiftId    = errors.New("shiftId is required")
+	errMissingCharge     = errors.New("charge is required")
+	// errNullBody rejects a literal JSON null request body (a no-op when
+	// decoded into a value struct). It intentionally has no dedicated
+	// categoryFor entry: categoryFor's 400-status fallback already maps
+	// it to malformed-request-body, which is exactly what a null body is.
+	errNullBody = errors.New("request body must be a JSON object, not null")
 )
 
 // problemErrorsURIBase is the base for this service's RFC 7807 "type" URIs.
@@ -96,6 +102,8 @@ func categoryFor(status int, err error) problemCategory {
 		return problemCategory{"missing-building-id", "buildingId is required"}
 	case errors.Is(err, errMissingShiftId):
 		return problemCategory{"missing-shift-id", "shiftId is required"}
+	case errors.Is(err, errMissingCharge):
+		return problemCategory{"missing-charge", "charge is required"}
 	case errors.Is(err, associate.ErrAlreadyOnBreak):
 		return problemCategory{"associate-already-on-break", "Associate is already on break"}
 	case errors.Is(err, associate.ErrNotOnBreak):

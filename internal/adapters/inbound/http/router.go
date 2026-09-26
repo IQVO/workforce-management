@@ -128,9 +128,17 @@ func (h *Handler) startShift(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req startShiftRequest
+	// Decode into a POINTER so a literal JSON null body (a no-op for a
+	// value struct — every field here is optional, so null silently
+	// created a shift) is distinguishable and rejected. The spec's
+	// requestBody is a required object; null is malformed-request-body.
+	var req *startShiftRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, r, http.StatusBadRequest, err)
+		return
+	}
+	if req == nil {
+		writeError(w, r, http.StatusBadRequest, errNullBody)
 		return
 	}
 
@@ -201,8 +209,15 @@ func (h *Handler) proposePathPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, errMissingBuildingId)
 		return
 	}
+	// An omitted charge is a client mistake (explicit 0 is legitimate) —
+	// without this nil-check the omitted field was silently coerced to a
+	// 0 charge and the proposal accepted.
+	if req.Charge == nil {
+		writeError(w, r, http.StatusBadRequest, errMissingCharge)
+		return
+	}
 
-	heads, resolvedRate, rateSource, trimReason, err := h.ProposePathPlan.Execute(r.Context(), req.BuildingId, pathId, req.Charge, req.PlannedRate)
+	heads, resolvedRate, rateSource, trimReason, err := h.ProposePathPlan.Execute(r.Context(), req.BuildingId, pathId, *req.Charge, req.PlannedRate)
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return

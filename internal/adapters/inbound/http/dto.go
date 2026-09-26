@@ -16,10 +16,16 @@ type certifyRequest struct {
 // proposePathPlanRequest's plannedRate is OPTIONAL: omit it (or send <= 0)
 // to let ProposePathPlan fall back to a measured rate fed back from
 // labor-performance when one is available for this path (ADR-0012).
+//
+// Charge is a pointer so an omitted field is distinguishable from an
+// explicit 0 charge (0 is a legitimate "nothing to do" charge; omitting
+// the field entirely is a client mistake and must 400 — without the
+// pointer, encoding/json silently coerced an omitted charge to 0 and the
+// request was accepted).
 type proposePathPlanRequest struct {
-	BuildingId  string  `json:"buildingId"`
-	Charge      float64 `json:"charge"`
-	PlannedRate float64 `json:"plannedRate,omitempty"`
+	BuildingId  string   `json:"buildingId"`
+	Charge      *float64 `json:"charge,omitempty"`
+	PlannedRate float64  `json:"plannedRate,omitempty"`
 }
 
 // proposePathPlanResponse's RateSource is one of usecases.RateSourceCaller
