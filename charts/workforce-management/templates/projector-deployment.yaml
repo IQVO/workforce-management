@@ -70,6 +70,14 @@ spec:
               port: admin
             initialDelaySeconds: 3
             periodSeconds: 5
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            httpGet:
+              path: {{ .httpGet.path }}
+              port: admin
+            periodSeconds: {{ .periodSeconds }}
+            failureThreshold: {{ .failureThreshold }}
+          {{- end }}
           resources:
             {{- toYaml .Values.analytics.projector.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

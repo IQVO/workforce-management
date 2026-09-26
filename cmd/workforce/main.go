@@ -19,6 +19,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	inbound "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/filecatalog"
@@ -138,9 +139,18 @@ func run() error {
 		if kafkaBrokersCSV == "" {
 			return fmt.Errorf("PATH_CATALOGUE_SOURCE=kafka requires KAFKA_BROKERS to be set")
 		}
+		// Retried: this consumer's construction dials Kafka directly to
+		// determine its readiness watermark (newTargetOffsets), and in
+		// this fleet EVERY injected pod's first outbound dial is reset
+		// ~10s after start (Istio native sidecars). One attempt here
+		// turns that transient into the same CrashLoopBackOff the
+		// Postgres boot dial below is guarded against.
 		var err error
-		kafkaCatalogue, err = kafkacatalog.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
-		if err != nil {
+		if err = bootretry.Retry(ctx, logger, "connect process-path catalogue kafka consumer", func() error {
+			var newErr error
+			kafkaCatalogue, newErr = kafkacatalog.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
+			return newErr
+		}); err != nil {
 			return fmt.Errorf("failed to start the Kafka-sourced process-path catalogue: %w", err)
 		}
 		logger.Info("process-path catalogue source configured", "source", "kafka", "topic", kafkacatalog.Topic)
@@ -176,12 +186,26 @@ func run() error {
 		catalogue = fileCatalogue
 	}
 
-	if err := postgres.Migrate(databaseURL, migrationsPath); err != nil {
+	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP dial
+	// (here, Postgres) is reset ~10s after the app starts (Istio native
+	// sidecars). A single attempt turns that known, transient condition
+	// into CrashLoopBackOff — migrations fail with "read: connection
+	// reset by peer", the process exits, and the pod never gets far
+	// enough to serve its own health probe. The retry does not weaken
+	// the fail-closed rule: once the budget (bootretry.Retries,
+	// ~31s total) is exhausted this still refuses to boot.
+	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+		return postgres.Migrate(databaseURL, migrationsPath)
+	}); err != nil {
 		return err
 	}
 
-	pool, err := postgres.NewPool(ctx, databaseURL)
-	if err != nil {
+	var pool *pgxpool.Pool
+	if err := bootretry.Retry(ctx, logger, "open postgres pool", func() error {
+		var err error
+		pool, err = postgres.NewPool(ctx, databaseURL)
+		return err
+	}); err != nil {
 		return err
 	}
 	defer pool.Close()
@@ -226,9 +250,16 @@ func run() error {
 		if kafkaBrokersCSV == "" {
 			return fmt.Errorf("LABOR_PERFORMANCE_MODE=kafka-cache requires KAFKA_BROKERS to be set")
 		}
+		// Retried for the same reason as the process-path catalogue
+		// consumer above: construction dials Kafka directly to
+		// determine its readiness watermark, and that is this fleet's
+		// first-outbound-dial-reset condition.
 		var err error
-		kafkaMeasuredRate, err = laborperformancecache.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
-		if err != nil {
+		if err = bootretry.Retry(ctx, logger, "connect labor-performance measured rate cache kafka consumer", func() error {
+			var newErr error
+			kafkaMeasuredRate, newErr = laborperformancecache.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
+			return newErr
+		}); err != nil {
 			return fmt.Errorf("failed to start the Kafka-sourced labor-performance measured rate cache: %w", err)
 		}
 		logger.Info("labor-performance measured rate client configured", "mode", "kafka-cache", "topic", laborperformancecache.Topic)

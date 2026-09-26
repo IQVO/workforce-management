@@ -132,6 +132,29 @@ pathCatalogue:
   # When set, content above is ignored and no ConfigMap is created here.
   existingConfigMap: ""
 
+# Gates liveness and readiness until the process is actually serving.
+#
+# Without it, BOOT WORK RACES THE LIVENESS PROBE and loses: this binary
+# runs migrations before it starts listening, and in this cluster every
+# injected pod's first outbound dial is reset ~10s after start (Istio
+# native sidecars), so the first migration attempt fails and the retry
+# (see internal/adapters/outbound/bootretry) pushes first-listen past the
+# liveness threshold. Observed live as CrashLoopBackOff with exit code
+# 143 — SIGTERM, the kubelet killing a pod that was still booting, which
+# reads like an app crash and is not one.
+#
+# 30 x 2s = 60s of grace, comfortably past the ~31s retry budget in
+# bootretry, after which liveness takes over unchanged. A genuinely
+# broken database still fails the pod; it just is not mistaken for a
+# slow one. Applies to every deployment in this chart (api, projector,
+# reports, mcp).
+startupProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  periodSeconds: 2
+  failureThreshold: 30
+
 livenessProbe:
   httpGet:
     path: /healthz
