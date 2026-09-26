@@ -101,6 +101,23 @@ func TestEndActive_NoOpWhenNoneActive(t *testing.T) {
 	}
 }
 
+// TestCloseActive_WithoutActiveAssignmentIsNoOp covers closeActive's own
+// nil-active guard. Both exported callers (Assign, EndActive) only invoke it
+// with an active interval present, so the guard is exercised directly here —
+// it must be a strict no-op: no history entry, no active interval, no panic.
+func TestCloseActive_WithoutActiveAssignmentIsNoOp(t *testing.T) {
+	la := NewLaborAssignment("assoc-1")
+
+	la.closeActive(time.Now())
+
+	if la.IsActive() {
+		t.Fatal("expected no active assignment after no-op closeActive")
+	}
+	if len(la.History()) != 0 {
+		t.Fatalf("expected no history entries after no-op closeActive, got %d", len(la.History()))
+	}
+}
+
 func TestInterval_HoursOnActiveInterval(t *testing.T) {
 	start := time.Now()
 	iv := Interval{PathId: "pack", Start: start}
