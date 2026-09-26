@@ -70,6 +70,10 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.analytics.reports.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

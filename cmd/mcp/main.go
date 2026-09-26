@@ -16,7 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	inboundmcp "github.com/claudioed/workforce-management/internal/adapters/inbound/mcp"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
@@ -75,11 +78,23 @@ func run() error {
 		shiftPlans = memory.NewShiftPlanRepo()
 		assignments = memory.NewAssignmentRepo()
 	} else {
-		if err := postgres.Migrate(databaseURL, migrationsPath); err != nil {
+		// Retried: in this fleet EVERY injected pod's FIRST outbound TCP
+		// dial (here, Postgres) is reset ~10s after the app starts
+		// (Istio native sidecars). A single attempt turns that known,
+		// transient condition into CrashLoopBackOff. The retry does not
+		// weaken the fail-closed rule: once the budget is exhausted
+		// this still refuses to boot.
+		if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+			return postgres.Migrate(databaseURL, migrationsPath)
+		}); err != nil {
 			return err
 		}
-		pool, err := postgres.NewPool(ctx, databaseURL)
-		if err != nil {
+		var pool *pgxpool.Pool
+		if err := bootretry.Retry(ctx, logger, "open postgres pool", func() error {
+			var err error
+			pool, err = postgres.NewPool(ctx, databaseURL)
+			return err
+		}); err != nil {
 			return err
 		}
 		defer pool.Close()

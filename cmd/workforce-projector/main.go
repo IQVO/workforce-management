@@ -18,8 +18,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	inboundkafka "github.com/claudioed/workforce-management/internal/adapters/inbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/analyticsstore"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
@@ -69,12 +72,23 @@ func run() error {
 	migrationsPath := getenv("ANALYTICS_MIGRATIONS_PATH", "migrations/analytics")
 
 	// The projector owns the analytical schema: run its migrations on start.
-	if err := postgres.Migrate(analyticsURL, migrationsPath); err != nil {
+	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP dial
+	// (here, Postgres) is reset ~10s after the app starts (Istio native
+	// sidecars). A single attempt turns that known, transient condition
+	// into CrashLoopBackOff. The retry does not weaken the fail-closed
+	// rule: once the budget is exhausted this still refuses to boot.
+	if err := bootretry.Retry(rootCtx, logger, "run migrations", func() error {
+		return postgres.Migrate(analyticsURL, migrationsPath)
+	}); err != nil {
 		return err
 	}
 
-	pool, err := analyticsstore.NewPool(rootCtx, analyticsURL)
-	if err != nil {
+	var pool *pgxpool.Pool
+	if err := bootretry.Retry(rootCtx, logger, "open analytics postgres pool", func() error {
+		var err error
+		pool, err = analyticsstore.NewPool(rootCtx, analyticsURL)
+		return err
+	}); err != nil {
 		return err
 	}
 	defer pool.Close()

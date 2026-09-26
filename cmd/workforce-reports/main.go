@@ -16,8 +16,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	inboundhttp "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/analyticsstore"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
 )
 
@@ -62,8 +65,18 @@ func run() error {
 
 	// Read-only pool: even a bug in the reader cannot mutate the read model, on
 	// top of the read-only database role ANALYTICS_DATABASE_URL should use.
-	pool, err := analyticsstore.NewReadOnlyPool(rootCtx, analyticsURL)
-	if err != nil {
+	//
+	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP dial
+	// (here, Postgres) is reset ~10s after the app starts (Istio native
+	// sidecars). A single attempt turns that known, transient condition
+	// into CrashLoopBackOff. The retry does not weaken the fail-closed
+	// rule: once the budget is exhausted this still refuses to boot.
+	var pool *pgxpool.Pool
+	if err := bootretry.Retry(rootCtx, logger, "open read-only analytics postgres pool", func() error {
+		var err error
+		pool, err = analyticsstore.NewReadOnlyPool(rootCtx, analyticsURL)
+		return err
+	}); err != nil {
 		return err
 	}
 	defer pool.Close()
