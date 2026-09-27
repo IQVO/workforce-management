@@ -2,6 +2,14 @@
 // data product: a consumer that reads the analytics topic and applies each
 // event to the Labor Utilization & Staffing projection, exactly once per
 // event_id despite Kafka's at-least-once delivery.
+//
+// ADR-0022 (ported from order-management's ADR-0025) adds bounded
+// in-process retry plus a dead-letter topic to this consumer: a
+// genuinely poisoned event (one whose projection application keeps
+// failing) is retried up to maxAnalyticsHandlerAttempts times with
+// jittered backoff, then published raw to <topic>.dlq (analyticsDLQTopicSuffix)
+// and its offset committed anyway — one poison message must never block
+// every other event behind it on this partition.
 package kafka
 
 import (
@@ -12,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	segmentio "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
@@ -30,6 +39,23 @@ const tracerName = "github.com/claudioed/workforce-management/internal/adapters/
 // reads under. It is distinct from any OLTP consumer group so the two pipelines
 // track their offsets independently.
 const AnalyticsConsumerGroup = "workforce-analytics"
+
+// analyticsDLQTopicSuffix names the dead-letter topic this consumer
+// publishes a poison message to, relative to its OWN source topic
+// (never a fixed constant) — mirroring order-management's
+// RepromiseConsumer dlqTopicSuffix convention exactly, so an isolated
+// test topic gets its own isolated DLQ topic for free.
+const analyticsDLQTopicSuffix = ".dlq"
+
+// maxAnalyticsHandlerAttempts bounds HandleMessage's in-process retry
+// (ADR-0022 §DLQ) before a message is dead-lettered: 1 initial attempt
+// plus up to 2 retries.
+const maxAnalyticsHandlerAttempts = 3
+
+const (
+	analyticsRetryInitialInterval = 100 * time.Millisecond
+	analyticsRetryMaxInterval     = 2 * time.Second
+)
 
 // headerCarrier adapts a kafka-go header slice to OTel's
 // propagation.TextMapCarrier so the producer's trace context can be read off a
@@ -87,10 +113,20 @@ type AnalyticsConsumer struct {
 	Projection report.ProjectionStore
 	Processed  ports.ProcessedEvents
 	Logger     *slog.Logger
+
+	// dlqWriter publishes a poison message (ADR-0022 §DLQ) to
+	// <topic>.dlq after maxAnalyticsHandlerAttempts in-process retries
+	// of HandleMessage all fail. nil in a struct literal built
+	// directly (as every existing HandleMessage-level unit test
+	// does — they never reach Run's retry/DLQ path) — dlqPublish
+	// itself guards against a nil writer so those tests keep
+	// compiling and passing unchanged.
+	dlqWriter *segmentio.Writer
 }
 
 // NewAnalyticsConsumer constructs an AnalyticsConsumer reading topic from
-// brokers under AnalyticsConsumerGroup.
+// brokers under AnalyticsConsumerGroup. The dead-letter topic is always
+// derived as topic+analyticsDLQTopicSuffix.
 func NewAnalyticsConsumer(brokers []string, topic string, projection report.ProjectionStore, processed ports.ProcessedEvents, logger *slog.Logger) *AnalyticsConsumer {
 	if logger == nil {
 		logger = slog.Default()
@@ -109,48 +145,56 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 		// affects the first join.
 		StartOffset: segmentio.FirstOffset,
 	})
-	return &AnalyticsConsumer{Reader: reader, Projection: projection, Processed: processed, Logger: logger}
+	return &AnalyticsConsumer{
+		Reader:     reader,
+		Projection: projection,
+		Processed:  processed,
+		Logger:     logger,
+		dlqWriter: &segmentio.Writer{
+			Addr:  segmentio.TCP(brokers...),
+			Topic: topic + analyticsDLQTopicSuffix,
+		},
+	}
 }
 
 // Run reads and handles messages until ctx is cancelled or the reader returns a
-// fatal error. A handling error is logged and the loop continues so one bad
-// message cannot wedge the projector.
+// fatal error. Each fetched message is retried in-process (ADR-0022 §DLQ) up to
+// maxAnalyticsHandlerAttempts times before being dead-lettered; either outcome
+// commits the offset, so one poison message can never wedge the partition.
+// Only a commit failure or a DLQ publish failure aborts the loop.
 func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 	for {
-		msg, err := c.Reader.ReadMessage(ctx)
+		msg, err := c.Reader.FetchMessage(ctx)
 		if err != nil {
-			if errors.Is(err, context.Canceled) {
+			if errors.Is(err, context.Canceled) || ctx.Err() != nil {
 				return nil
 			}
 			return err
 		}
-		if err := c.Handle(ctx, msg); err != nil {
-			c.Logger.ErrorContext(ctx, "analytics message handling failed", "error", err)
+		if err := c.handleFetchedMessage(ctx, msg); err != nil {
+			return err
 		}
 	}
 }
 
-// Close releases the underlying Kafka reader.
+// Close releases the underlying Kafka reader and, if configured, the DLQ
+// writer.
 func (c *AnalyticsConsumer) Close() error {
-	return c.Reader.Close()
+	readerErr := c.Reader.Close()
+	if c.dlqWriter == nil {
+		return readerErr
+	}
+	return errors.Join(readerErr, c.dlqWriter.Close())
 }
 
 // Handle processes one consumed message inside a "kafka.consume <topic>" span
-// whose parent is the producer's span, read from the message headers. It is
-// exported separately from Run so the propagation can be tested without a live
-// broker.
+// whose parent is the producer's span, read from the message headers, WITHOUT
+// the retry/DLQ/commit wrapping Run applies — kept exactly as before ADR-0022
+// so the propagation can be tested without a live broker. Run itself calls
+// handleFetchedMessage below, which wraps this same span+HandleMessage shape
+// with retry, DLQ publish, and CommitMessages.
 func (c *AnalyticsConsumer) Handle(ctx context.Context, msg segmentio.Message) error {
-	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.TextMapCarrier(headerCarrier{headers: msg.Headers}))
-
-	ctx, span := otel.Tracer(tracerName).Start(ctx,
-		"kafka.consume "+msg.Topic,
-		trace.WithSpanKind(trace.SpanKindConsumer),
-		trace.WithAttributes(
-			semconv.MessagingSystemKafka,
-			semconv.MessagingDestinationName(msg.Topic),
-			semconv.MessagingOperationName("process"),
-		),
-	)
+	ctx, span := c.startConsumeSpan(ctx, msg)
 	defer span.End()
 
 	if err := c.HandleMessage(ctx, msg.Value); err != nil {
@@ -161,12 +205,104 @@ func (c *AnalyticsConsumer) Handle(ctx context.Context, msg segmentio.Message) e
 	return nil
 }
 
+// handleFetchedMessage is Run's per-message handler: it retries HandleMessage
+// up to maxAnalyticsHandlerAttempts times with jittered backoff (ADR-0022
+// §DLQ), and on final failure publishes the raw message to the dead-letter
+// topic before committing the offset either way — a bad message must never
+// block every event behind it on this partition. A commit failure or a DLQ
+// publish failure is the only thing that still aborts Run's loop.
+func (c *AnalyticsConsumer) handleFetchedMessage(ctx context.Context, msg segmentio.Message) error {
+	ctx, span := c.startConsumeSpan(ctx, msg)
+	defer span.End()
+
+	err := c.handleWithRetry(ctx, msg.Value)
+	if err == nil {
+		return c.commit(ctx, msg)
+	}
+
+	span.RecordError(err)
+	span.SetStatus(codes.Error, err.Error())
+	c.Logger.ErrorContext(ctx, "analytics: exhausted retries, sending to dead-letter topic",
+		"topic", msg.Topic, "dlq_topic", msg.Topic+analyticsDLQTopicSuffix, "attempts", maxAnalyticsHandlerAttempts, "error", err)
+
+	if dlqErr := c.dlqPublish(ctx, msg, err); dlqErr != nil {
+		return fmt.Errorf("analytics: publish to dead-letter topic: %w", dlqErr)
+	}
+	return c.commit(ctx, msg)
+}
+
+// handleWithRetry retries HandleMessage up to maxAnalyticsHandlerAttempts
+// times with jittered exponential backoff, bounded by ctx's own
+// deadline/cancellation — a transient blip (a momentary Postgres hiccup on
+// MarkProcessed or the projection store) heals itself without ever reaching
+// the DLQ.
+func (c *AnalyticsConsumer) handleWithRetry(ctx context.Context, raw []byte) error {
+	policy := backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(analyticsRetryInitialInterval),
+		backoff.WithMaxInterval(analyticsRetryMaxInterval),
+	)
+	bounded := backoff.WithContext(backoff.WithMaxRetries(policy, maxAnalyticsHandlerAttempts-1), ctx)
+
+	return backoff.Retry(func() error {
+		return c.HandleMessage(ctx, raw)
+	}, bounded)
+}
+
+// dlqPublish writes the raw, unmodified message payload plus error context
+// (as headers, so the raw body stays byte-identical for a manual replay tool)
+// to the dead-letter topic. A nil dlqWriter (a struct literal built directly
+// by a HandleMessage-level unit test, which never exercises this path) is a
+// documented no-op rather than a nil-pointer panic.
+func (c *AnalyticsConsumer) dlqPublish(ctx context.Context, msg segmentio.Message, cause error) error {
+	if c.dlqWriter == nil {
+		return nil
+	}
+	headers := append([]segmentio.Header{}, msg.Headers...)
+	headers = append(headers,
+		segmentio.Header{Key: "x-dlq-source-topic", Value: []byte(msg.Topic)},
+		segmentio.Header{Key: "x-dlq-error", Value: []byte(cause.Error())},
+		segmentio.Header{Key: "x-dlq-failed-at", Value: []byte(time.Now().UTC().Format(time.RFC3339))},
+	)
+	return c.dlqWriter.WriteMessages(ctx, segmentio.Message{
+		Key:     msg.Key,
+		Value:   msg.Value,
+		Headers: headers,
+	})
+}
+
+// commit acknowledges msg so it is never redelivered. Only a commit failure
+// itself aborts Run's loop.
+func (c *AnalyticsConsumer) commit(ctx context.Context, msg segmentio.Message) error {
+	return c.Reader.CommitMessages(ctx, msg)
+}
+
+// startConsumeSpan extracts the producer's trace context from msg's headers
+// and starts this adapter's "kafka.consume <topic>" child span.
+func (c *AnalyticsConsumer) startConsumeSpan(ctx context.Context, msg segmentio.Message) (context.Context, trace.Span) {
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.TextMapCarrier(headerCarrier{headers: msg.Headers}))
+	return otel.Tracer(tracerName).Start(ctx,
+		"kafka.consume "+msg.Topic,
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			semconv.MessagingSystemKafka,
+			semconv.MessagingDestinationName(msg.Topic),
+			semconv.MessagingOperationName("process"),
+		),
+	)
+}
+
 // HandleMessage decodes raw as an analyticsEnvelope and applies the matching
 // projection method for its event_type. Event types outside the projection
 // contract are ignored (and not marked processed). For a projecting event it
 // dedupes on event_id via ProcessedEvents before applying, so a redelivery is a
 // no-op. It is exported separately from Run so tests can feed raw envelopes
-// without a live broker.
+// without a live broker. This single call is also the exact unit
+// handleWithRetry retries on a genuine failure (ADR-0022 §DLQ) — a malformed
+// envelope is one such failure and IS retried like any other, since (unlike
+// order-management's RepromiseConsumer, which splits envelope-decode out as a
+// separate always-skip step) a malformed analytics envelope has no cheaper
+// non-retryable signal to key off here; three attempts at a truly malformed
+// payload fail fast enough in practice before landing on the DLQ.
 func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
 	var env analyticsEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {

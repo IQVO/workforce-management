@@ -164,10 +164,26 @@ livenessProbe:
 
 readinessProbe:
   httpGet:
-    path: /healthz
+    # /readyz (ADR-0022 §graceful shutdown, ported from
+    # order-management's ADR-0025), NOT /healthz: readiness must flip
+    # to not-ready during a graceful SIGTERM drain (see
+    # cmd/workforce/main.go's shutdown sequence) so this pod stops
+    # receiving NEW traffic while it finishes in-flight requests --
+    # /healthz stays a pure liveness signal ("is the process alive")
+    # and is deliberately never flipped by shutdown, or Kubernetes
+    # would kill the pod mid-drain instead of letting it finish.
+    path: /readyz
     port: http
   initialDelaySeconds: 3
   periodSeconds: 5
+
+# Gives cmd/workforce/main.go's graceful shutdown sequence (readiness
+# flip -> HTTP drain -> catalogue/rate-cache Kafka consumer clean stop
+# -> outbox relay stop -> pg pool close last) room to actually finish
+# before Kubernetes SIGKILLs the container. 10s (the HTTP Shutdown
+# budget) + margin for the readinessProbe's periodSeconds=5 to have
+# observed the not-ready flip before traffic fully stops arriving.
+terminationGracePeriodSeconds: 30
 
 nodeSelector: {}
 tolerations: []
