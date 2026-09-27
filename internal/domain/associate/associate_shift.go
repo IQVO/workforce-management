@@ -99,6 +99,17 @@ func (a *AssociateShift) AssociateId() shared.AssociateId { return a.associateId
 // never branches on it.
 func (a *AssociateShift) Version() int { return a.version }
 
+// SetVersion overwrites the optimistic-concurrency version. It exists
+// solely for StartAssociateShift's documented upsert/restart contract:
+// that use case constructs a brand-new AssociateShift via
+// NewAssociateShift even when a roster entry already exists for this
+// associate (restarting a shift), and must carry over the EXISTING row's
+// version so the version-guarded Save succeeds instead of rejecting the
+// second call as a stale write. Infrastructure metadata only, exactly
+// like Rehydrate's version parameter -- never touched by domain business
+// logic.
+func (a *AssociateShift) SetVersion(v int) { a.version = v }
+
 // IsOnBreak reports whether the associate is currently on a logged break.
 func (a *AssociateShift) IsOnBreak() bool { return a.onBreak }
 
