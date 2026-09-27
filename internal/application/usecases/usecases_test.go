@@ -878,6 +878,44 @@ func TestStartAssociateShift_PublishError(t *testing.T) {
 	}
 }
 
+// TestStartAssociateShift_RestartCarriesOverExistingVersion proves the
+// idempotent-restart contract survives ADR 0021's version guard: calling
+// StartAssociateShift twice for the SAME associate (documented in
+// apis/openapi.yaml as upserting the roster entry, not erroring) must
+// succeed on the second call too, not be rejected as a stale write
+// against the fresh version-1 aggregate NewAssociateShift always builds.
+func TestStartAssociateShift_RestartCarriesOverExistingVersion(t *testing.T) {
+	f := newFixtures()
+	uc := &StartAssociateShift{Associates: f.associates, Events: f.pub, Clock: f.clock}
+
+	if _, err := uc.Execute(context.Background(), "assoc-1", []shared.Certification{"pack"}); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	first, err := f.associates.FindByID(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("load after first start: %v", err)
+	}
+	if first.Version() != 1 {
+		t.Fatalf("expected version 1 after first start, got %d", first.Version())
+	}
+
+	// A second call restarts the roster entry -- must succeed, not
+	// return ports.ErrConcurrentModification.
+	if _, err := uc.Execute(context.Background(), "assoc-1", []shared.Certification{"stow"}); err != nil {
+		t.Fatalf("restart (second start) must succeed per the documented upsert contract, got %v", err)
+	}
+	second, err := f.associates.FindByID(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("load after restart: %v", err)
+	}
+	if second.Version() != 2 {
+		t.Fatalf("expected version to advance to 2 after the restart, got %d", second.Version())
+	}
+	if !second.HasCertification("stow") {
+		t.Fatal("expected the restart's certifications to have been applied")
+	}
+}
+
 func TestCertifyAssociate_SaveError(t *testing.T) {
 	f := newFixtures()
 	setupCertifiedAssociate(t, f, "assoc-1")

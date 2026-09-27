@@ -24,8 +24,13 @@ func NewAssignmentRepo(pool *pgxpool.Pool) *AssignmentRepo {
 }
 
 // Save upserts la's active assignment and appends any newly closed history
-// entries. The multi-statement write joins the UnitOfWork transaction
-// bound to ctx when there is one, else runs in its own (ADR 0016).
+// entries, version-guarded against a concurrent writer (ADR 0021): the
+// active-assignment row's update only applies when its current version
+// still matches la.Version(), and always advances by exactly one version
+// on success. ports.ErrConcurrentModification is returned when the row
+// exists but its version no longer matches -- the caller must re-fetch and
+// retry. The multi-statement write joins the UnitOfWork transaction bound
+// to ctx when there is one, else runs in its own (ADR 0016).
 func (r *AssignmentRepo) Save(ctx context.Context, la *assignment.LaborAssignment) error {
 	tx, commit, rollback, err := beginOrJoin(ctx, r.pool)
 	if err != nil {
@@ -42,14 +47,23 @@ func (r *AssignmentRepo) Save(ctx context.Context, la *assignment.LaborAssignmen
 		activeStart = &start
 	}
 
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO labor_assignment (associate_id, active_path_id, active_start)
-		VALUES ($1, $2, $3)
+	tag, err := tx.Exec(ctx, `
+		INSERT INTO labor_assignment (associate_id, active_path_id, active_start, version)
+		VALUES ($1, $2, $3, 1)
 		ON CONFLICT (associate_id) DO UPDATE SET
 			active_path_id = EXCLUDED.active_path_id,
-			active_start = EXCLUDED.active_start
-	`, string(la.AssociateId()), activePathId, activeStart); err != nil {
+			active_start = EXCLUDED.active_start,
+			version = labor_assignment.version + 1
+		WHERE labor_assignment.version = $4
+	`, string(la.AssociateId()), activePathId, activeStart, la.Version())
+	if err != nil {
 		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// The row exists (this is the ON CONFLICT arm; a plain INSERT
+		// into an empty slot always affects exactly 1 row) but its
+		// version no longer matches what la was loaded at.
+		return ports.ErrConcurrentModification
 	}
 
 	if _, err := tx.Exec(ctx, `
@@ -74,11 +88,12 @@ func (r *AssignmentRepo) Save(ctx context.Context, la *assignment.LaborAssignmen
 func (r *AssignmentRepo) FindByAssociateID(ctx context.Context, id shared.AssociateId) (*assignment.LaborAssignment, error) {
 	var activePathId *string
 	var activeStart *time.Time
+	var version int
 
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT active_path_id, active_start FROM labor_assignment WHERE associate_id = $1
+		SELECT active_path_id, active_start, version FROM labor_assignment WHERE associate_id = $1
 	`, string(id))
-	if err := row.Scan(&activePathId, &activeStart); err != nil {
+	if err := row.Scan(&activePathId, &activeStart, &version); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound
 		}
@@ -116,7 +131,7 @@ func (r *AssignmentRepo) FindByAssociateID(ctx context.Context, id shared.Associ
 		return nil, err
 	}
 
-	return assignment.Rehydrate(id, active, history), nil
+	return assignment.Rehydrate(id, active, history, version), nil
 }
 
 // CountActiveByPath counts how many associates currently have an active

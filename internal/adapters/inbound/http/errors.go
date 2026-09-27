@@ -54,6 +54,14 @@ func statusFor(err error) int {
 		errors.Is(err, shiftplan.ErrExceedsInstalledCapacity),
 		errors.Is(err, shiftplan.ErrPlannedHoursExceedCapacity):
 		return http.StatusConflict
+	case errors.Is(err, ports.ErrConcurrentModification):
+		// A different writer committed a version this caller never
+		// saw between its load and its Save (ADR 0021, optimistic
+		// concurrency) -- 409, same status family as the domain
+		// conflicts above, but its own distinct category/detail so a
+		// caller can tell "re-fetch and retry" apart from a business
+		// rule rejection.
+		return http.StatusConflict
 	case errors.Is(err, ports.ErrInstalledCapacityUnavailable):
 		// A dependency-reachability failure, not a client validation
 		// error: the request itself was well-formed, but this service
@@ -124,6 +132,8 @@ func categoryFor(status int, err error) problemCategory {
 		return problemCategory{"planned-hours-exceed-capacity", "Planned hours exceed capacity for planned heads within max hours per shift"}
 	case errors.Is(err, ports.ErrInstalledCapacityUnavailable):
 		return problemCategory{"installed-capacity-unavailable", "Could not verify installed capacity against fulfillment-execution"}
+	case errors.Is(err, ports.ErrConcurrentModification):
+		return problemCategory{"concurrent-modification", "The resource was modified by another request; reload and retry"}
 	case status == http.StatusBadRequest:
 		return problemCategory{"malformed-request-body", "Malformed request body"}
 	default:

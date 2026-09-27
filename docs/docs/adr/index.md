@@ -100,3 +100,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0018](./0018-remove-fleet-rest-identity.md) | Remove the fleet REST identity layer (revert ADR-0017) | Accepted |
 | [0019](./0019-labor-performance-cache-consumer.md) | Replace the synchronous labor-performance MeasuredRateClient with an event-fed local cache | Accepted |
 | [0020](./0020-idle-share-staffing-signal.md) | Consume labor-performance's idle-share signal for staffing surfacing and proposal trim | Accepted |
+| [0021](./0021-optimistic-concurrency-version-column.md) | Optimistic concurrency (version column) on AssociateShift and LaborAssignment | Accepted |

@@ -37,6 +37,13 @@ type AssociateShift struct {
 	hoursLogged    float64
 	ended          bool
 
+	// version is inert optimistic-concurrency infrastructure metadata
+	// (see ADR 0021) -- the domain layer carries it but never reasons
+	// about it in business logic, exactly like associateId's identity
+	// role. A fresh aggregate starts at 1; AssociateRepo increments it
+	// on every successful Save.
+	version int
+
 	events []shared.DomainEvent
 }
 
@@ -50,6 +57,7 @@ func NewAssociateShift(associateId shared.AssociateId, certifications []shared.C
 	a := &AssociateShift{
 		associateId:    associateId,
 		certifications: certs,
+		version:        1,
 	}
 	a.record(shared.NewAssociateShiftStarted(at, associateId, certifications))
 	return a
@@ -57,7 +65,9 @@ func NewAssociateShift(associateId shared.AssociateId, certifications []shared.C
 
 // Rehydrate reconstructs an AssociateShift from persisted state without
 // raising events. Adapters use this to load an aggregate from storage.
-func Rehydrate(associateId shared.AssociateId, certifications []shared.Certification, onBreak bool, hoursLogged float64, ended bool) *AssociateShift {
+// version is the value the aggregate was loaded at (see ADR 0021,
+// optimistic concurrency) -- adapters pass through whatever they read.
+func Rehydrate(associateId shared.AssociateId, certifications []shared.Certification, onBreak bool, hoursLogged float64, ended bool, version int) *AssociateShift {
 	certs := make(map[shared.Certification]struct{}, len(certifications))
 	for _, c := range certifications {
 		certs[c] = struct{}{}
@@ -68,6 +78,7 @@ func Rehydrate(associateId shared.AssociateId, certifications []shared.Certifica
 		onBreak:        onBreak,
 		hoursLogged:    hoursLogged,
 		ended:          ended,
+		version:        version,
 	}
 }
 
@@ -82,6 +93,22 @@ func (a *AssociateShift) Certifications() []shared.Certification {
 
 // AssociateId returns the associate's identity.
 func (a *AssociateShift) AssociateId() shared.AssociateId { return a.associateId }
+
+// Version returns the optimistic-concurrency version this aggregate was
+// loaded at (see ADR 0021). Infrastructure metadata only -- domain logic
+// never branches on it.
+func (a *AssociateShift) Version() int { return a.version }
+
+// SetVersion overwrites the optimistic-concurrency version. It exists
+// solely for StartAssociateShift's documented upsert/restart contract:
+// that use case constructs a brand-new AssociateShift via
+// NewAssociateShift even when a roster entry already exists for this
+// associate (restarting a shift), and must carry over the EXISTING row's
+// version so the version-guarded Save succeeds instead of rejecting the
+// second call as a stale write. Infrastructure metadata only, exactly
+// like Rehydrate's version parameter -- never touched by domain business
+// logic.
+func (a *AssociateShift) SetVersion(v int) { a.version = v }
 
 // IsOnBreak reports whether the associate is currently on a logged break.
 func (a *AssociateShift) IsOnBreak() bool { return a.onBreak }

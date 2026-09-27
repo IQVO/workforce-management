@@ -107,6 +107,7 @@ const sidebars: SidebarsConfig = {
         'adr/0018-remove-fleet-rest-identity',
         'adr/0019-labor-performance-cache-consumer',
         'adr/0020-idle-share-staffing-signal',
+        'adr/0021-optimistic-concurrency-version-column',
       ],
     },
   ],

@@ -22,19 +22,35 @@ func NewAssociateRepo(pool *pgxpool.Pool) *AssociateRepo {
 	return &AssociateRepo{pool: pool}
 }
 
-// Save upserts a's current state.
+// Save upserts a's current state, version-guarded against a concurrent
+// writer (ADR 0021): on an existing row it only applies when the row's
+// current version still matches a.Version(), and always advances the row
+// by exactly one version. ports.ErrConcurrentModification is returned when
+// the row exists but its version no longer matches -- the caller must
+// re-fetch and retry, not blindly re-Save the same in-memory aggregate.
 func (r *AssociateRepo) Save(ctx context.Context, a *associate.AssociateShift) error {
 	certs := certsToStrings(a.Certifications())
-	_, err := querierFrom(ctx, r.pool).Exec(ctx, `
-		INSERT INTO associate_shift (associate_id, certifications, on_break, hours_logged, ended)
-		VALUES ($1, $2, $3, $4, $5)
+	tag, err := querierFrom(ctx, r.pool).Exec(ctx, `
+		INSERT INTO associate_shift (associate_id, certifications, on_break, hours_logged, ended, version)
+		VALUES ($1, $2, $3, $4, $5, 1)
 		ON CONFLICT (associate_id) DO UPDATE SET
 			certifications = EXCLUDED.certifications,
 			on_break = EXCLUDED.on_break,
 			hours_logged = EXCLUDED.hours_logged,
-			ended = EXCLUDED.ended
-	`, string(a.AssociateId()), certs, a.IsOnBreak(), a.HoursLogged(), a.Ended())
-	return err
+			ended = EXCLUDED.ended,
+			version = associate_shift.version + 1
+		WHERE associate_shift.version = $6
+	`, string(a.AssociateId()), certs, a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version())
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		// The row exists (this is the ON CONFLICT arm; a plain INSERT
+		// into an empty slot always affects exactly 1 row) but its
+		// version no longer matches what a was loaded at.
+		return ports.ErrConcurrentModification
+	}
+	return nil
 }
 
 // FindByID loads the AssociateShift for id, or ports.ErrNotFound.
@@ -42,20 +58,21 @@ func (r *AssociateRepo) FindByID(ctx context.Context, id shared.AssociateId) (*a
 	var certs []string
 	var onBreak, ended bool
 	var hoursLogged float64
+	var version int
 
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT certifications, on_break, hours_logged, ended
+		SELECT certifications, on_break, hours_logged, ended, version
 		FROM associate_shift WHERE associate_id = $1
 	`, string(id))
 
-	if err := row.Scan(&certs, &onBreak, &hoursLogged, &ended); err != nil {
+	if err := row.Scan(&certs, &onBreak, &hoursLogged, &ended, &version); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound
 		}
 		return nil, err
 	}
 
-	return associate.Rehydrate(id, stringsToCerts(certs), onBreak, hoursLogged, ended), nil
+	return associate.Rehydrate(id, stringsToCerts(certs), onBreak, hoursLogged, ended, version), nil
 }
 
 func certsToStrings(certs []shared.Certification) []string {

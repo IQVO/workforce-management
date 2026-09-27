@@ -168,9 +168,12 @@ func TestRehydrate_PreservesState(t *testing.T) {
 	history := []Interval{{PathId: "stow", Start: start, End: &end}}
 	active := &Interval{PathId: "pack", Start: end}
 
-	la := Rehydrate("assoc-1", active, history)
+	la := Rehydrate("assoc-1", active, history, 3)
 	if la.AssociateId() != shared.AssociateId("assoc-1") {
 		t.Fatalf("unexpected associate id: %v", la.AssociateId())
+	}
+	if la.Version() != 3 {
+		t.Fatalf("expected Rehydrate to preserve version 3, got %d", la.Version())
 	}
 	pathId, ok := la.ActivePathId()
 	if !ok || pathId != "pack" {
