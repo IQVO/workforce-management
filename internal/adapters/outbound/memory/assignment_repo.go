@@ -58,5 +58,5 @@ func snapshot(la *assignment.LaborAssignment) *assignment.LaborAssignment {
 	if iv, ok := la.ActiveInterval(); ok {
 		active = &iv
 	}
-	return assignment.Rehydrate(la.AssociateId(), active, la.History())
+	return assignment.Rehydrate(la.AssociateId(), active, la.History(), la.Version())
 }

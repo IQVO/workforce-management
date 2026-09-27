@@ -26,7 +26,7 @@ func NewAssociateRepo() *AssociateRepo {
 func (r *AssociateRepo) Save(ctx context.Context, a *associate.AssociateShift) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byID[a.AssociateId()] = associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended())
+	r.byID[a.AssociateId()] = associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version())
 	return nil
 }
 
@@ -38,5 +38,5 @@ func (r *AssociateRepo) FindByID(ctx context.Context, id shared.AssociateId) (*a
 	if !ok {
 		return nil, ports.ErrNotFound
 	}
-	return associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended()), nil
+	return associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version()), nil
 }
