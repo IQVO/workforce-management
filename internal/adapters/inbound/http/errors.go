@@ -84,6 +84,38 @@ type problemCategory struct {
 	title string
 }
 
+// problemCategoryCatalog is the ordered error→category catalog categoryFor
+// walks: the first entry whose sentinel matches via errors.Is wins, exactly
+// as the original switch sequenced them, so precedence is unchanged. It
+// mirrors statusFor's error set exactly, plus the HTTP-layer validation
+// sentinels that statusFor never sees.
+var problemCategoryCatalog = []struct {
+	sentinel error
+	category problemCategory
+}{
+	{sentinel: ports.ErrNotFound, category: problemCategory{"resource-not-found", "Resource not found"}},
+	{sentinel: shared.ErrEmptyAssociateId, category: problemCategory{"empty-associate-id", "Associate id must not be empty"}},
+	{sentinel: shared.ErrEmptyPathId, category: problemCategory{"empty-path-id", "Path id must not be empty"}},
+	{sentinel: pathcatalog.ErrUnknownPath, category: problemCategory{"unknown-path-id", "Unrecognized process-path id"}},
+	{sentinel: shared.ErrEmptyCertification, category: problemCategory{"empty-certification", "Certification must not be empty"}},
+	{sentinel: shiftplan.ErrNoPathPlans, category: problemCategory{"shift-plan-no-path-plans", "Shift plan must have at least one path plan line"}},
+	{sentinel: shiftplan.ErrMissingInstalledStations, category: problemCategory{"shift-plan-missing-installed-stations", "Missing installed station count for path"}},
+	{sentinel: errMissingBuildingId, category: problemCategory{"missing-building-id", "buildingId is required"}},
+	{sentinel: errMissingShiftId, category: problemCategory{"missing-shift-id", "shiftId is required"}},
+	{sentinel: errMissingCharge, category: problemCategory{"missing-charge", "charge is required"}},
+	{sentinel: associate.ErrAlreadyOnBreak, category: problemCategory{"associate-already-on-break", "Associate is already on break"}},
+	{sentinel: associate.ErrNotOnBreak, category: problemCategory{"associate-not-on-break", "Associate is not on break"}},
+	{sentinel: associate.ErrOnBreak, category: problemCategory{"associate-on-break", "Associate on break cannot be assigned"}},
+	{sentinel: associate.ErrShiftEnded, category: problemCategory{"associate-shift-ended", "Associate shift has already ended"}},
+	{sentinel: associate.ErrMaxHoursExceeded, category: problemCategory{"max-hours-exceeded", "Max hours per shift exceeded"}},
+	{sentinel: assignment.ErrCertificationRequired, category: problemCategory{"certification-required", "Associate lacks the certification required for this path"}},
+	{sentinel: shiftplan.ErrPlannedHeadsExceedInstalled, category: problemCategory{"planned-heads-exceed-installed", "Planned heads exceed installed stations for path"}},
+	{sentinel: shiftplan.ErrExceedsInstalledCapacity, category: problemCategory{"exceeds-installed-capacity", "Planned heads exceed the live installed capacity reported by fulfillment-execution"}},
+	{sentinel: shiftplan.ErrPlannedHoursExceedCapacity, category: problemCategory{"planned-hours-exceed-capacity", "Planned hours exceed capacity for planned heads within max hours per shift"}},
+	{sentinel: ports.ErrInstalledCapacityUnavailable, category: problemCategory{"installed-capacity-unavailable", "Could not verify installed capacity against fulfillment-execution"}},
+	{sentinel: ports.ErrConcurrentModification, category: problemCategory{"concurrent-modification", "The resource was modified by another request; reload and retry"}},
+}
+
 // categoryFor maps a typed error to its RFC 7807 category. It mirrors
 // statusFor's error set exactly, plus the HTTP-layer validation sentinels
 // that statusFor never sees (those are written with a known 400 status
@@ -91,52 +123,13 @@ type problemCategory struct {
 // a status-keyed generic category (malformed body for 400, internal error
 // otherwise) so every response still gets a well-formed problem+json body.
 func categoryFor(status int, err error) problemCategory {
-	switch {
-	case errors.Is(err, ports.ErrNotFound):
-		return problemCategory{"resource-not-found", "Resource not found"}
-	case errors.Is(err, shared.ErrEmptyAssociateId):
-		return problemCategory{"empty-associate-id", "Associate id must not be empty"}
-	case errors.Is(err, shared.ErrEmptyPathId):
-		return problemCategory{"empty-path-id", "Path id must not be empty"}
-	case errors.Is(err, pathcatalog.ErrUnknownPath):
-		return problemCategory{"unknown-path-id", "Unrecognized process-path id"}
-	case errors.Is(err, shared.ErrEmptyCertification):
-		return problemCategory{"empty-certification", "Certification must not be empty"}
-	case errors.Is(err, shiftplan.ErrNoPathPlans):
-		return problemCategory{"shift-plan-no-path-plans", "Shift plan must have at least one path plan line"}
-	case errors.Is(err, shiftplan.ErrMissingInstalledStations):
-		return problemCategory{"shift-plan-missing-installed-stations", "Missing installed station count for path"}
-	case errors.Is(err, errMissingBuildingId):
-		return problemCategory{"missing-building-id", "buildingId is required"}
-	case errors.Is(err, errMissingShiftId):
-		return problemCategory{"missing-shift-id", "shiftId is required"}
-	case errors.Is(err, errMissingCharge):
-		return problemCategory{"missing-charge", "charge is required"}
-	case errors.Is(err, associate.ErrAlreadyOnBreak):
-		return problemCategory{"associate-already-on-break", "Associate is already on break"}
-	case errors.Is(err, associate.ErrNotOnBreak):
-		return problemCategory{"associate-not-on-break", "Associate is not on break"}
-	case errors.Is(err, associate.ErrOnBreak):
-		return problemCategory{"associate-on-break", "Associate on break cannot be assigned"}
-	case errors.Is(err, associate.ErrShiftEnded):
-		return problemCategory{"associate-shift-ended", "Associate shift has already ended"}
-	case errors.Is(err, associate.ErrMaxHoursExceeded):
-		return problemCategory{"max-hours-exceeded", "Max hours per shift exceeded"}
-	case errors.Is(err, assignment.ErrCertificationRequired):
-		return problemCategory{"certification-required", "Associate lacks the certification required for this path"}
-	case errors.Is(err, shiftplan.ErrPlannedHeadsExceedInstalled):
-		return problemCategory{"planned-heads-exceed-installed", "Planned heads exceed installed stations for path"}
-	case errors.Is(err, shiftplan.ErrExceedsInstalledCapacity):
-		return problemCategory{"exceeds-installed-capacity", "Planned heads exceed the live installed capacity reported by fulfillment-execution"}
-	case errors.Is(err, shiftplan.ErrPlannedHoursExceedCapacity):
-		return problemCategory{"planned-hours-exceed-capacity", "Planned hours exceed capacity for planned heads within max hours per shift"}
-	case errors.Is(err, ports.ErrInstalledCapacityUnavailable):
-		return problemCategory{"installed-capacity-unavailable", "Could not verify installed capacity against fulfillment-execution"}
-	case errors.Is(err, ports.ErrConcurrentModification):
-		return problemCategory{"concurrent-modification", "The resource was modified by another request; reload and retry"}
-	case status == http.StatusBadRequest:
-		return problemCategory{"malformed-request-body", "Malformed request body"}
-	default:
-		return problemCategory{"internal-error", "Internal server error"}
+	for _, entry := range problemCategoryCatalog {
+		if errors.Is(err, entry.sentinel) {
+			return entry.category
+		}
 	}
+	if status == http.StatusBadRequest {
+		return problemCategory{"malformed-request-body", "Malformed request body"}
+	}
+	return problemCategory{"internal-error", "Internal server error"}
 }

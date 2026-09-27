@@ -85,66 +85,30 @@ func run() error {
 
 	ctx := context.Background()
 
-	serviceName := envOrDefault("OTEL_SERVICE_NAME", inbound.DefaultServiceName)
-	otlpEndpoint := envOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
-	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
+	serviceName, shutdownTelemetry, err := setupServiceTelemetry(ctx, logger)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		// Warn, not Error: the usual cause is "no Collector listening at
-		// OTEL_EXPORTER_OTLP_ENDPOINT", which drops the final flush but is
-		// not a service failure.
 		if err := shutdownTelemetry(shutdownCtx); err != nil {
 			logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
 		}
 	}()
-	logger.Info("telemetry configured",
-		"service_name", serviceName,
-		"service_version", serviceVersion(),
-		"environment", telemetry.Environment(),
-		"otlp_endpoint", otlpEndpoint,
-	)
 
 	// readiness gates GET /readyz (ADR-0022 §graceful shutdown, ported
-	// from order-management's ADR-0025). The zero value is ready;
-	// SetNotReady is called as the FIRST step of the shutdown sequence
-	// below, before the HTTP server itself stops accepting
-	// connections, so a Kubernetes readinessProbe has a chance to
-	// observe the flip and stop routing new traffic during the drain
-	// window that follows.
+	// from order-management's ADR-0025): zero value ready, flipped
+	// not-ready as the FIRST step of the shutdown sequence below.
 	readiness := &inbound.Readiness{}
 
-	// circuitBreakerMetrics wires both outbound breakers' OnStateChange
-	// into the circuit_breaker.state gauge (ADR-0022), reusing the SAME
-	// OTel MeterProvider telemetry.Setup already installed above rather
-	// than standing up a second Prometheus registry. Errors here are
-	// non-fatal: a nil recorder just means this process runs without
-	// the gauge, never without the breaker itself.
-	circuitBreakerMetrics, err := telemetry.NewCircuitBreakerMetrics()
-	if err != nil {
-		logger.Warn("circuit breaker metrics unavailable; breakers will run without the circuit_breaker.state gauge", "error", err)
-	}
+	breakerMetrics := newBreakerMetrics(logger)
 
 	databaseURL := requireEnv("DATABASE_URL")
 	httpAddr := envOrDefault("HTTP_ADDR", ":8080")
 	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
 	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
 
-	// The process-path catalogue's SOURCE is selectable, defaulting to
-	// the existing boot-time file read ("file") -- zero behavior change
-	// for any existing deployment unless PATH_CATALOGUE_SOURCE=kafka is
-	// explicitly set, matching this fleet's EVENT_PUBLISHER convention.
-	// See internal/adapters/outbound/kafkacatalog's package doc comment
-	// for the full rationale and the readiness-gate design, mirrored
-	// byte-for-byte from fulfillment-execution's and
-	// wes-work-planning's identical wiring.
-	catalogueSource := envOrDefault("PATH_CATALOGUE_SOURCE", "file")
-
-	var catalogue ports.PathCatalogue
-	var kafkaCatalogue *kafkacatalog.Consumer
 	// catalogueConsumerCtx/cancelCatalogueConsumer are declared here
 	// (rather than deferred to later in run()) because the Kafka
 	// catalogue source needs its own Run goroutine started BEFORE
@@ -154,11 +118,142 @@ func run() error {
 	catalogueConsumerCtx, cancelCatalogueConsumer := context.WithCancel(context.Background())
 	defer cancelCatalogueConsumer()
 
-	switch catalogueSource {
+	catalogue, kafkaCatalogue, err := wireCatalogue(ctx, catalogueConsumerCtx, logger)
+	if err != nil {
+		return err
+	}
+
+	pool, err := openPostgresPool(ctx, logger, databaseURL, migrationsPath)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+
+	repos, closeRepos, err := wireRepos(pool, logger)
+	if err != nil {
+		return err
+	}
+	defer closeRepos()
+	sysClock := clock.System{}
+
+	rateConsumerCtx, cancelRateConsumer := context.WithCancel(context.Background())
+	defer cancelRateConsumer()
+	measuredRate, idleShare, kafkaMeasuredRate, err := newMeasuredRateClients(ctx, rateConsumerCtx, breakerMetrics, logger)
+	if err != nil {
+		return err
+	}
+	handler := newOLTPHandler(oltpHandlerDeps{
+		associates:       repos.associates,
+		shiftPlans:       repos.shiftPlans,
+		assignments:      repos.assignments,
+		publisher:        repos.publisher,
+		sysClock:         sysClock,
+		uow:              repos.uow,
+		measuredRate:     measuredRate,
+		idleShare:        idleShare,
+		breakerMetrics:   breakerMetrics,
+		maxHoursPerShift: maxHoursPerShift,
+		catalogue:        catalogue,
+		readiness:        readiness,
+	})
+
+	server := &http.Server{
+		Addr:              httpAddr,
+		Handler:           inbound.NewRouter(handler, logger, serviceName),
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+
+	return serveWorkforce(logger, httpAddr, server, readiness, repos.relay,
+		cancelCatalogueConsumer, kafkaCatalogue,
+		cancelRateConsumer, kafkaMeasuredRate)
+}
+
+// workforceRepos groups the Postgres repositories, the event publisher,
+// and the shared UnitOfWork wired at boot.
+type workforceRepos struct {
+	associates  *postgres.AssociateRepo
+	shiftPlans  *postgres.ShiftPlanRepo
+	assignments *postgres.AssignmentRepo
+	publisher   ports.EventPublisher
+	relay       *postgres.OutboxRelay
+	uow         ports.UnitOfWork
+}
+
+// wireRepos builds the Postgres repositories, the event publisher (log or
+// kafka-outbox per EVENT_PUBLISHER), and the shared UnitOfWork. The
+// returned close func releases the publisher adapters; the caller defers
+// it so teardown stays LIFO with the pool close. Every publishing use
+// case shares one UnitOfWork so its Saves and its Publish (an outbox
+// INSERT in kafka mode) commit together (ADR 0016). The log publisher
+// has nothing to bind, but bracketing the Saves in a transaction is
+// still correct, so the UnitOfWork is wired unconditionally.
+func wireRepos(pool *pgxpool.Pool, logger *slog.Logger) (*workforceRepos, func(), error) {
+	shiftPlans := postgres.NewShiftPlanRepo(pool)
+	publisher, relay, closePublisher, err := newEventPublisher(pool, shiftPlans, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &workforceRepos{
+		associates:  postgres.NewAssociateRepo(pool),
+		shiftPlans:  shiftPlans,
+		assignments: postgres.NewAssignmentRepo(pool),
+		publisher:   publisher,
+		relay:       relay,
+		uow:         postgres.NewUnitOfWork(pool),
+	}, closePublisher, nil
+}
+
+// setupServiceTelemetry wires OTel before any adapter is built and
+// returns the resolved service name (the router's metrics label) plus
+// the shutdown flush, which the caller defers. A failed final flush is
+// logged as a warning, not an error: the usual cause is "no Collector
+// listening at OTEL_EXPORTER_OTLP_ENDPOINT", which drops the flush but
+// is not a service failure.
+func setupServiceTelemetry(ctx context.Context, logger *slog.Logger) (string, func(context.Context) error, error) {
+	serviceName := envOrDefault("OTEL_SERVICE_NAME", inbound.DefaultServiceName)
+	otlpEndpoint := envOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
+	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
+	if err != nil {
+		return "", nil, err
+	}
+	logger.Info("telemetry configured",
+		"service_name", serviceName,
+		"service_version", serviceVersion(),
+		"environment", telemetry.Environment(),
+		"otlp_endpoint", otlpEndpoint,
+	)
+	return serviceName, shutdownTelemetry, nil
+}
+
+// newBreakerMetrics wires both outbound breakers' OnStateChange into the
+// circuit_breaker.state gauge (ADR-0022), reusing the SAME OTel
+// MeterProvider telemetry.Setup already installed rather than standing
+// up a second Prometheus registry. Errors here are non-fatal: a nil
+// recorder just means this process runs without the gauge, never
+// without the breaker itself.
+func newBreakerMetrics(logger *slog.Logger) resilience.StateRecorder {
+	circuitBreakerMetrics, err := telemetry.NewCircuitBreakerMetrics()
+	if err != nil {
+		logger.Warn("circuit breaker metrics unavailable; breakers will run without the circuit_breaker.state gauge", "error", err)
+	}
+	return circuitBreakerMetrics
+}
+
+// wireCatalogue resolves the process-path catalogue from its selectable
+// SOURCE, defaulting to the existing boot-time file read ("file") --
+// zero behavior change for any existing deployment unless
+// PATH_CATALOGUE_SOURCE=kafka is explicitly set, matching this fleet's
+// EVENT_PUBLISHER convention. See internal/adapters/outbound/kafkacatalog's
+// package doc comment for the full rationale and the readiness-gate
+// design, mirrored byte-for-byte from fulfillment-execution's and
+// wes-work-planning's identical wiring. catalogueConsumerCtx must
+// already be live for the kafka mode's consumer goroutine.
+func wireCatalogue(ctx, catalogueConsumerCtx context.Context, logger *slog.Logger) (ports.PathCatalogue, *kafkacatalog.Consumer, error) {
+	switch envOrDefault("PATH_CATALOGUE_SOURCE", "file") {
 	case "kafka":
 		kafkaBrokersCSV := os.Getenv("KAFKA_BROKERS")
 		if kafkaBrokersCSV == "" {
-			return fmt.Errorf("PATH_CATALOGUE_SOURCE=kafka requires KAFKA_BROKERS to be set")
+			return nil, nil, fmt.Errorf("PATH_CATALOGUE_SOURCE=kafka requires KAFKA_BROKERS to be set")
 		}
 		// Retried: this consumer's construction dials Kafka directly to
 		// determine its readiness watermark (newTargetOffsets), and in
@@ -166,13 +261,13 @@ func run() error {
 		// ~10s after start (Istio native sidecars). One attempt here
 		// turns that transient into the same CrashLoopBackOff the
 		// Postgres boot dial below is guarded against.
-		var err error
-		if err = bootretry.Retry(ctx, logger, "connect process-path catalogue kafka consumer", func() error {
+		var kafkaCatalogue *kafkacatalog.Consumer
+		if err := bootretry.Retry(ctx, logger, "connect process-path catalogue kafka consumer", func() error {
 			var newErr error
 			kafkaCatalogue, newErr = kafkacatalog.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
 			return newErr
 		}); err != nil {
-			return fmt.Errorf("failed to start the Kafka-sourced process-path catalogue: %w", err)
+			return nil, nil, fmt.Errorf("failed to start the Kafka-sourced process-path catalogue: %w", err)
 		}
 		logger.Info("process-path catalogue source configured", "source", "kafka", "topic", kafkacatalog.Topic)
 		go func() {
@@ -184,13 +279,13 @@ func run() error {
 
 		logger.Info("waiting for the process-path catalogue to replay its initial history before accepting traffic")
 		waitCtx, waitCancel := context.WithTimeout(context.Background(), kafkacatalog.WaitReadyTimeout)
-		err = kafkaCatalogue.WaitReady(waitCtx)
+		err := kafkaCatalogue.WaitReady(waitCtx)
 		waitCancel()
 		if err != nil {
-			return fmt.Errorf("process-path catalogue did not become ready within %s: %w", kafkacatalog.WaitReadyTimeout, err)
+			return nil, nil, fmt.Errorf("process-path catalogue did not become ready within %s: %w", kafkacatalog.WaitReadyTimeout, err)
 		}
 		logger.Info("process-path catalogue is ready", "paths", kafkaCatalogue.Ids())
-		catalogue = kafkaCatalogue
+		return kafkaCatalogue, kafkaCatalogue, nil
 	default:
 		// The process-path catalogue is loaded and validated once at
 		// boot, before anything else stands up — a missing or
@@ -201,142 +296,145 @@ func run() error {
 		// ADR-0013).
 		fileCatalogue, err := filecatalog.Load(envOrDefault("PATH_CATALOGUE_FILE", "/etc/workforce-management/process-paths.yaml"))
 		if err != nil {
-			return fmt.Errorf("failed to load the process-path catalogue: %w", err)
+			return nil, nil, fmt.Errorf("failed to load the process-path catalogue: %w", err)
 		}
 		logger.Info("process-path catalogue loaded", "paths", fileCatalogue.Ids())
-		catalogue = fileCatalogue
+		return fileCatalogue, nil, nil
 	}
+}
 
-	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP dial
-	// (here, Postgres) is reset ~10s after the app starts (Istio native
-	// sidecars). A single attempt turns that known, transient condition
-	// into CrashLoopBackOff — migrations fail with "read: connection
-	// reset by peer", the process exits, and the pod never gets far
-	// enough to serve its own health probe. The retry does not weaken
-	// the fail-closed rule: once the budget (bootretry.Retries,
-	// ~31s total) is exhausted this still refuses to boot.
+// openPostgresPool runs the schema migrations, opens the pool, each
+// under boot retry: in this fleet EVERY injected pod's FIRST outbound
+// TCP dial (here, Postgres) is reset ~10s after the app starts (Istio
+// native sidecars). A single attempt turns that known, transient
+// condition into CrashLoopBackOff — migrations fail with "read:
+// connection reset by peer", the process exits, and the pod never gets
+// far enough to serve its own health probe. The retry does not weaken
+// the fail-closed rule: once the budget (bootretry.Retries, ~31s total)
+// is exhausted this still refuses to boot.
+func openPostgresPool(ctx context.Context, logger *slog.Logger, databaseURL, migrationsPath string) (*pgxpool.Pool, error) {
 	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
 		return postgres.Migrate(databaseURL, migrationsPath)
 	}); err != nil {
-		return err
+		return nil, err
 	}
-
 	var pool *pgxpool.Pool
 	if err := bootretry.Retry(ctx, logger, "open postgres pool", func() error {
 		var err error
 		pool, err = postgres.NewPool(ctx, databaseURL)
 		return err
 	}); err != nil {
-		return err
+		return nil, err
 	}
-	defer pool.Close()
+	return pool, nil
+}
 
-	associates := postgres.NewAssociateRepo(pool)
-	shiftPlans := postgres.NewShiftPlanRepo(pool)
-	assignments := postgres.NewAssignmentRepo(pool)
-	sysClock := clock.System{}
-
-	publisher, relay, closePublisher, err := newEventPublisher(pool, shiftPlans, logger)
-	if err != nil {
-		return err
+// newMeasuredRateClients selects the MeasuredRateClient implementation
+// via LABOR_PERFORMANCE_MODE (http|kafka-cache|permissive, default
+// "permissive"). "kafka-cache" replaces the synchronous HTTP call with
+// a local, in-memory read model fed by labor-performance's
+// warehouse.labor-performance.events integration topic (ADR 0013 on
+// labor-performance's side; see this repo's own ADR for the
+// consuming-side rationale) -- mirroring EXACTLY how
+// PATH_CATALOGUE_SOURCE=kafka starts and waits for
+// internal/adapters/outbound/kafkacatalog's consumer: start the Run
+// goroutine BEFORE WaitReady is called, so something is always
+// consuming while this process waits (otherwise a guaranteed deadlock
+// until WaitReadyTimeout).
+//
+// The SAME kafka-cache Consumer instance also satisfies
+// ports.IdleShareClient (idleness-as-staffing-signal): only kafka-cache
+// mode has a per-message idle_seconds_before stream to observe, so http
+// and permissive leave idleShare nil -- GetStaffingGap and
+// ProposePathPlan both already treat a nil IdleShareClient as "no
+// signal", the same fail-open discipline as every other *_MODE default
+// in this fleet.
+func newMeasuredRateClients(ctx, rateConsumerCtx context.Context, breakerMetrics resilience.StateRecorder, logger *slog.Logger) (ports.MeasuredRateClient, ports.IdleShareClient, *laborperformancecache.Consumer, error) {
+	mode := envOrDefault("LABOR_PERFORMANCE_MODE", "permissive")
+	if mode != "kafka-cache" {
+		return buildMeasuredRateClient(mode, os.Getenv("LABOR_PERFORMANCE_BASE_URL"), breakerMetrics, logger), nil, nil, nil
 	}
-	defer closePublisher()
-	// Every publishing use case shares one UnitOfWork so its Saves and its
-	// Publish (an outbox INSERT in kafka mode) commit together (ADR 0016).
-	// The log publisher has nothing to bind, but bracketing the Saves in a
-	// transaction is still correct, so the UnitOfWork is wired unconditionally.
-	uow := postgres.NewUnitOfWork(pool)
 
-	// LABOR_PERFORMANCE_MODE selects the MeasuredRateClient
-	// implementation (http|kafka-cache|permissive, default
-	// "permissive"). "kafka-cache" replaces the synchronous HTTP call
-	// with a local, in-memory read model fed by labor-performance's
-	// warehouse.labor-performance.events integration topic (ADR 0013 on
-	// labor-performance's side; see this repo's own ADR for the
-	// consuming-side rationale) -- mirroring EXACTLY how
-	// PATH_CATALOGUE_SOURCE=kafka starts and waits for
-	// internal/adapters/outbound/kafkacatalog's consumer above: start
-	// the Run goroutine BEFORE WaitReady is called, so something is
-	// always consuming while this process waits (otherwise a guaranteed
-	// deadlock until WaitReadyTimeout).
-	var measuredRate ports.MeasuredRateClient
-	var idleShare ports.IdleShareClient
+	kafkaBrokersCSV := os.Getenv("KAFKA_BROKERS")
+	if kafkaBrokersCSV == "" {
+		return nil, nil, nil, fmt.Errorf("LABOR_PERFORMANCE_MODE=kafka-cache requires KAFKA_BROKERS to be set")
+	}
+	// Retried for the same reason as the process-path catalogue
+	// consumer: construction dials Kafka directly to determine its
+	// readiness watermark, and that is this fleet's
+	// first-outbound-dial-reset condition.
 	var kafkaMeasuredRate *laborperformancecache.Consumer
-	rateConsumerCtx, cancelRateConsumer := context.WithCancel(context.Background())
-	defer cancelRateConsumer()
-
-	switch envOrDefault("LABOR_PERFORMANCE_MODE", "permissive") {
-	case "kafka-cache":
-		kafkaBrokersCSV := os.Getenv("KAFKA_BROKERS")
-		if kafkaBrokersCSV == "" {
-			return fmt.Errorf("LABOR_PERFORMANCE_MODE=kafka-cache requires KAFKA_BROKERS to be set")
-		}
-		// Retried for the same reason as the process-path catalogue
-		// consumer above: construction dials Kafka directly to
-		// determine its readiness watermark, and that is this fleet's
-		// first-outbound-dial-reset condition.
-		var err error
-		if err = bootretry.Retry(ctx, logger, "connect labor-performance measured rate cache kafka consumer", func() error {
-			var newErr error
-			kafkaMeasuredRate, newErr = laborperformancecache.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
-			return newErr
-		}); err != nil {
-			return fmt.Errorf("failed to start the Kafka-sourced labor-performance measured rate cache: %w", err)
-		}
-		logger.Info("labor-performance measured rate client configured", "mode", "kafka-cache", "topic", laborperformancecache.Topic)
-		go func() {
-			logger.Info("labor-performance measured rate cache consumer running", "topic", laborperformancecache.Topic)
-			if err := kafkaMeasuredRate.Run(rateConsumerCtx); err != nil {
-				logger.Error("labor-performance measured rate cache consumer stopped", "error", err)
-			}
-		}()
-
-		logger.Info("waiting for the labor-performance measured rate cache to replay its initial history before accepting traffic")
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), laborperformancecache.WaitReadyTimeout)
-		err = kafkaMeasuredRate.WaitReady(waitCtx)
-		waitCancel()
-		if err != nil {
-			return fmt.Errorf("labor-performance measured rate cache did not become ready within %s: %w", laborperformancecache.WaitReadyTimeout, err)
-		}
-		logger.Info("labor-performance measured rate cache is ready")
-		measuredRate = kafkaMeasuredRate
-		// The SAME Consumer instance also satisfies ports.IdleShareClient
-		// (idleness-as-staffing-signal): only kafka-cache mode has a
-		// per-message idle_seconds_before stream to observe, so http and
-		// permissive leave idleShare nil below -- GetStaffingGap and
-		// ProposePathPlan both already treat a nil IdleShareClient as
-		// "no signal", the same fail-open discipline as every other
-		// *_MODE default in this fleet.
-		idleShare = kafkaMeasuredRate
-	default:
-		measuredRate = buildMeasuredRateClient(envOrDefault("LABOR_PERFORMANCE_MODE", "permissive"), os.Getenv("LABOR_PERFORMANCE_BASE_URL"), circuitBreakerMetrics, logger)
+	if err := bootretry.Retry(ctx, logger, "connect labor-performance measured rate cache kafka consumer", func() error {
+		var newErr error
+		kafkaMeasuredRate, newErr = laborperformancecache.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
+		return newErr
+	}); err != nil {
+		return nil, nil, nil, fmt.Errorf("failed to start the Kafka-sourced labor-performance measured rate cache: %w", err)
 	}
-	installedCapacity := buildInstalledCapacityClient(envOrDefault("INSTALLED_CAPACITY_MODE", "permissive"), os.Getenv("FULFILLMENT_EXECUTION_BASE_URL"), circuitBreakerMetrics, logger)
-	idleShareTrimThreshold := envFloatOrDefault("IDLE_SHARE_TRIM_THRESHOLD", usecases.DefaultIdleShareTrimThreshold)
+	logger.Info("labor-performance measured rate client configured", "mode", "kafka-cache", "topic", laborperformancecache.Topic)
+	go func() {
+		logger.Info("labor-performance measured rate cache consumer running", "topic", laborperformancecache.Topic)
+		if err := kafkaMeasuredRate.Run(rateConsumerCtx); err != nil {
+			logger.Error("labor-performance measured rate cache consumer stopped", "error", err)
+		}
+	}()
 
-	handler := &inbound.Handler{
-		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: publisher, Clock: sysClock, UnitOfWork: uow},
-		CertifyAssociate:    &usecases.CertifyAssociate{Associates: associates, Events: publisher, Clock: sysClock, UnitOfWork: uow},
-		ProposePathPlan:     &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, MeasuredRate: measuredRate, IdleShare: idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: uow},
-		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: publisher, Clock: sysClock, InstalledCapacity: installedCapacity, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: uow},
-		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: uow},
-		StartBreak:          &usecases.StartBreak{Associates: associates, Events: publisher, Clock: sysClock, UnitOfWork: uow},
-		EndBreak:            &usecases.EndBreak{Associates: associates, Events: publisher, Clock: sysClock, UnitOfWork: uow},
-		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: publisher, Clock: sysClock, IdleShare: idleShare, UnitOfWork: uow},
-		EndAssociateShift:   &usecases.EndAssociateShift{Associates: associates, Assignments: assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: uow},
-		Catalogue:           catalogue,
+	logger.Info("waiting for the labor-performance measured rate cache to replay its initial history before accepting traffic")
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), laborperformancecache.WaitReadyTimeout)
+	err := kafkaMeasuredRate.WaitReady(waitCtx)
+	waitCancel()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("labor-performance measured rate cache did not become ready within %s: %w", laborperformancecache.WaitReadyTimeout, err)
+	}
+	logger.Info("labor-performance measured rate cache is ready")
+	return kafkaMeasuredRate, kafkaMeasuredRate, kafkaMeasuredRate, nil
+}
+
+// oltpHandlerDeps groups the inbound handler's wiring inputs.
+type oltpHandlerDeps struct {
+	associates       *postgres.AssociateRepo
+	shiftPlans       *postgres.ShiftPlanRepo
+	assignments      *postgres.AssignmentRepo
+	publisher        ports.EventPublisher
+	sysClock         clock.System
+	uow              ports.UnitOfWork
+	measuredRate     ports.MeasuredRateClient
+	idleShare        ports.IdleShareClient
+	breakerMetrics   resilience.StateRecorder
+	maxHoursPerShift float64
+	catalogue        ports.PathCatalogue
+	readiness        *inbound.Readiness
+	logger           *slog.Logger
+}
+
+// newOLTPHandler wires every use case into the inbound handler.
+func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
+	installedCapacity := buildInstalledCapacityClient(envOrDefault("INSTALLED_CAPACITY_MODE", "permissive"), os.Getenv("FULFILLMENT_EXECUTION_BASE_URL"), d.breakerMetrics, d.logger)
+	idleShareTrimThreshold := envFloatOrDefault("IDLE_SHARE_TRIM_THRESHOLD", usecases.DefaultIdleShareTrimThreshold)
+	return &inbound.Handler{
+		StartAssociateShift: &usecases.StartAssociateShift{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
+		CertifyAssociate:    &usecases.CertifyAssociate{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
+		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow},
+		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		StartBreak:          &usecases.StartBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
+		EndBreak:            &usecases.EndBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
+		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: d.shiftPlans, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, IdleShare: d.idleShare, UnitOfWork: d.uow},
+		EndAssociateShift:   &usecases.EndAssociateShift{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		Catalogue:           d.catalogue,
 		// readiness backs GET /readyz (ADR-0022 §graceful shutdown):
 		// flipped to not-ready as the FIRST step of shutdown, below,
 		// before anything else stops.
-		Readiness: readiness,
+		Readiness: d.readiness,
 	}
+}
 
-	server := &http.Server{
-		Addr:              httpAddr,
-		Handler:           inbound.NewRouter(handler, logger, serviceName),
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
+// serveWorkforce runs the HTTP server until a signal arrives or the
+// listener fails, with the outbox relay draining alongside, then drains
+// everything under the ADR-0022 §graceful shutdown sequence.
+func serveWorkforce(logger *slog.Logger, httpAddr string, server *http.Server, readiness *inbound.Readiness, relay *postgres.OutboxRelay,
+	cancelCatalogueConsumer context.CancelFunc, kafkaCatalogue *kafkacatalog.Consumer,
+	cancelRateConsumer context.CancelFunc, kafkaMeasuredRate *laborperformancecache.Consumer) error {
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", "addr", httpAddr)
@@ -440,35 +538,43 @@ func newEventPublisher(pool *pgxpool.Pool, shiftPlans ports.ShiftPlanRepo, logge
 			return events.NewMultiPublisher(integration, analytics), nil, closeDirect, nil
 		}
 
-		sink := kafka.NewRelaySink(brokers)
-		relay := postgres.NewOutboxRelay(pool, sink, logger,
-			postgres.WithInterval(envDurationOrDefault("OUTBOX_RELAY_INTERVAL", time.Second)))
-		// workforce.outbox.lag_seconds (ADR 0016's flagged follow-up):
-		// only meaningful when the outbox is actually the publish path,
-		// so it is registered here alongside the relay, not unconditionally.
-		lagGaugeReg, err := postgres.RegisterOutboxLagGauge(pool)
-		if err != nil {
-			logger.Error("failed to register outbox lag gauge", "error", err)
-		}
-		logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-			"brokers", brokers, "topic", kafka.Topic, "analytics_topic", kafka.AnalyticsTopic)
-		return postgres.NewOutboxPublisher(pool, integration, analytics), relay, func() {
-			closeDirect()
-			if err := sink.Close(); err != nil {
-				logger.Error("kafka relay sink close failed", "error", err)
-			}
-			if lagGaugeReg != nil {
-				if err := lagGaugeReg.Unregister(); err != nil {
-					logger.Warn("outbox lag gauge unregister failed", "error", err)
-				}
-			}
-		}, nil
+		return newOutboxPublisher(pool, logger, brokers, integration, analytics, closeDirect)
 	case "log":
 		logger.Info("event publisher configured", "publisher", "log")
 		return events.NewLogPublisher(logger), nil, func() {}, nil
 	default:
 		return nil, nil, nil, fmt.Errorf("unknown EVENT_PUBLISHER %q (want kafka or log)", os.Getenv("EVENT_PUBLISHER"))
 	}
+}
+
+// newOutboxPublisher wires the transactional-outbox publish path
+// (ADR 0016): both Kafka publishers act as Encoders feeding one
+// OutboxPublisher, and the returned relay forwards each stored row to
+// the topic it names. The returned close func releases the direct
+// writers, the relay sink, and the outbox lag gauge registered
+// alongside the relay (workforce.outbox.lag_seconds, ADR 0016's flagged
+// follow-up -- only meaningful when the outbox is the publish path).
+func newOutboxPublisher(pool *pgxpool.Pool, logger *slog.Logger, brokers []string, integration *kafka.Publisher, analytics *kafka.AnalyticsPublisher, closeDirect func()) (ports.EventPublisher, *postgres.OutboxRelay, func(), error) {
+	sink := kafka.NewRelaySink(brokers)
+	relay := postgres.NewOutboxRelay(pool, sink, logger,
+		postgres.WithInterval(envDurationOrDefault("OUTBOX_RELAY_INTERVAL", time.Second)))
+	lagGaugeReg, err := postgres.RegisterOutboxLagGauge(pool)
+	if err != nil {
+		logger.Error("failed to register outbox lag gauge", "error", err)
+	}
+	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
+		"brokers", brokers, "topic", kafka.Topic, "analytics_topic", kafka.AnalyticsTopic)
+	return postgres.NewOutboxPublisher(pool, integration, analytics), relay, func() {
+		closeDirect()
+		if err := sink.Close(); err != nil {
+			logger.Error("kafka relay sink close failed", "error", err)
+		}
+		if lagGaugeReg != nil {
+			if err := lagGaugeReg.Unregister(); err != nil {
+				logger.Warn("outbox lag gauge unregister failed", "error", err)
+			}
+		}
+	}, nil
 }
 
 func requireEnv(key string) string {
