@@ -10,6 +10,19 @@
 // jittered backoff, then published raw to <topic>.dlq (analyticsDLQTopicSuffix)
 // and its offset committed anyway — one poison message must never block
 // every other event behind it on this partition.
+//
+// Run's retry loop deliberately does NOT simply call HandleMessage
+// (envelope decode + MarkProcessed + apply, all in one) in a loop:
+// ProcessedEvents.MarkProcessed is a one-shot "insert if absent" gate,
+// not itself transactional with the projection Apply call that
+// follows it, so calling MarkProcessed again on a retry of the SAME
+// event_id would report isNew=false (already seen) and silently skip
+// re-applying — turning a genuine transient projection failure into a
+// falsely-successful no-op that never reaches the DLQ. Run's retry
+// therefore marks-processed AT MOST ONCE per fetched message
+// (retried on its OWN, since MarkProcessed can itself hit a transient
+// infra error) and retries ONLY the apply step afterwards — see
+// handleFetchedMessage below.
 package kafka
 
 import (
@@ -47,9 +60,10 @@ const AnalyticsConsumerGroup = "workforce-analytics"
 // test topic gets its own isolated DLQ topic for free.
 const analyticsDLQTopicSuffix = ".dlq"
 
-// maxAnalyticsHandlerAttempts bounds HandleMessage's in-process retry
-// (ADR-0022 §DLQ) before a message is dead-lettered: 1 initial attempt
-// plus up to 2 retries.
+// maxAnalyticsHandlerAttempts bounds each of Run's two retryable
+// stages (MarkProcessed, and the projection apply step) at up to this
+// many total attempts each (ADR-0022 §DLQ): 1 initial attempt plus up
+// to 2 retries.
 const maxAnalyticsHandlerAttempts = 3
 
 const (
@@ -105,6 +119,22 @@ type analyticsData struct {
 	ToPathId    string `json:"to_path_id"`
 }
 
+// isProjectingEventType reports whether eventType is one of the
+// utilization/staffing-moving events this consumer projects. The rest
+// (ShiftPlanProposed, ShiftPlanCommitted, and anything unrecognized)
+// are acknowledged without touching the read model or the processed
+// set.
+func isProjectingEventType(eventType string) bool {
+	switch eventType {
+	case "AssociateShiftStarted", "AssociateShiftEnded",
+		"AssociateBreakStarted", "AssociateBreakEnded", "AssociateCertified",
+		"LaborAssigned", "LaborReassigned", "PathUnderstaffed":
+		return true
+	default:
+		return false
+	}
+}
+
 // AnalyticsConsumer reads analytics events off the analytics topic and applies
 // each to the labor ProjectionStore, exactly once per event_id despite Kafka's
 // at-least-once delivery.
@@ -115,12 +145,11 @@ type AnalyticsConsumer struct {
 	Logger     *slog.Logger
 
 	// dlqWriter publishes a poison message (ADR-0022 §DLQ) to
-	// <topic>.dlq after maxAnalyticsHandlerAttempts in-process retries
-	// of HandleMessage all fail. nil in a struct literal built
-	// directly (as every existing HandleMessage-level unit test
-	// does — they never reach Run's retry/DLQ path) — dlqPublish
-	// itself guards against a nil writer so those tests keep
-	// compiling and passing unchanged.
+	// <topic>.dlq after Run's retries are exhausted. nil in a struct
+	// literal built directly (as every existing HandleMessage-level
+	// unit test does — they never reach Run's retry/DLQ path) —
+	// dlqPublish itself guards against a nil writer so those tests
+	// keep compiling and passing unchanged.
 	dlqWriter *segmentio.Writer
 }
 
@@ -158,10 +187,10 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 }
 
 // Run reads and handles messages until ctx is cancelled or the reader returns a
-// fatal error. Each fetched message is retried in-process (ADR-0022 §DLQ) up to
-// maxAnalyticsHandlerAttempts times before being dead-lettered; either outcome
-// commits the offset, so one poison message can never wedge the partition.
-// Only a commit failure or a DLQ publish failure aborts the loop.
+// fatal error. Each fetched message is handled (with retry/DLQ, see
+// handleFetchedMessage) before its offset is committed, so one poison message
+// can never wedge the partition. Only a commit failure or a DLQ publish
+// failure aborts the loop.
 func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 	for {
 		msg, err := c.Reader.FetchMessage(ctx)
@@ -191,8 +220,8 @@ func (c *AnalyticsConsumer) Close() error {
 // whose parent is the producer's span, read from the message headers, WITHOUT
 // the retry/DLQ/commit wrapping Run applies — kept exactly as before ADR-0022
 // so the propagation can be tested without a live broker. Run itself calls
-// handleFetchedMessage below, which wraps this same span+HandleMessage shape
-// with retry, DLQ publish, and CommitMessages.
+// handleFetchedMessage below, which wraps this same span+decode shape with
+// retry, DLQ publish, and CommitMessages.
 func (c *AnalyticsConsumer) Handle(ctx context.Context, msg segmentio.Message) error {
 	ctx, span := c.startConsumeSpan(ctx, msg)
 	defer span.End()
@@ -205,38 +234,86 @@ func (c *AnalyticsConsumer) Handle(ctx context.Context, msg segmentio.Message) e
 	return nil
 }
 
-// handleFetchedMessage is Run's per-message handler: it retries HandleMessage
-// up to maxAnalyticsHandlerAttempts times with jittered backoff (ADR-0022
-// §DLQ), and on final failure publishes the raw message to the dead-letter
-// topic before committing the offset either way — a bad message must never
-// block every event behind it on this partition. A commit failure or a DLQ
-// publish failure is the only thing that still aborts Run's loop.
+// handleFetchedMessage is Run's per-message handler (ADR-0022 §DLQ). It
+// decodes the envelope once (a malformed/unparseable envelope is dead-
+// lettered immediately — no amount of retrying changes a decode error), then
+// for a projecting event type marks it processed AT MOST ONCE (retried on
+// its own, since MarkProcessed can itself hit a transient infra error, but
+// NEVER called again once it has successfully recorded an answer — see the
+// package doc comment for why re-calling it on a retry would silently skip
+// re-applying a genuinely failed apply), and finally retries ONLY the
+// projection-apply step up to maxAnalyticsHandlerAttempts times. Either a
+// success or an exhausted-retries DLQ publish commits the offset — a bad
+// message must never block every event behind it on this partition. A
+// commit failure or a DLQ publish failure is the only thing that still
+// aborts Run's loop.
 func (c *AnalyticsConsumer) handleFetchedMessage(ctx context.Context, msg segmentio.Message) error {
 	ctx, span := c.startConsumeSpan(ctx, msg)
 	defer span.End()
 
-	err := c.handleWithRetry(ctx, msg.Value)
-	if err == nil {
+	env, decodeErr := decodeAnalyticsEnvelope(msg.Value)
+	if decodeErr != nil {
+		return c.deadLetterAndCommit(ctx, span, msg, decodeErr)
+	}
+	if !isProjectingEventType(env.EventType) {
 		return c.commit(ctx, msg)
 	}
 
-	span.RecordError(err)
-	span.SetStatus(codes.Error, err.Error())
-	c.Logger.ErrorContext(ctx, "analytics: exhausted retries, sending to dead-letter topic",
-		"topic", msg.Topic, "dlq_topic", msg.Topic+analyticsDLQTopicSuffix, "attempts", maxAnalyticsHandlerAttempts, "error", err)
+	isNew, markErr := c.markProcessedWithRetry(ctx, env.EventId)
+	if markErr != nil {
+		return c.deadLetterAndCommit(ctx, span, msg, markErr)
+	}
+	if !isNew {
+		return c.commit(ctx, msg)
+	}
 
-	if dlqErr := c.dlqPublish(ctx, msg, err); dlqErr != nil {
+	if applyErr := c.applyWithRetry(ctx, env); applyErr != nil {
+		return c.deadLetterAndCommit(ctx, span, msg, applyErr)
+	}
+	return c.commit(ctx, msg)
+}
+
+// deadLetterAndCommit records cause on span, logs it at ERROR level, and
+// publishes msg to the dead-letter topic before committing its offset
+// either way.
+func (c *AnalyticsConsumer) deadLetterAndCommit(ctx context.Context, span trace.Span, msg segmentio.Message, cause error) error {
+	span.RecordError(cause)
+	span.SetStatus(codes.Error, cause.Error())
+	c.Logger.ErrorContext(ctx, "analytics: exhausted retries, sending to dead-letter topic",
+		"topic", msg.Topic, "dlq_topic", msg.Topic+analyticsDLQTopicSuffix, "attempts", maxAnalyticsHandlerAttempts, "error", cause)
+
+	if dlqErr := c.dlqPublish(ctx, msg, cause); dlqErr != nil {
 		return fmt.Errorf("analytics: publish to dead-letter topic: %w", dlqErr)
 	}
 	return c.commit(ctx, msg)
 }
 
-// handleWithRetry retries HandleMessage up to maxAnalyticsHandlerAttempts
-// times with jittered exponential backoff, bounded by ctx's own
-// deadline/cancellation — a transient blip (a momentary Postgres hiccup on
-// MarkProcessed or the projection store) heals itself without ever reaching
-// the DLQ.
-func (c *AnalyticsConsumer) handleWithRetry(ctx context.Context, raw []byte) error {
+// markProcessedWithRetry retries Processed.MarkProcessed up to
+// maxAnalyticsHandlerAttempts times with jittered backoff — a momentary
+// infra hiccup on the idempotency-gate insert heals itself without ever
+// reaching the DLQ. It is safe to retry: MarkProcessed has not yet
+// SUCCEEDED (recorded an answer) on any of the failed attempts, so a retry
+// after an error is a fresh, correct attempt, not a duplicate mark.
+func (c *AnalyticsConsumer) markProcessedWithRetry(ctx context.Context, eventId string) (bool, error) {
+	policy := backoff.NewExponentialBackOff(
+		backoff.WithInitialInterval(analyticsRetryInitialInterval),
+		backoff.WithMaxInterval(analyticsRetryMaxInterval),
+	)
+	bounded := backoff.WithContext(backoff.WithMaxRetries(policy, maxAnalyticsHandlerAttempts-1), ctx)
+
+	return backoff.RetryNotifyWithData(func() (bool, error) {
+		return c.Processed.MarkProcessed(ctx, eventId)
+	}, bounded, nil)
+}
+
+// applyWithRetry retries applyEnvelope up to maxAnalyticsHandlerAttempts
+// times with jittered backoff, bounded by ctx's own deadline/cancellation —
+// a transient blip in the projection store heals itself without ever
+// reaching the DLQ. This is called EXACTLY ONCE per message by
+// handleFetchedMessage, after MarkProcessed has already succeeded with
+// isNew=true, so retrying it here never risks a duplicate MarkProcessed
+// call.
+func (c *AnalyticsConsumer) applyWithRetry(ctx context.Context, env analyticsEnvelope) error {
 	policy := backoff.NewExponentialBackOff(
 		backoff.WithInitialInterval(analyticsRetryInitialInterval),
 		backoff.WithMaxInterval(analyticsRetryMaxInterval),
@@ -244,7 +321,7 @@ func (c *AnalyticsConsumer) handleWithRetry(ctx context.Context, raw []byte) err
 	bounded := backoff.WithContext(backoff.WithMaxRetries(policy, maxAnalyticsHandlerAttempts-1), ctx)
 
 	return backoff.Retry(func() error {
-		return c.HandleMessage(ctx, raw)
+		return c.applyEnvelope(ctx, env)
 	}, bounded)
 }
 
@@ -291,43 +368,24 @@ func (c *AnalyticsConsumer) startConsumeSpan(ctx context.Context, msg segmentio.
 	)
 }
 
-// HandleMessage decodes raw as an analyticsEnvelope and applies the matching
-// projection method for its event_type. Event types outside the projection
-// contract are ignored (and not marked processed). For a projecting event it
-// dedupes on event_id via ProcessedEvents before applying, so a redelivery is a
-// no-op. It is exported separately from Run so tests can feed raw envelopes
-// without a live broker. This single call is also the exact unit
-// handleWithRetry retries on a genuine failure (ADR-0022 §DLQ) — a malformed
-// envelope is one such failure and IS retried like any other, since (unlike
-// order-management's RepromiseConsumer, which splits envelope-decode out as a
-// separate always-skip step) a malformed analytics envelope has no cheaper
-// non-retryable signal to key off here; three attempts at a truly malformed
-// payload fail fast enough in practice before landing on the DLQ.
-func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
+// decodeAnalyticsEnvelope unmarshals raw as an analyticsEnvelope. Split out
+// from HandleMessage/applyEnvelope so Run's retry logic can decode ONCE
+// (a malformed envelope is a permanent, not transient, failure — retrying
+// it would never succeed) while still retrying the genuinely transient
+// apply step separately.
+func decodeAnalyticsEnvelope(raw []byte) (analyticsEnvelope, error) {
 	var env analyticsEnvelope
 	if err := json.Unmarshal(raw, &env); err != nil {
-		return fmt.Errorf("analytics: decode envelope: %w", err)
+		return analyticsEnvelope{}, fmt.Errorf("analytics: decode envelope: %w", err)
 	}
+	return env, nil
+}
 
-	// Only the utilization/staffing-moving events project; the rest
-	// (ShiftPlanProposed, ShiftPlanCommitted) are acknowledged without touching
-	// the read model or the processed set.
-	switch env.EventType {
-	case "AssociateShiftStarted", "AssociateShiftEnded",
-		"AssociateBreakStarted", "AssociateBreakEnded", "AssociateCertified",
-		"LaborAssigned", "LaborReassigned", "PathUnderstaffed":
-	default:
-		return nil
-	}
-
-	isNew, err := c.Processed.MarkProcessed(ctx, env.EventId)
-	if err != nil {
-		return fmt.Errorf("analytics: mark processed: %w", err)
-	}
-	if !isNew {
-		return nil
-	}
-
+// applyEnvelope decodes env.Data and applies the matching projection method
+// for env.EventType. Callers must have already confirmed env.EventType is a
+// projecting type (isProjectingEventType) and that MarkProcessed reported
+// isNew=true for env.EventId — this method does not re-check either.
+func (c *AnalyticsConsumer) applyEnvelope(ctx context.Context, env analyticsEnvelope) error {
 	var data analyticsData
 	if err := json.Unmarshal(env.Data, &data); err != nil {
 		return fmt.Errorf("analytics: decode data: %w", err)
@@ -353,4 +411,38 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 	default:
 		return nil
 	}
+}
+
+// HandleMessage decodes raw as an analyticsEnvelope and applies the matching
+// projection method for its event_type. Event types outside the projection
+// contract are ignored (and not marked processed). For a projecting event it
+// dedupes on event_id via ProcessedEvents before applying, so a redelivery is
+// a no-op. It is exported separately from Run so tests can feed raw envelopes
+// without a live broker.
+//
+// This single call does its own one-shot decode + route + MarkProcessed +
+// apply, unchanged from before ADR-0022 — Run's own handleFetchedMessage
+// does NOT call this method in its retry loop (see the package doc comment
+// for why re-calling MarkProcessed on every retry would be wrong); it
+// reimplements the same steps with the mark and apply stages retried
+// independently instead.
+func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
+	env, err := decodeAnalyticsEnvelope(raw)
+	if err != nil {
+		return err
+	}
+
+	if !isProjectingEventType(env.EventType) {
+		return nil
+	}
+
+	isNew, err := c.Processed.MarkProcessed(ctx, env.EventId)
+	if err != nil {
+		return fmt.Errorf("analytics: mark processed: %w", err)
+	}
+	if !isNew {
+		return nil
+	}
+
+	return c.applyEnvelope(ctx, env)
 }
