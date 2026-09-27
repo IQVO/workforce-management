@@ -32,6 +32,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/resilience"
 )
 
 // version is the service version reported as the OTel `service.version`
@@ -106,6 +107,26 @@ func run() error {
 		"environment", telemetry.Environment(),
 		"otlp_endpoint", otlpEndpoint,
 	)
+
+	// readiness gates GET /readyz (ADR-0022 §graceful shutdown, ported
+	// from order-management's ADR-0025). The zero value is ready;
+	// SetNotReady is called as the FIRST step of the shutdown sequence
+	// below, before the HTTP server itself stops accepting
+	// connections, so a Kubernetes readinessProbe has a chance to
+	// observe the flip and stop routing new traffic during the drain
+	// window that follows.
+	readiness := &inbound.Readiness{}
+
+	// circuitBreakerMetrics wires both outbound breakers' OnStateChange
+	// into the circuit_breaker.state gauge (ADR-0022), reusing the SAME
+	// OTel MeterProvider telemetry.Setup already installed above rather
+	// than standing up a second Prometheus registry. Errors here are
+	// non-fatal: a nil recorder just means this process runs without
+	// the gauge, never without the breaker itself.
+	circuitBreakerMetrics, err := telemetry.NewCircuitBreakerMetrics()
+	if err != nil {
+		logger.Warn("circuit breaker metrics unavailable; breakers will run without the circuit_breaker.state gauge", "error", err)
+	}
 
 	databaseURL := requireEnv("DATABASE_URL")
 	httpAddr := envOrDefault("HTTP_ADDR", ":8080")
@@ -288,9 +309,9 @@ func run() error {
 		// *_MODE default in this fleet.
 		idleShare = kafkaMeasuredRate
 	default:
-		measuredRate = buildMeasuredRateClient(envOrDefault("LABOR_PERFORMANCE_MODE", "permissive"), os.Getenv("LABOR_PERFORMANCE_BASE_URL"), logger)
+		measuredRate = buildMeasuredRateClient(envOrDefault("LABOR_PERFORMANCE_MODE", "permissive"), os.Getenv("LABOR_PERFORMANCE_BASE_URL"), circuitBreakerMetrics, logger)
 	}
-	installedCapacity := buildInstalledCapacityClient(envOrDefault("INSTALLED_CAPACITY_MODE", "permissive"), os.Getenv("FULFILLMENT_EXECUTION_BASE_URL"), logger)
+	installedCapacity := buildInstalledCapacityClient(envOrDefault("INSTALLED_CAPACITY_MODE", "permissive"), os.Getenv("FULFILLMENT_EXECUTION_BASE_URL"), circuitBreakerMetrics, logger)
 	idleShareTrimThreshold := envFloatOrDefault("IDLE_SHARE_TRIM_THRESHOLD", usecases.DefaultIdleShareTrimThreshold)
 
 	handler := &inbound.Handler{
@@ -304,6 +325,10 @@ func run() error {
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: publisher, Clock: sysClock, IdleShare: idleShare, UnitOfWork: uow},
 		EndAssociateShift:   &usecases.EndAssociateShift{Associates: associates, Assignments: assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: uow},
 		Catalogue:           catalogue,
+		// readiness backs GET /readyz (ADR-0022 §graceful shutdown):
+		// flipped to not-ready as the FIRST step of shutdown, below,
+		// before anything else stops.
+		Readiness: readiness,
 	}
 
 	server := &http.Server{
@@ -345,6 +370,14 @@ func run() error {
 			return err
 		}
 	case <-stop:
+		// Graceful shutdown (ADR-0022 §graceful shutdown, ported from
+		// order-management's ADR-0025): flip readiness to not-ready
+		// FIRST, before anything else stops -- a Kubernetes
+		// readinessProbe polling /readyz needs a window to observe
+		// this and stop routing NEW traffic to this pod before the
+		// HTTP listener itself closes below.
+		readiness.SetNotReady()
+
 		cancelCatalogueConsumer()
 		if kafkaCatalogue != nil {
 			_ = kafkaCatalogue.Close()
@@ -463,14 +496,23 @@ func envOrDefault(key, def string) string {
 // goroutine and a WaitReady gate before this service is ready to serve
 // traffic -- this function stays scoped to the two modes that construct
 // synchronously with no startup ordering to manage.
-func buildMeasuredRateClient(mode, baseURL string, logger *slog.Logger) ports.MeasuredRateClient {
+//
+// In http mode the real Client is wrapped in a per-dependency circuit
+// breaker plus jittered retry (ADR-0022, ported from order-management's
+// ADR-0025): MeanActualSeconds is a pure GET/read, safe to retry unlike
+// fulfillment-execution's commit-gating InstalledCapacity below. On a
+// trip, calls fall back to the SAME fail-open permissive behaviour this
+// client already had, never a new fallback path. recorder feeds the
+// breaker's state transitions into the circuit_breaker.state gauge; nil
+// is fine (see resilience.RecordStateChange's doc comment).
+func buildMeasuredRateClient(mode, baseURL string, recorder resilience.StateRecorder, logger *slog.Logger) ports.MeasuredRateClient {
 	if mode != "http" {
 		logger.Info("labor-performance measured rate client configured", "mode", "permissive",
 			"hint", "set LABOR_PERFORMANCE_MODE=http and LABOR_PERFORMANCE_BASE_URL for a real deployment")
 		return laborperformance.NewPermissiveClient()
 	}
-	logger.Info("labor-performance measured rate client configured", "mode", "http", "base_url", baseURL)
-	return laborperformance.NewClient(baseURL, nil)
+	logger.Info("labor-performance measured rate client configured", "mode", "http", "base_url", baseURL, "circuit_breaker", "enabled", "retry", "enabled")
+	return laborperformance.NewBreakerClient(laborperformance.NewClient(baseURL, nil), recorder)
 }
 
 // buildInstalledCapacityClient selects a ports.InstalledCapacityClient via
@@ -480,14 +522,23 @@ func buildMeasuredRateClient(mode, baseURL string, logger *slog.Logger) ports.Me
 // is explicitly set, since a shift-plan commit mutates real state and
 // this fleet's own rule is to fail loud for anything that mutates real
 // state. See ADR-0014.
-func buildInstalledCapacityClient(mode, baseURL string, logger *slog.Logger) ports.InstalledCapacityClient {
+//
+// In http mode the real Client is wrapped in a per-dependency circuit
+// breaker (ADR-0022) with NO retry -- this call gates a COMMIT that
+// mutates real state, so (mirroring order-management's
+// inventorystorage.BreakerClient) it deliberately never blind-retries;
+// see fulfillmentexecution/breaker.go's doc comment for the full
+// rationale. On a trip, calls fall back to the SAME fail-LOUD permissive
+// behaviour this client already had. recorder feeds the breaker's state
+// transitions into the circuit_breaker.state gauge; nil is fine.
+func buildInstalledCapacityClient(mode, baseURL string, recorder resilience.StateRecorder, logger *slog.Logger) ports.InstalledCapacityClient {
 	if mode != "http" {
 		logger.Warn("fulfillment-execution installed capacity client configured", "mode", "permissive",
 			"hint", "every ShiftPlan commit will fail until INSTALLED_CAPACITY_MODE=http and FULFILLMENT_EXECUTION_BASE_URL are set for a real deployment")
 		return fulfillmentexecution.NewPermissiveClient()
 	}
-	logger.Info("fulfillment-execution installed capacity client configured", "mode", "http", "base_url", baseURL)
-	return fulfillmentexecution.NewClient(baseURL, nil)
+	logger.Info("fulfillment-execution installed capacity client configured", "mode", "http", "base_url", baseURL, "circuit_breaker", "enabled")
+	return fulfillmentexecution.NewBreakerClient(fulfillmentexecution.NewClient(baseURL, nil), recorder)
 }
 
 func envFloatOrDefault(key string, def float64) float64 {
