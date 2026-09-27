@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,8 +41,19 @@ func (p *alwaysFailingProjection) ApplyLaborAssigned(ctx context.Context, eventI
 // recordingProjection is a minimal, real (non-mocked) report.ProjectionStore
 // that records every successful apply, so this test can assert the healthy
 // message was actually applied without needing a live analytics database.
+// Guarded by mu: ApplyLaborAssigned is called from the consumer's own Run
+// goroutine while the test goroutine concurrently polls applied via
+// appliedPathIds (waitForApplied) and the final assertion -- both must go
+// through the same mutex.
 type recordingProjection struct {
+	mu      sync.Mutex
 	applied []string
+}
+
+func (p *recordingProjection) appliedPathIds() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return append([]string(nil), p.applied...)
 }
 
 func (p *recordingProjection) ApplyShiftStarted(context.Context, string, string, time.Time) error {
@@ -60,6 +72,8 @@ func (p *recordingProjection) ApplyCertified(context.Context, string, string, ti
 	return nil
 }
 func (p *recordingProjection) ApplyLaborAssigned(_ context.Context, _ string, pathId string, _ time.Time) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	p.applied = append(p.applied, pathId)
 	return nil
 }
@@ -210,8 +224,8 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	// The healthy path's apply must be the ONLY recorded projection --
 	// the poison message never got to apply anything, no matter how
 	// many times it was retried.
-	if len(projection.applied) != 1 || projection.applied[0] != healthyPathId {
-		t.Fatalf("applied = %v, want exactly [%q] (only the healthy message)", projection.applied, healthyPathId)
+	if applied := projection.appliedPathIds(); len(applied) != 1 || applied[0] != healthyPathId {
+		t.Fatalf("applied = %v, want exactly [%q] (only the healthy message)", applied, healthyPathId)
 	}
 }
 
@@ -240,7 +254,7 @@ func waitForApplied(t *testing.T, ctx context.Context, projection *alwaysFailing
 	t.Helper()
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
-		for _, p := range projection.applied {
+		for _, p := range projection.appliedPathIds() {
 			if p == wantPathId {
 				return
 			}
