@@ -66,8 +66,8 @@ func TestPublisherEncode_OneMessagePerLineOnIntegrationTopic(t *testing.T) {
 		if enc.EventType != "ShiftPlanCommitted" {
 			t.Errorf("event_type = %q, want ShiftPlanCommitted", enc.EventType)
 		}
-		if enc.Key != nil {
-			t.Errorf("integration messages carry no key (existing contract), got %q", enc.Key)
+		if string(enc.Key) != "BLD1/SHIFT1" {
+			t.Errorf("integration messages must be keyed by the ShiftPlan aggregate id (buildingId/shiftId), got %q", enc.Key)
 		}
 		var env envelope
 		if err := json.Unmarshal(enc.Value, &env); err != nil {

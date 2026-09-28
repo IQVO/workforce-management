@@ -91,9 +91,13 @@ func (p *Publisher) Close() error {
 
 // Encode fans ShiftPlanCommitted events out into one wire-ready message per
 // PathPlan line. Other event types are ignored: this round only publishes
-// ShiftPlanCommitted, per INTEGRATION.md. Messages carry no key — the
-// existing integration contract has none, and the outbox must reproduce
-// the direct path's wire format byte-for-byte rather than change it.
+// ShiftPlanCommitted, per INTEGRATION.md. Every message is keyed with
+// shiftPlanKey(buildingId, shiftId) — the ShiftPlan aggregate's identity
+// (ShiftPlan is keyed by building + shift, see internal/domain/shiftplan) —
+// so every PathPlan-line message for the same commit, and every subsequent
+// commit for the same building/shift, is routed to the same partition and
+// consumed in order regardless of the topic's partition count (ADR-0023;
+// mirrors AnalyticsPublisher's existing aggregate-id keying).
 //
 // The current span context (if any) is injected into every message's
 // headers so downstream services' consume spans are children of the span
@@ -112,6 +116,7 @@ func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([
 		if err != nil {
 			return nil, fmt.Errorf("kafka publisher: load committed shift plan: %w", err)
 		}
+		key := []byte(shiftPlanKey(committed.BuildingId, committed.ShiftId))
 		for _, line := range sp.Lines() {
 			env := envelope{
 				EventID:    newEventID(),
@@ -131,7 +136,7 @@ func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([
 			if err != nil {
 				return nil, fmt.Errorf("kafka publisher: marshal envelope: %w", err)
 			}
-			enc := Encoded{Topic: Topic, EventType: committed.EventName(), Value: b}
+			enc := Encoded{Topic: Topic, EventType: committed.EventName(), Key: key, Value: b}
 			propagator.Inject(ctx, propagation.TextMapCarrier(headerCarrier{headers: &enc.Headers}))
 			out = append(out, enc)
 		}
@@ -182,6 +187,15 @@ func (p *Publisher) writeMessages(ctx context.Context, encoded []Encoded) error 
 		return err
 	}
 	return nil
+}
+
+// shiftPlanKey builds the Kafka partition key for a ShiftPlan aggregate.
+// ShiftPlan has no single-field id — it is keyed by (buildingId, shiftId)
+// everywhere else in this codebase (see internal/domain/shiftplan and the
+// postgres repo's composite primary key) — so the message key mirrors that
+// same composite identity rather than inventing a new one.
+func shiftPlanKey(buildingId, shiftId string) string {
+	return buildingId + "/" + shiftId
 }
 
 // newEventID generates a random UUID v4 without pulling in a UUID
