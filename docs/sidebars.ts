@@ -110,6 +110,7 @@ const sidebars: SidebarsConfig = {
         'adr/0021-optimistic-concurrency-version-column',
         'adr/0022-resilience-circuit-breakers-retry-dlq-shutdown',
         'adr/0023-kafka-integration-producer-partition-key',
+        'adr/0024-horizontal-autoscaling-and-pgxpool-tuning',
       ],
     },
   ],
