@@ -155,6 +155,7 @@ func run() error {
 		maxHoursPerShift: maxHoursPerShift,
 		catalogue:        catalogue,
 		readiness:        readiness,
+		logger:           logger,
 	})
 
 	server := &http.Server{
