@@ -102,3 +102,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0020](./0020-idle-share-staffing-signal.md) | Consume labor-performance's idle-share signal for staffing surfacing and proposal trim | Accepted |
 | [0021](./0021-optimistic-concurrency-version-column.md) | Optimistic concurrency (version column) on AssociateShift and LaborAssignment | Accepted |
 | [0022](./0022-resilience-circuit-breakers-retry-dlq-shutdown.md) | Per-dependency circuit breakers, read-only retry, Kafka DLQ, and graceful shutdown hardening | Accepted |
+| [0023](./0023-kafka-integration-producer-partition-key.md) | Key the integration Kafka publisher by ShiftPlan aggregate id | Accepted |
