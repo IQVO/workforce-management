@@ -111,6 +111,7 @@ const sidebars: SidebarsConfig = {
         'adr/0022-resilience-circuit-breakers-retry-dlq-shutdown',
         'adr/0023-kafka-integration-producer-partition-key',
         'adr/0024-horizontal-autoscaling-and-pgxpool-tuning',
+        'adr/0025-migrations-direct-postgres-connection',
       ],
     },
   ],

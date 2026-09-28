@@ -104,3 +104,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0022](./0022-resilience-circuit-breakers-retry-dlq-shutdown.md) | Per-dependency circuit breakers, read-only retry, Kafka DLQ, and graceful shutdown hardening | Accepted |
 | [0023](./0023-kafka-integration-producer-partition-key.md) | Key the integration Kafka publisher by ShiftPlan aggregate id | Accepted |
 | [0024](./0024-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
+| [0025](./0025-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |

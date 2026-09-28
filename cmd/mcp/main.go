@@ -70,7 +70,14 @@ type repos struct {
 // does: no DATABASE_URL means local/in-memory adapters; a URL means migrate
 // then connect a pgx pool. The returned close func releases the pool when
 // one was opened.
-func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsPath string) (repos, func(), error) {
+//
+// migrationsDatabaseURL is used ONLY for the golang-migrate step below —
+// the pgxpool opened just after it (databaseURL) is unchanged. See
+// cmd/workforce/main.go's openPostgresPool doc comment for the full "why"
+// a direct, non-pooled connection is needed here even though the pgxpool
+// stays on PgBouncer (ADR 0025-migrations-direct-postgres-connection.md,
+// ported from order-management's ADR-0029).
+func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsDatabaseURL, migrationsPath string) (repos, func(), error) {
 	if databaseURL == "" {
 		logger.Info("database url not configured; using in-memory adapters")
 		return repos{
@@ -86,7 +93,7 @@ func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsP
 	// weaken the fail-closed rule: once the budget is exhausted
 	// this still refuses to boot.
 	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
-		return postgres.Migrate(databaseURL, migrationsPath)
+		return postgres.Migrate(migrationsDatabaseURL, migrationsPath)
 	}); err != nil {
 		return repos{}, nil, err
 	}
@@ -139,10 +146,18 @@ func run() error {
 
 	httpAddr := envOrDefault("MCP_ADDR", ":8090")
 	databaseURL := os.Getenv("DATABASE_URL")
+	// See cmd/workforce/main.go's openPostgresPool doc comment for the
+	// full "why" (session-scoped pg_advisory_lock vs PgBouncer
+	// transaction-pooling incompatibility, ADR
+	// 0025-migrations-direct-postgres-connection.md; ported from
+	// order-management's ADR-0029). This binary also runs migrations on
+	// start (newRepos below), so it needs the same direct-connection
+	// split. Falls back to databaseURL when unset.
+	migrationsDatabaseURL := envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL)
 	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
 	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
 
-	r, closeRepos, err := newRepos(ctx, logger, databaseURL, migrationsPath)
+	r, closeRepos, err := newRepos(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
 	if err != nil {
 		return err
 	}

@@ -105,6 +105,24 @@ func run() error {
 	breakerMetrics := newBreakerMetrics(logger)
 
 	databaseURL := requireEnv("DATABASE_URL")
+	// MIGRATIONS_DATABASE_URL, when set, is a DIRECT (non-pooled,
+	// session-mode) Postgres connection string used ONLY for the
+	// golang-migrate startup step below — everything else (the pgxpool
+	// this process serves requests through) keeps using databaseURL
+	// unchanged. See openPostgresPool's doc comment for the full "why":
+	// golang-migrate's postgres driver takes a session-scoped
+	// `SELECT pg_advisory_lock($1)` to serialize concurrent migration
+	// runs, which PgBouncer's transaction-pooling mode does not support
+	// (warehouse-infra's PgBouncer rollout, PR #43; this fallback closes
+	// the fleet-wide bug that rollout introduced — see ADR
+	// 0025-migrations-direct-postgres-connection.md and
+	// order-management's ADR-0029, the reference implementation this PR
+	// ports). Falls back to databaseURL when unset, which is every
+	// environment that doesn't provision the split (local dev, CI
+	// integration tests, and any cluster whose Terraform predates this
+	// fix) — byte-identical to this service's behavior before this
+	// change in that case.
+	migrationsDatabaseURL := envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL)
 	httpAddr := envOrDefault("HTTP_ADDR", ":8080")
 	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
 	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
@@ -123,7 +141,7 @@ func run() error {
 		return err
 	}
 
-	pool, err := openPostgresPool(ctx, logger, databaseURL, migrationsPath)
+	pool, err := openPostgresPool(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
 	if err != nil {
 		return err
 	}
@@ -313,9 +331,31 @@ func wireCatalogue(ctx, catalogueConsumerCtx context.Context, logger *slog.Logge
 // far enough to serve its own health probe. The retry does not weaken
 // the fail-closed rule: once the budget (bootretry.Retries, ~31s total)
 // is exhausted this still refuses to boot.
-func openPostgresPool(ctx context.Context, logger *slog.Logger, databaseURL, migrationsPath string) (*pgxpool.Pool, error) {
+//
+// migrationsDatabaseURL is used ONLY for the golang-migrate step below —
+// the pgxpool opened just after it (and used for every subsequent
+// request) always uses databaseURL. They are deliberately different
+// connection strings in a PgBouncer-fronted environment: golang-migrate's
+// postgres driver takes a session-scoped `SELECT pg_advisory_lock($1)` to
+// serialize concurrent migration runs across replicas starting at the
+// same time, and PgBouncer's transaction-pooling mode (this fleet's
+// pool_mode for every OLTP DATABASE_URL, warehouse-infra PR #43) does not
+// support session-scoped state — each statement in one logical client
+// session can land on a different physical backend connection, so the
+// advisory lock never behaves as a real mutex. Losing replicas crash-loop
+// with `pq: unnamed prepared statement does not exist` / `pq: canceling
+// statement due to statement timeout` until one wins the race. See ADR
+// 0025-migrations-direct-postgres-connection.md (and order-management's
+// ADR-0029, the reference implementation) for the full incident and fix.
+// Callers pass MIGRATIONS_DATABASE_URL when set (warehouse-infra now
+// provisions it as a direct, non-pooled DSN alongside DATABASE_URL for
+// all 9 OLTP services, per its companion PR #44) or fall back to
+// databaseURL itself for any environment that doesn't provision the
+// split (local dev, CI integration tests) — byte-identical to this
+// function's behavior before this parameter existed in that case.
+func openPostgresPool(ctx context.Context, logger *slog.Logger, databaseURL, migrationsDatabaseURL, migrationsPath string) (*pgxpool.Pool, error) {
 	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
-		return postgres.Migrate(databaseURL, migrationsPath)
+		return postgres.Migrate(migrationsDatabaseURL, migrationsPath)
 	}); err != nil {
 		return nil, err
 	}
