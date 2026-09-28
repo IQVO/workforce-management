@@ -1270,6 +1270,17 @@ func TestGetStaffingGap_ObservedIdlePctNilOnErrIdleShareUnavailable(t *testing.T
 
 // --- ADR-0011 fast-follow: fleet-wide staffing-gap list -----------------
 
+// assertPathGap pins one planned path's staffing gap from an ExecuteAll
+// result: present in byPath, with exactly the wanted understaffed flag,
+// planned heads, and active heads.
+func assertPathGap(t *testing.T, byPath map[shared.PathId]StaffingGap, path string, wantUnderstaffed bool, wantPlanned, wantActive int) {
+	t.Helper()
+	got, ok := byPath[shared.PathId(path)]
+	if !ok || got.Understaffed != wantUnderstaffed || got.PlannedHeads != wantPlanned || got.ActiveHeads != wantActive {
+		t.Fatalf("unexpected %s gap: %+v (ok=%v)", path, got, ok)
+	}
+}
+
 // TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath proves the
 // list endpoint's use case reuses the exact same per-path computation as
 // Execute (same PlannedHeads/ActiveHeads/Understaffed for a given path,
@@ -1302,14 +1313,9 @@ func TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath(t *testing.T) {
 	for _, g := range gaps {
 		byPath[g.PathId] = g
 	}
-	pack, ok := byPath["pack"]
-	if !ok || !pack.Understaffed || pack.PlannedHeads != 3 || pack.ActiveHeads != 0 {
-		t.Fatalf("unexpected pack gap: %+v (ok=%v)", pack, ok)
-	}
-	pick, ok := byPath["pick"]
-	if !ok || pick.Understaffed || pick.PlannedHeads != 1 || pick.ActiveHeads != 1 {
-		t.Fatalf("unexpected pick gap: %+v (ok=%v)", pick, ok)
-	}
+	pack := byPath["pack"]
+	assertPathGap(t, byPath, "pack", true, 3, 0)
+	assertPathGap(t, byPath, "pick", false, 1, 1)
 
 	// Cross-check against the single-path Execute for the same inputs --
 	// the two must never drift, since ExecuteAll reuses Execute's exact

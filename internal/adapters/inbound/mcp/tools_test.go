@@ -184,76 +184,109 @@ func TestProposePathHeads(t *testing.T) {
 	}
 }
 
-func TestAssignLabor(t *testing.T) {
-	ctx := context.Background()
+// assignLaborHappyPath pins the certified happy path: the assignment is
+// created with a non-empty id echoing associate and path.
+func assignLaborHappyPath(t *testing.T) {
+	t.Helper()
+	h := newHarness(t)
+	h.seedAssociate(t, "a1", "pack")
+	out, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "a1", PathId: "pack"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if out.AssociateId != "a1" || out.PathId != "pack" {
+		t.Fatalf("unexpected output: %+v", out)
+	}
+	if out.AssignmentId == "" {
+		t.Fatal("expected a non-empty assignment id")
+	}
+}
 
+// assignLaborCertificationMismatch pins the certification-match invariant:
+// assigning an associate to a path they are not certified for is rejected.
+func assignLaborCertificationMismatch(t *testing.T) {
+	t.Helper()
+	h := newHarness(t)
+	// Associate holds pick, not pack: assigning to pack must be rejected by
+	// the certification-match invariant.
+	h.seedAssociate(t, "a1", "pick")
+	if _, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "a1", PathId: "pack"}); err == nil {
+		t.Fatal("assigning an uncertified associate must be rejected")
+	}
+}
+
+// assignLaborReassignment pins the reassignment flow: a second assignment
+// to a different path is accepted, moves the associate, and leaves exactly
+// one active assignment on the new path.
+func assignLaborReassignment(t *testing.T) {
+	t.Helper()
+	h := newHarness(t)
+	h.seedAssociate(t, "a1", "pack", "pick")
+	if _, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "a1", PathId: "pack"}); err != nil {
+		t.Fatalf("first assign failed: %v", err)
+	}
+	// Second assignment to a different path is accepted and moves the
+	// associate; the single-active invariant is enforced by construction,
+	// so this is a reassignment, not a rejection.
+	out, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "a1", PathId: "pick"})
+	if err != nil {
+		t.Fatalf("reassignment should succeed: %v", err)
+	}
+	if out.PathId != "pick" {
+		t.Fatalf("after reassignment active path = %q, want pick", out.PathId)
+	}
+	// Exactly one active assignment for this associate remains.
+	la, err := h.assignments.FindByAssociateID(context.Background(), "a1")
+	if err != nil {
+		t.Fatalf("load assignment: %v", err)
+	}
+	activePath, ok := la.ActivePathId()
+	if !ok || activePath != "pick" {
+		t.Fatalf("want single active assignment on pick, got %q ok=%v", activePath, ok)
+	}
+}
+
+// assignLaborUnknownAssociate pins the unknown-associate rejection.
+func assignLaborUnknownAssociate(t *testing.T) {
+	t.Helper()
+	h := newHarness(t)
+	if _, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "ghost", PathId: "pack"}); err == nil {
+		t.Fatal("assigning an unknown associate must error")
+	}
+}
+
+// assignLaborMissingArgs pins the argument-validation rejections: an empty
+// associateId and an empty pathId are both rejected.
+func assignLaborMissingArgs(t *testing.T) {
+	t.Helper()
+	h := newHarness(t)
+	if _, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "", PathId: "pack"}); err == nil {
+		t.Fatal("empty associateId must be rejected")
+	}
+	if _, err := h.deps.assignLabor(context.Background(), assignLaborInput{AssociateId: "a1", PathId: ""}); err == nil {
+		t.Fatal("empty pathId must be rejected")
+	}
+}
+
+func TestAssignLabor(t *testing.T) {
 	t.Run("certified associate is assigned", func(t *testing.T) {
-		h := newHarness(t)
-		h.seedAssociate(t, "a1", "pack")
-		out, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "a1", PathId: "pack"})
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if out.AssociateId != "a1" || out.PathId != "pack" {
-			t.Fatalf("unexpected output: %+v", out)
-		}
-		if out.AssignmentId == "" {
-			t.Fatal("expected a non-empty assignment id")
-		}
+		assignLaborHappyPath(t)
 	})
 
 	t.Run("certification mismatch is rejected", func(t *testing.T) {
-		h := newHarness(t)
-		// Associate holds pick, not pack: assigning to pack must be rejected by
-		// the certification-match invariant.
-		h.seedAssociate(t, "a1", "pick")
-		if _, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "a1", PathId: "pack"}); err == nil {
-			t.Fatal("assigning an uncertified associate must be rejected")
-		}
+		assignLaborCertificationMismatch(t)
 	})
 
 	t.Run("re-assignment ends the prior active assignment (single active)", func(t *testing.T) {
-		h := newHarness(t)
-		h.seedAssociate(t, "a1", "pack", "pick")
-		if _, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "a1", PathId: "pack"}); err != nil {
-			t.Fatalf("first assign failed: %v", err)
-		}
-		// Second assignment to a different path is accepted and moves the
-		// associate; the single-active invariant is enforced by construction,
-		// so this is a reassignment, not a rejection.
-		out, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "a1", PathId: "pick"})
-		if err != nil {
-			t.Fatalf("reassignment should succeed: %v", err)
-		}
-		if out.PathId != "pick" {
-			t.Fatalf("after reassignment active path = %q, want pick", out.PathId)
-		}
-		// Exactly one active assignment for this associate remains.
-		la, err := h.assignments.FindByAssociateID(ctx, "a1")
-		if err != nil {
-			t.Fatalf("load assignment: %v", err)
-		}
-		activePath, ok := la.ActivePathId()
-		if !ok || activePath != "pick" {
-			t.Fatalf("want single active assignment on pick, got %q ok=%v", activePath, ok)
-		}
+		assignLaborReassignment(t)
 	})
 
 	t.Run("unknown associate is rejected", func(t *testing.T) {
-		h := newHarness(t)
-		if _, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "ghost", PathId: "pack"}); err == nil {
-			t.Fatal("assigning an unknown associate must error")
-		}
+		assignLaborUnknownAssociate(t)
 	})
 
 	t.Run("missing args are rejected", func(t *testing.T) {
-		h := newHarness(t)
-		if _, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "", PathId: "pack"}); err == nil {
-			t.Fatal("empty associateId must be rejected")
-		}
-		if _, err := h.deps.assignLabor(ctx, assignLaborInput{AssociateId: "a1", PathId: ""}); err == nil {
-			t.Fatal("empty pathId must be rejected")
-		}
+		assignLaborMissingArgs(t)
 	})
 }
 

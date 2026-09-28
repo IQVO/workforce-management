@@ -81,6 +81,43 @@ func validInstanceFor(s *jsonschema.Schema) map[string]any {
 	return instance
 }
 
+// evalInputSchemaConstrains proves for ONE advertised tool: (1) the input
+// schema resolves (structurally valid, no dangling refs), (2) a
+// schema-shaped arguments object validates cleanly, and (3) a wrong-typed
+// value for a declared property is REJECTED — i.e. the schema genuinely
+// constrains what a model may send, not just decorates it.
+func evalInputSchemaConstrains(t *testing.T, tool *sdk.Tool) {
+	t.Helper()
+	s := schemaOf(t, tool.InputSchema)
+	if !hasType(s, "object") {
+		t.Fatalf("input schema type = %q, want object", s.Type)
+	}
+	resolved, err := s.Resolve(nil)
+	if err != nil {
+		t.Fatalf("input schema does not resolve: %v", err)
+	}
+
+	valid := validInstanceFor(s)
+	if err := resolved.Validate(valid); err != nil {
+		t.Fatalf("schema rejects its own shape of arguments (%v): %v", valid, err)
+	}
+
+	// Flip the first string property to a number; the schema must
+	// reject it. Tools without string properties skip this leg.
+	// (float64, not json.Number — the validator type-checks Go
+	// kinds, and json.Number is a string kind.)
+	for name, prop := range s.Properties {
+		if !hasType(prop, "string") {
+			continue
+		}
+		wrong := map[string]any{name: float64(42)}
+		if err := resolved.Validate(wrong); err == nil {
+			t.Fatalf("schema accepts a numeric %q — it does not constrain model input", name)
+		}
+		break
+	}
+}
+
 // TestEval_InputSchemasResolveAndConstrain proves, per advertised tool:
 // (1) the input schema resolves (structurally valid, no dangling refs),
 // (2) a schema-shaped arguments object validates cleanly, and
@@ -89,34 +126,7 @@ func validInstanceFor(s *jsonschema.Schema) map[string]any {
 func TestEval_InputSchemasResolveAndConstrain(t *testing.T) {
 	for _, tool := range wireTools(t) {
 		t.Run(tool.Name, func(t *testing.T) {
-			s := schemaOf(t, tool.InputSchema)
-			if !hasType(s, "object") {
-				t.Fatalf("input schema type = %q, want object", s.Type)
-			}
-			resolved, err := s.Resolve(nil)
-			if err != nil {
-				t.Fatalf("input schema does not resolve: %v", err)
-			}
-
-			valid := validInstanceFor(s)
-			if err := resolved.Validate(valid); err != nil {
-				t.Fatalf("schema rejects its own shape of arguments (%v): %v", valid, err)
-			}
-
-			// Flip the first string property to a number; the schema must
-			// reject it. Tools without string properties skip this leg.
-			// (float64, not json.Number — the validator type-checks Go
-			// kinds, and json.Number is a string kind.)
-			for name, prop := range s.Properties {
-				if !hasType(prop, "string") {
-					continue
-				}
-				wrong := map[string]any{name: float64(42)}
-				if err := resolved.Validate(wrong); err == nil {
-					t.Fatalf("schema accepts a numeric %q — it does not constrain model input", name)
-				}
-				break
-			}
+			evalInputSchemaConstrains(t, tool)
 		})
 	}
 }
@@ -230,6 +240,59 @@ func TestEval_FleetToolNamesAreGloballyUnique(t *testing.T) {
 	}
 }
 
+// assertReportToolMeetsEvalBar checks the conditional report tool's
+// annotations and schema at the same bar as the always-registered tools:
+// read-only annotated, a resolvable input schema, and every parameter
+// described.
+func assertReportToolMeetsEvalBar(t *testing.T, tool *sdk.Tool) {
+	t.Helper()
+	if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
+		t.Errorf("get_workforce_labor_report must be annotated read-only")
+	}
+	s := schemaOf(t, tool.InputSchema)
+	if _, err := s.Resolve(nil); err != nil {
+		t.Fatalf("report tool input schema does not resolve: %v", err)
+	}
+	for name, prop := range s.Properties {
+		if strings.TrimSpace(prop.Description) == "" {
+			t.Errorf("get_workforce_labor_report: parameter %q has no description", name)
+		}
+	}
+}
+
+// assertReportsWiringAddsExactlyOneTool proves that with a reports client
+// wired the surface is exactly the default one plus get_workforce_labor_report
+// — nothing else appears — and that the report tool meets the same
+// schema/annotation bar as the always-registered tools.
+func assertReportsWiringAddsExactlyOneTool(t *testing.T, defaultNames map[string]bool) {
+	t.Helper()
+	deps := newEvalDeps()
+	deps.Reports = &fakeReportsClient{}
+	sess := wireSession(t, deps)
+	res, err := sess.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatalf("list tools with reports wired: %v", err)
+	}
+	wired := res.Tools
+
+	if len(wired) != len(defaultNames)+1 {
+		names := make([]string, 0, len(wired))
+		for _, tool := range wired {
+			names = append(names, tool.Name)
+		}
+		t.Fatalf("wired surface = %v, want the default surface plus get_workforce_labor_report", names)
+	}
+	for _, tool := range wired {
+		if tool.Name == "get_workforce_labor_report" {
+			assertReportToolMeetsEvalBar(t, tool)
+			continue
+		}
+		if !defaultNames[tool.Name] {
+			t.Errorf("wiring a reports client unexpectedly added tool %q", tool.Name)
+		}
+	}
+}
+
 // TestEval_ReportToolRegistrationIsConditional pins the one conditionally
 // registered tool: get_workforce_labor_report exists only when a reports
 // client is wired into Deps (an MCP deployment without the reports
@@ -246,43 +309,7 @@ func TestEval_ReportToolRegistrationIsConditional(t *testing.T) {
 		}
 	}
 
-	deps := newEvalDeps()
-	deps.Reports = &fakeReportsClient{}
-	var wired []*sdk.Tool
-	sess := wireSession(t, deps)
-	res, err := sess.ListTools(t.Context(), nil)
-	if err != nil {
-		t.Fatalf("list tools with reports wired: %v", err)
-	}
-	wired = res.Tools
-
-	if len(wired) != len(defaultNames)+1 {
-		names := make([]string, 0, len(wired))
-		for _, tool := range wired {
-			names = append(names, tool.Name)
-		}
-		t.Fatalf("wired surface = %v, want the default surface plus get_workforce_labor_report", names)
-	}
-	for _, tool := range wired {
-		if tool.Name == "get_workforce_labor_report" {
-			if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-				t.Errorf("get_workforce_labor_report must be annotated read-only")
-			}
-			s := schemaOf(t, tool.InputSchema)
-			if _, err := s.Resolve(nil); err != nil {
-				t.Fatalf("report tool input schema does not resolve: %v", err)
-			}
-			for name, prop := range s.Properties {
-				if strings.TrimSpace(prop.Description) == "" {
-					t.Errorf("get_workforce_labor_report: parameter %q has no description", name)
-				}
-			}
-			continue
-		}
-		if !defaultNames[tool.Name] {
-			t.Errorf("wiring a reports client unexpectedly added tool %q", tool.Name)
-		}
-	}
+	assertReportsWiringAddsExactlyOneTool(t, defaultNames)
 }
 
 // wireTools lists the advertised tools over the real Streamable HTTP
