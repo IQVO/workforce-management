@@ -16,7 +16,10 @@ import (
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
 
-// AssociateRepo persists and loads AssociateShift aggregates.
+// AssociateRepo persists and loads AssociateShift aggregates. Save is
+// version-guarded (see ADR 0021, optimistic concurrency): it returns
+// ports.ErrConcurrentModification if the row's current version no longer
+// matches the version the caller's aggregate was loaded at.
 type AssociateRepo interface {
 	Save(ctx context.Context, a *associate.AssociateShift) error
 	FindByID(ctx context.Context, id shared.AssociateId) (*associate.AssociateShift, error)
@@ -30,7 +33,10 @@ type ShiftPlanRepo interface {
 }
 
 // AssignmentRepo persists and loads LaborAssignment aggregates, one per
-// associate, and answers staffing-gap queries.
+// associate, and answers staffing-gap queries. Save is version-guarded
+// (see ADR 0021, optimistic concurrency): it returns
+// ports.ErrConcurrentModification if the row's current version no longer
+// matches the version the caller's aggregate was loaded at.
 type AssignmentRepo interface {
 	Save(ctx context.Context, la *assignment.LaborAssignment) error
 	FindByAssociateID(ctx context.Context, id shared.AssociateId) (*assignment.LaborAssignment, error)

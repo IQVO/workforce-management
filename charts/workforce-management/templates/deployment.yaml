@@ -7,7 +7,7 @@ metadata:
     {{- include "workforce-management.labels" . | nindent 4 }}
     app.kubernetes.io/component: api
 spec:
-  {{- if not .Values.autoscaling.enabled }}
+  {{- if not .Values.autoscaling.api.enabled }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   selector:
@@ -31,6 +31,9 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- with .Values.terminationGracePeriodSeconds }}
+      terminationGracePeriodSeconds: {{ . }}
+      {{- end }}
       {{- with .Values.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -62,6 +65,21 @@ spec:
                 secretKeyRef:
                   name: {{ include "workforce-management.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey }}
+            {{- if .Values.database.migrationsExistingSecretKey }}
+            # See values.yaml's database.migrationsExistingSecretKey comment
+            # and ADR-0025 (ported from order-management's ADR-0029): a
+            # direct (non-pooled) connection used only for the migration
+            # step in cmd/workforce/main.go, never for the runtime pgxpool.
+            # `optional: true` so a secret without this key yet (predates
+            # this chart version) still starts the pod -- the binary falls
+            # back to DATABASE_URL itself when this env var is unset.
+            - name: MIGRATIONS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "workforce-management.databaseSecretName" . }}
+                  key: {{ .Values.database.migrationsExistingSecretKey }}
+                  optional: true
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
             {{- if .Values.kafka.enabled }}
@@ -90,6 +108,10 @@ spec:
             - name: path-catalogue
               mountPath: {{ .Values.pathCatalogue.mountPath }}
               readOnly: true
+          {{- end }}
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
           {{- with .Values.livenessProbe }}
           livenessProbe:

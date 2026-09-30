@@ -123,6 +123,24 @@ paths:
                 associateId: assoc-1
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          description: >-
+            Conflict — this associate's roster entry was concurrently
+            modified by another request between when it was read and when
+            this write was attempted (concurrent-modification, ADR 0021).
+            Only possible on a restart (the associate already has a
+            roster entry) racing another concurrent write for the same
+            associate; reload and retry.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.workforce-management.warehouse-systems.dev/concurrent-modification
+                title: The resource was modified by another request; reload and retry
+                status: 409
+                detail: aggregate was concurrently modified; reload and retry
+                instance: /associates/assoc-1/start-shift
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -160,7 +178,10 @@ paths:
         "409":
           description: >-
             Conflict — the associate's shift has already ended
-            (associate-shift-ended).
+            (associate-shift-ended), or this associate's roster entry was
+            concurrently modified by another request between when it was
+            read and when this write was attempted
+            (concurrent-modification, ADR 0021); reload and retry.
           content:
             application/problem+json:
               schema:
@@ -397,9 +418,13 @@ paths:
             Conflict — the associate lacks the required certification for
             this path (certification-required), is currently on a logged
             break (associate-on-break), their shift has ended
-            (associate-shift-ended), or closing the prior active assignment
+            (associate-shift-ended), closing the prior active assignment
             would push logged hours over the configured max per shift
-            (max-hours-exceeded).
+            (max-hours-exceeded), or this associate's roster entry or
+            active assignment was concurrently modified by another
+            request between when it was read and when this write was
+            attempted (concurrent-modification, ADR 0021); reload and
+            retry.
           content:
             application/problem+json:
               schema:
@@ -437,8 +462,11 @@ paths:
         "409":
           description: >-
             Conflict — the associate is already on break
-            (associate-already-on-break), or their shift has already ended
-            (associate-shift-ended).
+            (associate-already-on-break), their shift has already ended
+            (associate-shift-ended), or this associate's roster entry was
+            concurrently modified by another request between when it was
+            read and when this write was attempted
+            (concurrent-modification, ADR 0021); reload and retry.
           content:
             application/problem+json:
               schema:
@@ -473,8 +501,11 @@ paths:
         "409":
           description: >-
             Conflict — the associate is not currently on break
-            (associate-not-on-break), or their shift has already ended
-            (associate-shift-ended).
+            (associate-not-on-break), their shift has already ended
+            (associate-shift-ended), or this associate's roster entry was
+            concurrently modified by another request between when it was
+            read and when this write was attempted
+            (concurrent-modification, ADR 0021); reload and retry.
           content:
             application/problem+json:
               schema:
@@ -631,7 +662,11 @@ paths:
         "409":
           description: >-
             Conflict — closing the active assignment's hours would exceed
-            the configured max hours per shift (max-hours-exceeded).
+            the configured max hours per shift (max-hours-exceeded), or
+            this associate's roster entry or active assignment was
+            concurrently modified by another request between when it was
+            read and when this write was attempted
+            (concurrent-modification, ADR 0021); reload and retry.
           content:
             application/problem+json:
               schema:
@@ -694,7 +729,8 @@ components:
       description: >-
         Malformed JSON body, or a required field was missing/empty
         (empty-associate-id, empty-path-id, empty-certification,
-        missing-building-id, missing-shift-id, or malformed-request-body).
+        missing-building-id, missing-shift-id, missing-charge, or
+        malformed-request-body).
       content:
         application/problem+json:
           schema:
@@ -779,11 +815,13 @@ components:
       properties:
         certifications:
           type: array
+          nullable: true
           description: >-
             Initial certifications the associate holds at shift start.
-            May be empty — certifications can be added later via
-            POST /associates/{id}/certifications. Each entry must be
-            non-empty.
+            May be empty or null (both mean "none yet" — null is treated
+            exactly like omitting the field) — certifications can be
+            added later via POST /associates/{id}/certifications. Each
+            entry must be non-empty.
           items:
             type: string
             minLength: 1
@@ -820,7 +858,11 @@ components:
         charge:
           type: number
           format: double
-          description: The volume of work (units) to be covered on this path.
+          description: >-
+            The volume of work (units) to be covered on this path.
+            Required: omitting it (or sending null) is rejected with a
+            400 missing-charge problem; an explicit 0 is a valid
+            "nothing to do" charge.
           example: 100
         plannedRate:
           type: number

@@ -16,7 +16,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	inboundmcp "github.com/claudioed/workforce-management/internal/adapters/inbound/mcp"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
@@ -33,13 +36,11 @@ func main() {
 	}
 }
 
-func run() error {
-	logger := newLogger(envOrDefault("LOG_LEVEL", "info"))
-	slog.SetDefault(logger)
-
-	// Same non-blocking telemetry setup as the HTTP service: an unreachable
-	// Collector degrades to dropped telemetry, never a server that won't start.
-	ctx := context.Background()
+// setupTelemetry wires OTel with the same non-blocking discipline as the
+// HTTP service: an unreachable Collector degrades to dropped telemetry,
+// never a server that won't start. The returned func flushes on shutdown
+// (a no-op when setup degraded to nil).
+func setupTelemetry(ctx context.Context, logger *slog.Logger) func() {
 	serviceName := envOrDefault("OTEL_SERVICE_NAME", "workforce-management-mcp")
 	otlpEndpoint := envOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
@@ -47,75 +48,73 @@ func run() error {
 		logger.Error("opentelemetry setup degraded", "error", err)
 	}
 	if shutdownTelemetry != nil {
-		defer func() {
+		return func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := shutdownTelemetry(shutdownCtx); err != nil {
 				logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
 			}
-		}()
+		}
 	}
+	return func() {}
+}
 
-	httpAddr := envOrDefault("MCP_ADDR", ":8090")
-	databaseURL := os.Getenv("DATABASE_URL")
-	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
-	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
+// repos bundles the persistence ports the MCP tools share.
+type repos struct {
+	associates  ports.AssociateRepo
+	shiftPlans  ports.ShiftPlanRepo
+	assignments ports.AssignmentRepo
+}
 
-	// Select in-memory vs Postgres repos the same way the platform does: no
-	// DATABASE_URL means local/in-memory adapters; a URL means migrate then
-	// connect a pgx pool.
-	var (
-		associates  ports.AssociateRepo
-		shiftPlans  ports.ShiftPlanRepo
-		assignments ports.AssignmentRepo
-	)
+// newRepos selects in-memory vs Postgres repos the same way the platform
+// does: no DATABASE_URL means local/in-memory adapters; a URL means migrate
+// then connect a pgx pool. The returned close func releases the pool when
+// one was opened.
+//
+// migrationsDatabaseURL is used ONLY for the golang-migrate step below —
+// the pgxpool opened just after it (databaseURL) is unchanged. See
+// cmd/workforce/main.go's openPostgresPool doc comment for the full "why"
+// a direct, non-pooled connection is needed here even though the pgxpool
+// stays on PgBouncer (ADR 0025-migrations-direct-postgres-connection.md,
+// ported from order-management's ADR-0029).
+func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsDatabaseURL, migrationsPath string) (repos, func(), error) {
 	if databaseURL == "" {
 		logger.Info("database url not configured; using in-memory adapters")
-		associates = memory.NewAssociateRepo()
-		shiftPlans = memory.NewShiftPlanRepo()
-		assignments = memory.NewAssignmentRepo()
-	} else {
-		if err := postgres.Migrate(databaseURL, migrationsPath); err != nil {
-			return err
-		}
-		pool, err := postgres.NewPool(ctx, databaseURL)
-		if err != nil {
-			return err
-		}
-		defer pool.Close()
-		associates = postgres.NewAssociateRepo(pool)
-		shiftPlans = postgres.NewShiftPlanRepo(pool)
-		assignments = postgres.NewAssignmentRepo(pool)
+		return repos{
+			associates:  memory.NewAssociateRepo(),
+			shiftPlans:  memory.NewShiftPlanRepo(),
+			assignments: memory.NewAssignmentRepo(),
+		}, func() {}, nil
 	}
-
-	sysClock := clock.System{}
-
-	// The MCP adapter reuses the SAME use cases the HTTP adapter uses:
-	// GetStaffingGap and ProposePathPlan (read) and AssignLabor (write).
-	// AssignLabor needs a publisher and clock; the MCP server is not the
-	// platform's primary event publisher (cmd/workforce is), so it logs the
-	// events it raises rather than publishing to Kafka.
-	publisher := events.NewLogPublisher(logger)
-	deps := inboundmcp.Deps{
-		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: publisher, Clock: sysClock},
-		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock},
-		AssignLabor:     &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift},
+	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP
+	// dial (here, Postgres) is reset ~10s after the app starts
+	// (Istio native sidecars). A single attempt turns that known,
+	// transient condition into CrashLoopBackOff. The retry does not
+	// weaken the fail-closed rule: once the budget is exhausted
+	// this still refuses to boot.
+	if err := bootretry.Retry(ctx, logger, "run migrations", func() error {
+		return postgres.Migrate(migrationsDatabaseURL, migrationsPath)
+	}); err != nil {
+		return repos{}, nil, err
 	}
-	// Optional curated data-product tool: when REPORTS_BASE_URL is set, the MCP
-	// server exposes get_workforce_labor_report backed by the workforce-reports
-	// REST service (ADR-0010). It never opens the analytical database directly.
-	if reportsBaseURL := os.Getenv("REPORTS_BASE_URL"); reportsBaseURL != "" {
-		deps.Reports = inboundmcp.NewReportsRESTClient(reportsBaseURL, nil)
-		logger.Info("reports data-product tool enabled", "reports_base_url", reportsBaseURL)
+	var pool *pgxpool.Pool
+	if err := bootretry.Retry(ctx, logger, "open postgres pool", func() error {
+		var err error
+		pool, err = postgres.NewPool(ctx, databaseURL)
+		return err
+	}); err != nil {
+		return repos{}, nil, err
 	}
-	server := inboundmcp.NewServer(deps)
+	return repos{
+		associates:  postgres.NewAssociateRepo(pool),
+		shiftPlans:  postgres.NewShiftPlanRepo(pool),
+		assignments: postgres.NewAssignmentRepo(pool),
+	}, func() { pool.Close() }, nil
+}
 
-	// The MCP handler is mounted at / and /mcp behind a GET /healthz so
-	// Kubernetes probes can reach the process (see router.go).
-	handler := newRouter(inboundmcp.Handler(server))
-
-	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
-
+// serveMCP runs srv until it fails or SIGINT/SIGTERM arrives, shutting the
+// server down gracefully on a signal.
+func serveMCP(logger *slog.Logger, srv *http.Server, httpAddr string) error {
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("mcp server listening (Streamable HTTP)", "addr", httpAddr)
@@ -136,6 +135,63 @@ func run() error {
 		return srv.Shutdown(shutdownCtx)
 	}
 	return nil
+}
+
+func run() error {
+	logger := newLogger(envOrDefault("LOG_LEVEL", "info"))
+	slog.SetDefault(logger)
+
+	ctx := context.Background()
+	defer setupTelemetry(ctx, logger)()
+
+	httpAddr := envOrDefault("MCP_ADDR", ":8090")
+	databaseURL := os.Getenv("DATABASE_URL")
+	// See cmd/workforce/main.go's openPostgresPool doc comment for the
+	// full "why" (session-scoped pg_advisory_lock vs PgBouncer
+	// transaction-pooling incompatibility, ADR
+	// 0025-migrations-direct-postgres-connection.md; ported from
+	// order-management's ADR-0029). This binary also runs migrations on
+	// start (newRepos below), so it needs the same direct-connection
+	// split. Falls back to databaseURL when unset.
+	migrationsDatabaseURL := envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL)
+	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
+	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
+
+	r, closeRepos, err := newRepos(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
+	if err != nil {
+		return err
+	}
+	defer closeRepos()
+
+	sysClock := clock.System{}
+
+	// The MCP adapter reuses the SAME use cases the HTTP adapter uses:
+	// GetStaffingGap and ProposePathPlan (read) and AssignLabor (write).
+	// AssignLabor needs a publisher and clock; the MCP server is not the
+	// platform's primary event publisher (cmd/workforce is), so it logs the
+	// events it raises rather than publishing to Kafka.
+	publisher := events.NewLogPublisher(logger)
+	deps := inboundmcp.Deps{
+		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock},
+		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock},
+		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift},
+	}
+	// Optional curated data-product tool: when REPORTS_BASE_URL is set, the MCP
+	// server exposes get_workforce_labor_report backed by the workforce-reports
+	// REST service (ADR-0010). It never opens the analytical database directly.
+	if reportsBaseURL := os.Getenv("REPORTS_BASE_URL"); reportsBaseURL != "" {
+		deps.Reports = inboundmcp.NewReportsRESTClient(reportsBaseURL, nil)
+		logger.Info("reports data-product tool enabled", "reports_base_url", reportsBaseURL)
+	}
+	server := inboundmcp.NewServer(deps)
+
+	// The MCP handler is mounted at / and /mcp behind a GET /healthz so
+	// Kubernetes probes can reach the process (see router.go).
+	handler := newRouter(inboundmcp.Handler(server))
+
+	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+
+	return serveMCP(logger, srv, httpAddr)
 }
 
 // version is the service version reported as the OTel service.version

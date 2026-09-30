@@ -133,6 +133,20 @@ func TestStartShift_RejectsEmptyCertification(t *testing.T) {
 	assertProblemDetails(t, rec, http.StatusBadRequest, "empty-certification", "/associates/assoc-1/start-shift")
 }
 
+// TestStartShift_RejectsNullBody pins the wire contract for a literal
+// JSON null request body: the spec's requestBody is a required object,
+// and every StartShiftRequest field is optional, so without the
+// pointer-decode a null body silently created a shift (201). It must be
+// a 400 malformed-request-body problem instead.
+func TestStartShift_RejectsNullBody(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", json.RawMessage("null"))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertProblemDetails(t, rec, http.StatusBadRequest, "malformed-request-body", "/associates/assoc-1/start-shift")
+}
+
 func TestCertify(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
 	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})
@@ -154,7 +168,7 @@ func TestCertify_NotFound(t *testing.T) {
 
 func TestProposePathPlan(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: 100, PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -181,7 +195,7 @@ func TestProposePathPlan(t *testing.T) {
 // this service's own ADR-0013.
 func TestProposePathPlan_RejectsUnknownPathId(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/not-a-real-path/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: 100, PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/not-a-real-path/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -193,7 +207,7 @@ func TestProposePathPlan_RejectsUnknownPathId(t *testing.T) {
 // regression class fulfillment-execution's ADR-0017 addendum documents.
 func TestProposePathPlan_ResolvesRealFleetPathIdVariant(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pick-zone-a/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: 100, PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pick-zone-a/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -205,7 +219,7 @@ func TestProposePathPlan_ResolvesRealFleetPathIdVariant(t *testing.T) {
 // must still succeed with 0 proposed heads, never a 4xx/5xx.
 func TestProposePathPlan_OmittedRateFallsBackToZeroHeadsWithoutMeasuredRate(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: 100})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -215,6 +229,49 @@ func TestProposePathPlan_OmittedRateFallsBackToZeroHeadsWithoutMeasuredRate(t *t
 	}
 	if resp.ProposedHeads != 0 {
 		t.Fatalf("expected 0 proposed heads with no rate available, got %d", resp.ProposedHeads)
+	}
+}
+
+// chargePtr builds a *float64 for proposePathPlanRequest literals: Charge
+// is a pointer so an omitted field (nil) is distinguishable from an
+// explicit 0 charge in tests, mirroring the wire-level distinction the
+// handler enforces.
+func chargePtr(v float64) *float64 { return &v }
+
+// TestProposePathPlan_MissingChargeReturns400 pins the wire contract for
+// an omitted charge: the spec marks charge required, and the handler must
+// reject its absence with a 400 missing-charge problem+json rather than
+// silently coercing it to a 0 charge (an explicit 0 stays valid — a
+// legitimate "nothing to do" proposal).
+func TestProposePathPlan_MissingChargeReturns400(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", PlannedRate: 30})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan/propose")
+}
+
+// TestProposePathPlan_NullChargeReturns400 proves the nil-check also
+// covers an explicit JSON null (invalid for a required, non-nullable
+// field), not just an omitted key.
+func TestProposePathPlan_NullChargeReturns400(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", map[string]any{"buildingId": "bldg-1", "charge": nil, "plannedRate": 30})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan/propose")
+}
+
+// TestProposePathPlan_ExplicitZeroChargeIsAccepted proves the nil-check
+// above does not over-reject: an explicit 0 charge is a valid proposal
+// (0 heads) and must stay a 200.
+func TestProposePathPlan_ExplicitZeroChargeIsAccepted(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(0), PlannedRate: 30})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -240,7 +297,7 @@ func TestProposePathPlan_HighIdleShareTrimsProposalOverHTTP(t *testing.T) {
 		IdleShare: &fakeIdleShareClient{share: 0.5},
 	}
 	router := NewRouter(handler, testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: 100, PlannedRate: 10})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 10})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}

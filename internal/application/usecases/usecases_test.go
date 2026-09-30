@@ -878,6 +878,44 @@ func TestStartAssociateShift_PublishError(t *testing.T) {
 	}
 }
 
+// TestStartAssociateShift_RestartCarriesOverExistingVersion proves the
+// idempotent-restart contract survives ADR 0021's version guard: calling
+// StartAssociateShift twice for the SAME associate (documented in
+// apis/openapi.yaml as upserting the roster entry, not erroring) must
+// succeed on the second call too, not be rejected as a stale write
+// against the fresh version-1 aggregate NewAssociateShift always builds.
+func TestStartAssociateShift_RestartCarriesOverExistingVersion(t *testing.T) {
+	f := newFixtures()
+	uc := &StartAssociateShift{Associates: f.associates, Events: f.pub, Clock: f.clock}
+
+	if _, err := uc.Execute(context.Background(), "assoc-1", []shared.Certification{"pack"}); err != nil {
+		t.Fatalf("first start: %v", err)
+	}
+	first, err := f.associates.FindByID(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("load after first start: %v", err)
+	}
+	if first.Version() != 1 {
+		t.Fatalf("expected version 1 after first start, got %d", first.Version())
+	}
+
+	// A second call restarts the roster entry -- must succeed, not
+	// return ports.ErrConcurrentModification.
+	if _, err := uc.Execute(context.Background(), "assoc-1", []shared.Certification{"stow"}); err != nil {
+		t.Fatalf("restart (second start) must succeed per the documented upsert contract, got %v", err)
+	}
+	second, err := f.associates.FindByID(context.Background(), "assoc-1")
+	if err != nil {
+		t.Fatalf("load after restart: %v", err)
+	}
+	if second.Version() != 2 {
+		t.Fatalf("expected version to advance to 2 after the restart, got %d", second.Version())
+	}
+	if !second.HasCertification("stow") {
+		t.Fatal("expected the restart's certifications to have been applied")
+	}
+}
+
 func TestCertifyAssociate_SaveError(t *testing.T) {
 	f := newFixtures()
 	setupCertifiedAssociate(t, f, "assoc-1")
@@ -1232,6 +1270,17 @@ func TestGetStaffingGap_ObservedIdlePctNilOnErrIdleShareUnavailable(t *testing.T
 
 // --- ADR-0011 fast-follow: fleet-wide staffing-gap list -----------------
 
+// assertPathGap pins one planned path's staffing gap from an ExecuteAll
+// result: present in byPath, with exactly the wanted understaffed flag,
+// planned heads, and active heads.
+func assertPathGap(t *testing.T, byPath map[shared.PathId]StaffingGap, path string, wantUnderstaffed bool, wantPlanned, wantActive int) {
+	t.Helper()
+	got, ok := byPath[shared.PathId(path)]
+	if !ok || got.Understaffed != wantUnderstaffed || got.PlannedHeads != wantPlanned || got.ActiveHeads != wantActive {
+		t.Fatalf("unexpected %s gap: %+v (ok=%v)", path, got, ok)
+	}
+}
+
 // TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath proves the
 // list endpoint's use case reuses the exact same per-path computation as
 // Execute (same PlannedHeads/ActiveHeads/Understaffed for a given path,
@@ -1264,14 +1313,9 @@ func TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath(t *testing.T) {
 	for _, g := range gaps {
 		byPath[g.PathId] = g
 	}
-	pack, ok := byPath["pack"]
-	if !ok || !pack.Understaffed || pack.PlannedHeads != 3 || pack.ActiveHeads != 0 {
-		t.Fatalf("unexpected pack gap: %+v (ok=%v)", pack, ok)
-	}
-	pick, ok := byPath["pick"]
-	if !ok || pick.Understaffed || pick.PlannedHeads != 1 || pick.ActiveHeads != 1 {
-		t.Fatalf("unexpected pick gap: %+v (ok=%v)", pick, ok)
-	}
+	pack := byPath["pack"]
+	assertPathGap(t, byPath, "pack", true, 3, 0)
+	assertPathGap(t, byPath, "pick", false, 1, 1)
 
 	// Cross-check against the single-path Execute for the same inputs --
 	// the two must never drift, since ExecuteAll reuses Execute's exact
@@ -1459,5 +1503,300 @@ func TestEndAssociateShift_NoActiveAssignment(t *testing.T) {
 	stored, _ := f.associates.FindByID(context.Background(), "assoc-1")
 	if !stored.Ended() {
 		t.Fatal("expected shift to be ended")
+	}
+}
+
+// --- coverage-gap closures: domain rejections and per-path failures ---------
+
+// endShiftOf ends an associate's shift through the use case, mirroring how a
+// real composition reaches the ended state.
+func endShiftOf(t *testing.T, f *fixtures, id shared.AssociateId) {
+	t.Helper()
+	end := &EndAssociateShift{Associates: f.associates, Assignments: f.assignments, Events: f.pub, Clock: f.clock, MaxHoursPerShift: 8}
+	if err := end.Execute(context.Background(), id); err != nil {
+		t.Fatalf("setup end shift: %v", err)
+	}
+}
+
+// TestCertifyAssociate_RejectsEndedShift covers the domain-rejection branch
+// of Execute: CertifyAssociate on a shift that already ended must surface
+// associate.ErrShiftEnded without saving or publishing anything new.
+func TestCertifyAssociate_RejectsEndedShift(t *testing.T) {
+	f := newFixtures()
+	setupCertifiedAssociate(t, f, "assoc-1")
+	endShiftOf(t, f, "assoc-1")
+	eventsBefore := len(f.pub.Events())
+
+	uc := &CertifyAssociate{Associates: f.associates, Events: f.pub, Clock: f.clock}
+	err := uc.Execute(context.Background(), "assoc-1", "hazmat")
+	if !errors.Is(err, associate.ErrShiftEnded) {
+		t.Fatalf("expected ErrShiftEnded, got %v", err)
+	}
+	if got := len(f.pub.Events()); got != eventsBefore {
+		t.Fatalf("a rejected certification must publish nothing, got %d new events", got-eventsBefore)
+	}
+	stored, _ := f.associates.FindByID(context.Background(), "assoc-1")
+	if stored.HasCertification("hazmat") {
+		t.Fatal("expected no certification to be granted on a rejected execute")
+	}
+}
+
+// TestCertifyAssociate_DuplicateCertification documents the current
+// behaviour of re-certifying a certification the associate already holds:
+// it is NOT an error — the domain inserts idempotently — but it DOES raise
+// another AssociateCertified event. If that ever becomes an undesired
+// duplicate signal downstream, this test is the place that pins the change.
+func TestCertifyAssociate_DuplicateCertification(t *testing.T) {
+	f := newFixtures()
+	setupCertifiedAssociate(t, f, "assoc-1", "pack")
+	eventsBefore := len(f.pub.Events())
+
+	uc := &CertifyAssociate{Associates: f.associates, Events: f.pub, Clock: f.clock}
+	if err := uc.Execute(context.Background(), "assoc-1", "pack"); err != nil {
+		t.Fatalf("re-certifying an existing certification must not error, got %v", err)
+	}
+
+	stored, _ := f.associates.FindByID(context.Background(), "assoc-1")
+	if !stored.HasCertification("pack") {
+		t.Fatal("expected the existing certification to still be held")
+	}
+	certifiedEvents := 0
+	for _, e := range f.pub.Events()[eventsBefore:] {
+		if e.EventName() == "AssociateCertified" {
+			certifiedEvents++
+		}
+	}
+	if certifiedEvents != 1 {
+		t.Fatalf("expected exactly one AssociateCertified event on duplicate certify, got %d", certifiedEvents)
+	}
+}
+
+// TestStartBreak_DomainRejections covers the domain-error branch of
+// StartBreak.Execute that the in-memory happy-path tests never reach:
+// breaking twice, and breaking after the shift ended. Neither may save or
+// publish anything.
+func TestStartBreak_DomainRejections(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, f *fixtures)
+		want  error
+	}{
+		{
+			name: "already on break",
+			setup: func(t *testing.T, f *fixtures) {
+				if err := (&StartBreak{Associates: f.associates, Events: f.pub, Clock: f.clock}).Execute(context.Background(), "assoc-1"); err != nil {
+					t.Fatalf("setup first break: %v", err)
+				}
+			},
+			want: associate.ErrAlreadyOnBreak,
+		},
+		{
+			name: "shift already ended",
+			setup: func(t *testing.T, f *fixtures) {
+				endShiftOf(t, f, "assoc-1")
+			},
+			want: associate.ErrShiftEnded,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			setupCertifiedAssociate(t, f, "assoc-1")
+			tc.setup(t, f)
+			eventsBefore := len(f.pub.Events())
+
+			uc := &StartBreak{Associates: f.associates, Events: f.pub, Clock: f.clock}
+			if err := uc.Execute(context.Background(), "assoc-1"); !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+			if got := len(f.pub.Events()); got != eventsBefore {
+				t.Fatalf("a rejected break must publish nothing, got %d new events", got-eventsBefore)
+			}
+		})
+	}
+}
+
+// TestEndBreak_DomainRejections covers the domain-error branch of
+// EndBreak.Execute: ending a break never started, and ending one after the
+// shift ended. Neither may save or publish anything.
+func TestEndBreak_DomainRejections(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, f *fixtures)
+		want  error
+	}{
+		{
+			name:  "not on break",
+			setup: func(t *testing.T, f *fixtures) {},
+			want:  associate.ErrNotOnBreak,
+		},
+		{
+			name: "shift already ended",
+			setup: func(t *testing.T, f *fixtures) {
+				endShiftOf(t, f, "assoc-1")
+			},
+			want: associate.ErrShiftEnded,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			setupCertifiedAssociate(t, f, "assoc-1")
+			tc.setup(t, f)
+			eventsBefore := len(f.pub.Events())
+
+			uc := &EndBreak{Associates: f.associates, Events: f.pub, Clock: f.clock}
+			if err := uc.Execute(context.Background(), "assoc-1"); !errors.Is(err, tc.want) {
+				t.Fatalf("expected %v, got %v", tc.want, err)
+			}
+			if got := len(f.pub.Events()); got != eventsBefore {
+				t.Fatalf("a rejected break end must publish nothing, got %d new events", got-eventsBefore)
+			}
+		})
+	}
+}
+
+// pathFailingAssignmentRepo fails CountActiveByPath only for the scripted
+// paths, delegating everything else to the wrapped in-memory repo — used to
+// fail one line of a multi-line plan mid-loop without failing the first.
+type pathFailingAssignmentRepo struct {
+	*memory.AssignmentRepo
+	countErrFor map[shared.PathId]error
+}
+
+func (r *pathFailingAssignmentRepo) CountActiveByPath(ctx context.Context, pathId shared.PathId) (int, error) {
+	if err, ok := r.countErrFor[pathId]; ok {
+		return 0, err
+	}
+	return r.AssignmentRepo.CountActiveByPath(ctx, pathId)
+}
+
+// commitTwoPathPlan commits an understaffed two-line plan (pack, pick) for
+// ExecuteAll tests.
+func commitTwoPathPlan(t *testing.T, f *fixtures) {
+	t.Helper()
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5, "pick": 5}}, MaxHoursPerShift: 8}
+	lines := []shiftplan.PathPlan{
+		{PathId: "pack", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16},
+		{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8},
+	}
+	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5, "pick": 5}); err != nil {
+		t.Fatalf("setup commit: %v", err)
+	}
+}
+
+// TestGetStaffingGap_ExecuteAll_PerPathErrorDiscardsPartialResults proves a
+// per-path failure mid-plan aborts the whole list call: the gap already
+// computed for the healthy line is discarded and nothing is published.
+func TestGetStaffingGap_ExecuteAll_PerPathErrorDiscardsPartialResults(t *testing.T) {
+	f := newFixtures()
+	commitTwoPathPlan(t, f)
+
+	repo := &pathFailingAssignmentRepo{AssignmentRepo: f.assignments, countErrFor: map[shared.PathId]error{"pick": errBoom}}
+	uc := &GetStaffingGap{ShiftPlans: f.shiftPlans, Assignments: repo, Events: f.pub, Clock: f.clock}
+	eventsBefore := len(f.pub.Events())
+
+	gaps, err := uc.ExecuteAll(context.Background(), "bldg-1", "shift-1")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("expected errBoom, got %v", err)
+	}
+	if gaps != nil {
+		t.Fatalf("a per-path failure must discard partial results, got %+v", gaps)
+	}
+	for _, e := range f.pub.Events()[eventsBefore:] {
+		if e.EventName() == "PathUnderstaffed" {
+			t.Fatal("a per-path failure must publish no PathUnderstaffed events")
+		}
+	}
+}
+
+// TestGetStaffingGap_ExecuteAll_PublishError mirrors Execute's
+// publish-error behavior for the batched list call: a failing publish
+// surfaces the error and no gap list is returned.
+func TestGetStaffingGap_ExecuteAll_PublishError(t *testing.T) {
+	f := newFixtures()
+	commitTwoPathPlan(t, f)
+
+	pub := &failingPublisher{LogPublisher: f.pub, err: errBoom}
+	uc := &GetStaffingGap{ShiftPlans: f.shiftPlans, Assignments: f.assignments, Events: pub, Clock: f.clock}
+	gaps, err := uc.ExecuteAll(context.Background(), "bldg-1", "shift-1")
+	if !errors.Is(err, errBoom) {
+		t.Fatalf("expected errBoom, got %v", err)
+	}
+	if gaps != nil {
+		t.Fatalf("a failed publish must return no gaps, got %+v", gaps)
+	}
+}
+
+// TestProposePathPlan_IdleShareTrimBoundaries covers the arithmetic edges of
+// applyIdleShareTrim beyond the threshold cases in
+// TestProposePathPlan_IdleShareTrim: zero observed idle share, a full trim
+// clamped at the 1-head floor, a trim that Ceil rounds back up to the
+// original headcount (a no-op that must NOT report a trim reason), and a
+// trim that Ceil rounds up to the next integer.
+func TestProposePathPlan_IdleShareTrimBoundaries(t *testing.T) {
+	tests := []struct {
+		name      string
+		heads     int // via charge/rate: charge=heads*10, rate=10
+		idleShare float64
+		threshold float64 // 0 = default (0.30)
+		wantHeads int
+		trimmed   bool
+	}{
+		{
+			name:      "zero idle share never trims",
+			heads:     10,
+			idleShare: 0.0,
+			wantHeads: 10,
+		},
+		{
+			name:      "full idle share clamps at the 1-head floor",
+			heads:     2,
+			idleShare: 1.0,
+			wantHeads: 1,
+			trimmed:   true,
+		},
+		{
+			name:      "trim Ceil-rounded back up to full heads is a no-op",
+			heads:     10,
+			idleShare: 0.05, // ceil(10*0.95) = ceil(9.5) = 10 = heads
+			threshold: 0.04, // share must exceed the threshold to arm the trim
+			wantHeads: 10,
+		},
+		{
+			name:      "trim rounds up to the next integer",
+			heads:     10,
+			idleShare: 0.31, // ceil(10*0.69) = ceil(6.9) = 7
+			wantHeads: 7,
+			trimmed:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			idleClient := &fakeIdleShareClient{share: tc.idleShare}
+			uc := &ProposePathPlan{Events: f.pub, Clock: f.clock, IdleShare: idleClient, IdleShareTrimThreshold: tc.threshold}
+
+			charge := float64(tc.heads) * 10
+			heads, _, _, trimReason, err := uc.Execute(context.Background(), "bldg-1", "pack", charge, 10)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !idleClient.called {
+				t.Fatal("expected IdleShare to be consulted")
+			}
+			if heads != tc.wantHeads {
+				t.Fatalf("heads = %d, want %d", heads, tc.wantHeads)
+			}
+			if tc.trimmed && trimReason == "" {
+				t.Fatal("expected a non-empty trimReason when a trim was applied")
+			}
+			if !tc.trimmed && trimReason != "" {
+				t.Fatalf("expected no trim, got trimReason %q", trimReason)
+			}
+		})
 	}
 }

@@ -117,7 +117,7 @@ func TestLogHours_AllowsUpToMax(t *testing.T) {
 
 func TestRehydrate_ReflectsPersistedStateAndRaisesNoEvents(t *testing.T) {
 	certs := []shared.Certification{"pack", "hazmat"}
-	a := Rehydrate("assoc-1", certs, true, 4.5, false)
+	a := Rehydrate("assoc-1", certs, true, 4.5, false, 3)
 
 	if a.AssociateId() != "assoc-1" {
 		t.Fatalf("expected AssociateId assoc-1, got %v", a.AssociateId())
@@ -130,6 +130,9 @@ func TestRehydrate_ReflectsPersistedStateAndRaisesNoEvents(t *testing.T) {
 	}
 	if a.Ended() {
 		t.Fatal("expected Ended to be false")
+	}
+	if a.Version() != 3 {
+		t.Fatalf("expected Rehydrate to preserve version 3, got %d", a.Version())
 	}
 
 	got := make(map[shared.Certification]struct{}, len(certs))
@@ -152,7 +155,7 @@ func TestRehydrate_ReflectsPersistedStateAndRaisesNoEvents(t *testing.T) {
 }
 
 func TestRehydrate_EndedTrueReflectedByEnded(t *testing.T) {
-	a := Rehydrate("assoc-1", nil, false, 0, true)
+	a := Rehydrate("assoc-1", nil, false, 0, true, 1)
 
 	if !a.Ended() {
 		t.Fatal("expected Ended to be true")

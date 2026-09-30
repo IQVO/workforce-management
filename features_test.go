@@ -354,6 +354,17 @@ func (w *world) staffingGapIsRequested(ctx context.Context, pathId, buildingId, 
 	return w.do(ctx, http.MethodGet, fmt.Sprintf("/paths/%s/staffing-gap?buildingId=%s&shiftId=%s", pathId, buildingId, shiftId), nil)
 }
 
+func (w *world) associateEndsTheirShift(ctx context.Context, associateId string) error {
+	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/end-shift", nil)
+}
+
+func (w *world) associateHasEndedTheirShift(ctx context.Context, associateId string) error {
+	if err := w.associateEndsTheirShift(ctx, associateId); err != nil {
+		return err
+	}
+	return w.expectStatus(http.StatusNoContent)
+}
+
 func (w *world) shiftPlanCommitSucceeded(plannedHeads int, pathId string) error {
 	if err := w.expectStatus(http.StatusCreated); err != nil {
 		return err
@@ -505,6 +516,55 @@ func (w *world) proposedHeadsAreTrimmedWithNonEmptyTrimReason(wantHeads int) err
 	return nil
 }
 
+// pathIsNotFlaggedUnderstaffed is the complement of
+// pathIsFlaggedUnderstaffed: active assignments meet the plan, so the
+// read model must NOT flag the path nor raise PathUnderstaffed.
+func (w *world) pathIsNotFlaggedUnderstaffed(pathId string, plannedHeads, activeHeads int) error {
+	if err := w.expectStatus(http.StatusOK); err != nil {
+		return err
+	}
+	var gap staffingGapResult
+	if err := w.decodeLast(&gap); err != nil {
+		return err
+	}
+	if gap.PathId != pathId {
+		return fmt.Errorf("expected the staffing gap of path %q, got %q", pathId, gap.PathId)
+	}
+	if gap.PlannedHeads != plannedHeads {
+		return fmt.Errorf("expected %d planned heads, got %d", plannedHeads, gap.PlannedHeads)
+	}
+	if gap.ActiveHeads != activeHeads {
+		return fmt.Errorf("expected %d active heads, got %d", activeHeads, gap.ActiveHeads)
+	}
+	if gap.Understaffed {
+		return fmt.Errorf("expected path %q NOT to be flagged PathUnderstaffed, got understaffed=true", pathId)
+	}
+	return nil
+}
+
+// proposalSuggestsHeads asserts the propose response's heads, resolved
+// rate and rate source — the pure-computation contract of
+// POST /paths/{pathId}/plan/propose.
+func (w *world) proposalSuggestsHeads(heads int, resolvedRate float64, rateSource string) error {
+	if err := w.expectStatus(http.StatusOK); err != nil {
+		return err
+	}
+	var resp proposePathPlanResult
+	if err := w.decodeLast(&resp); err != nil {
+		return err
+	}
+	if resp.ProposedHeads != heads {
+		return fmt.Errorf("expected %d proposed heads, got %d", heads, resp.ProposedHeads)
+	}
+	if resp.ResolvedRate != resolvedRate {
+		return fmt.Errorf("expected resolved rate %g, got %g", resolvedRate, resp.ResolvedRate)
+	}
+	if resp.RateSource != rateSource {
+		return fmt.Errorf("expected rate source %q, got %q", rateSource, resp.RateSource)
+	}
+	return nil
+}
+
 // InitializeScenario registers the hooks and step definitions for every
 // scenario. A fresh server (and therefore fresh in-memory repositories) is
 // built before each scenario so scenarios stay independent.
@@ -526,6 +586,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^associate "([^"]*)" is certified for "([^"]*)"$`, w.associateIsCertifiedFor)
 	sc.Step(`^a ShiftPlan is committed for building "([^"]*)" shift "([^"]*)" with lines:$`, w.shiftPlanIsCommitted)
 	sc.Step(`^associate "([^"]*)" has started a break$`, w.associateHasStartedABreak)
+	sc.Step(`^associate "([^"]*)" has ended their shift$`, w.associateHasEndedTheirShift)
 	sc.Step(`^the observed idle share for path "([^"]*)" is ([\d.]+)$`, w.observedIdleShareForPath)
 
 	// When
@@ -533,6 +594,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^associate "([^"]*)" is assigned to path "([^"]*)"$`, w.associateIsAssignedToPath)
 	sc.Step(`^associate "([^"]*)" starts a break$`, w.associateStartsABreak)
 	sc.Step(`^associate "([^"]*)" ends the break$`, w.associateEndsTheBreak)
+	sc.Step(`^associate "([^"]*)" ends their shift$`, w.associateEndsTheirShift)
 	sc.Step(`^the staffing gap for path "([^"]*)" is requested for building "([^"]*)" shift "([^"]*)"$`, w.staffingGapIsRequested)
 	sc.Step(`^a path plan is proposed for path "([^"]*)" building "([^"]*)" with charge (\d+) and planned rate (\d+)$`, w.pathPlanIsProposed)
 
@@ -540,11 +602,14 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the ShiftPlan commit succeeds with (\d+) planned heads on path "([^"]*)"$`, w.shiftPlanCommitSucceeded)
 	sc.Step(`^the ShiftPlan commit is rejected with status (\d+) and problem type "([^"]*)"$`, w.expectProblem)
 	sc.Step(`^the assignment is rejected with status (\d+) and problem type "([^"]*)"$`, w.expectProblem)
+	sc.Step(`^the request is rejected with status (\d+) and problem type "([^"]*)"$`, w.expectProblem)
 	sc.Step(`^the last request succeeds with status (\d+)$`, w.expectStatus)
 	sc.Step(`^the LaborAssignment is created with active path "([^"]*)"$`, w.laborAssignmentCreatedWithActivePath)
 	sc.Step(`^the LaborAssignment for associate "([^"]*)" has exactly one ACTIVE assignment, on path "([^"]*)"$`, w.laborAssignmentHasExactlyOneActiveAssignment)
 	sc.Step(`^path "([^"]*)" has (\d+) active heads? in building "([^"]*)" shift "([^"]*)"$`, w.pathHasActiveHeads)
 	sc.Step(`^path "([^"]*)" is flagged PathUnderstaffed with (\d+) planned heads and (\d+) active heads?$`, w.pathIsFlaggedUnderstaffed)
+	sc.Step(`^path "([^"]*)" reports (\d+) planned heads and (\d+) active heads and is not understaffed$`, w.pathIsNotFlaggedUnderstaffed)
+	sc.Step(`^the proposal suggests (\d+) heads at resolved rate (\d+) from source "([^"]*)"$`, w.proposalSuggestsHeads)
 	sc.Step(`^the proposed heads are trimmed to (\d+) with a non-empty trim reason$`, w.proposedHeadsAreTrimmedWithNonEmptyTrimReason)
 }
 

@@ -55,6 +55,18 @@ spec:
                 secretKeyRef:
                   name: {{ include "workforce-management.databaseSecretName" . }}
                   key: {{ .Values.database.existingSecretKey }}
+            {{- if .Values.database.migrationsExistingSecretKey }}
+            # See values.yaml's database.migrationsExistingSecretKey comment
+            # and ADR-0025 (ported from order-management's ADR-0029):
+            # cmd/mcp also runs migrations on start (see the comment
+            # above), so it needs the same direct-connection split.
+            - name: MIGRATIONS_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "workforce-management.databaseSecretName" . }}
+                  key: {{ .Values.database.migrationsExistingSecretKey }}
+                  optional: true
+            {{- end }}
             - name: MIGRATIONS_PATH
               value: {{ .Values.config.migrationsPath | quote }}
             - name: MAX_HOURS_PER_SHIFT
@@ -87,6 +99,10 @@ spec:
               port: http
             initialDelaySeconds: 3
             periodSeconds: 5
+          {{- with .Values.startupProbe }}
+          startupProbe:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           resources:
             {{- toYaml .Values.mcp.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}

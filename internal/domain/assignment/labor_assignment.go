@@ -40,27 +40,41 @@ type LaborAssignment struct {
 	active      *Interval
 	history     []Interval
 
+	// version is inert optimistic-concurrency infrastructure metadata
+	// (see ADR 0021) -- carried but never reasoned about by domain
+	// logic. A fresh aggregate starts at 1; AssignmentRepo increments
+	// it on every successful Save.
+	version int
+
 	events []shared.DomainEvent
 }
 
 // NewLaborAssignment starts an empty assignment record for an associate, with
 // no active assignment yet.
 func NewLaborAssignment(associateId shared.AssociateId) *LaborAssignment {
-	return &LaborAssignment{associateId: associateId}
+	return &LaborAssignment{associateId: associateId, version: 1}
 }
 
 // Rehydrate reconstructs a LaborAssignment from persisted state without
-// raising events.
-func Rehydrate(associateId shared.AssociateId, active *Interval, history []Interval) *LaborAssignment {
+// raising events. version is the value the aggregate was loaded at (see
+// ADR 0021, optimistic concurrency) -- adapters pass through whatever they
+// read.
+func Rehydrate(associateId shared.AssociateId, active *Interval, history []Interval, version int) *LaborAssignment {
 	return &LaborAssignment{
 		associateId: associateId,
 		active:      active,
 		history:     append([]Interval(nil), history...),
+		version:     version,
 	}
 }
 
 // AssociateId returns the associate this assignment record belongs to.
 func (l *LaborAssignment) AssociateId() shared.AssociateId { return l.associateId }
+
+// Version returns the optimistic-concurrency version this aggregate was
+// loaded at (see ADR 0021). Infrastructure metadata only -- domain logic
+// never branches on it.
+func (l *LaborAssignment) Version() int { return l.version }
 
 // IsActive reports whether the associate currently has an active assignment.
 func (l *LaborAssignment) IsActive() bool { return l.active != nil }
