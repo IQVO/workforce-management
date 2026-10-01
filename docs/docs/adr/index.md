@@ -83,13 +83,13 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0001](./0001-hexagonal-ports-and-adapters.md) | Hexagonal (ports and adapters) architecture | Accepted |
 | [0002](./0002-stop-at-the-path-boundary.md) | Stop at the path boundary — no associate-to-task link | Accepted |
 | [0003](./0003-certification-gated-single-active-assignment.md) | Certification-gated assignment with exactly one active assignment per associate | Accepted |
-| [0004](./0004-kafka-integration-events-and-cloudevents-catalog.md) | Kafka for integration events, with a CloudEvents catalog ahead of the wire format | Accepted |
+| [0004](./0004-kafka-integration-events-and-cloudevents-catalog.md) | Kafka for integration events, with a CloudEvents catalog ahead of the wire format | Accepted; envelope superseded by [0026](./0026-cloudevents-mandatory-event-envelope.md) |
 | [0005](./0005-rfc-7807-problem-details.md) | RFC 7807 Problem Details for every error response | Accepted |
 | [0006](./0006-godog-bdd-acceptance-tests.md) | godog acceptance specs driven through the real HTTP surface | Accepted |
 | [0007](./0007-arch-go-architecture-fitness-tests.md) | arch-go fitness tests to make the layering rule executable | Accepted |
 | [0008](./0008-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted |
 | [0009](./0009-hazmat-certification-via-existing-path-gating.md) | Hazmat handling via the existing path-name-equals-certification-name gate | Accepted |
-| [0010](./0010-analytical-data-product.md) | Per-service analytical data product (report) via a separate analytics topic | Accepted |
+| [0010](./0010-analytical-data-product.md) | Per-service analytical data product (report) via a separate analytics topic | Accepted; Envelope v1 superseded by [0026](./0026-cloudevents-mandatory-event-envelope.md) |
 | [0011](./0011-adopt-fleet-mfe-console-architecture.md) | Adopt the fleet-wide micro-frontend console architecture (workforce-mfe) | Accepted |
 | [0012](./0012-measured-rate-feed-for-propose-path-plan.md) | Close-the-loop measured rate feed from labor-performance into ProposePathPlan | Accepted |
 | [0013](./0013-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
@@ -105,3 +105,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0023](./0023-kafka-integration-producer-partition-key.md) | Key the integration Kafka publisher by ShiftPlan aggregate id | Accepted |
 | [0024](./0024-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
 | [0025](./0025-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
+| [0026](./0026-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |

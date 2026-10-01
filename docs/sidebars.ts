@@ -112,6 +112,7 @@ const sidebars: SidebarsConfig = {
         'adr/0023-kafka-integration-producer-partition-key',
         'adr/0024-horizontal-autoscaling-and-pgxpool-tuning',
         'adr/0025-migrations-direct-postgres-connection',
+        'adr/0026-cloudevents-mandatory-event-envelope',
       ],
     },
   ],

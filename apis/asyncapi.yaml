@@ -29,12 +29,17 @@ info:
       assignment per associate at a time. Raises `LaborAssigned` and
       `LaborReassigned`.
 
-    **Envelope.** Every message on this channel is a CloudEvents 1.0
-    *structured-mode* JSON envelope, content type
-    `application/cloudevents+json`. The CloudEvents context attributes
-    (`specversion`, `id`, `source`, `type`, `subject`, `time`,
-    `datacontenttype`) sit at the top level and the bounded context's own
-    payload sits under `data`.
+    **Envelope (mandatory).** Every Kafka message this service produces or
+    consumes is a CloudEvents 1.0 event in *structured content mode*
+    (ADR-0026, superseding the envelope half of ADR-0004): the Kafka message
+    value is the JSON event format, content type
+    `application/cloudevents+json`, and every message carries the Kafka header
+    `content-type: application/cloudevents+json; charset=UTF-8` alongside the
+    W3C `traceparent`/`tracestate` headers. All of `specversion` (`1.0`),
+    `id`, `source` (`/warehouse/workforce-management`), `type`, `subject`,
+    `time`, `datacontenttype` (`application/json`) and `dataschema` are
+    REQUIRED; the bounded context's own payload sits under `data`. There is
+    no flat envelope and no envelope toggle.
 
     **Type naming convention.** The CloudEvents `type` attribute is
     reverse-DNS dotted and follows the exact shape
@@ -46,17 +51,27 @@ info:
     The `entity` segment is the aggregate that raises the event —
     `associate`, `shiftplan` or `assignment`. `PathUnderstaffed` uses
     `shiftplan`, since the gap is measured against a committed `ShiftPlan`'s
-    planned heads.
+    planned heads. A breaking payload change gets a new `.v2` type and a new
+    `dataschema` version, never a mutation of the old one.
 
-    **Full catalog vs actually published.** This document is the complete
-    reference catalog of the bounded context's domain events, which is
-    deliberately broader than what leaves the process today. As of this
-    version the outbound Kafka adapter
-    (`internal/adapters/outbound/kafka/publisher.go`) forwards **only**
-    `ShiftPlanCommitted`; every other event in this catalog is raised and
-    consumed in-process and is documented here for completeness and for
-    forward compatibility with downstream contexts. Each message below states
-    its publication status explicitly in its `description`.
+    **dataschema.** `urn:warehouse:workforce-management:<stream>:<EventName>:v1`
+    where `<stream>` is `events` for `warehouse.workforce.events` and
+    `analytics` for `warehouse.workforce.analytics`. The same occurrence keeps
+    the same `type` on both topics; `dataschema` names the payload shape.
+
+    **Subject.** The aggregate instance id: the associate id for
+    `associate`/`assignment` events, the path id for `PathUnderstaffed` and
+    `ShiftPlanProposed`, and the ShiftPlan aggregate id
+    `<buildingId>/<shiftId>` for `ShiftPlanCommitted` (the same value as the
+    integration message's Kafka key).
+
+    **Which events leave the process on which topic.** The integration topic
+    `warehouse.workforce.events` carries **only** `ShiftPlanCommitted`, fanned
+    out into one message per `PathPlan` line. Every event in this catalog is
+    published to the internal analytics topic
+    `warehouse.workforce.analytics` (consumed by this service's own analytics
+    projector, ADR-0010). Each message below pins its exact `type` and
+    `dataschema` and documents the payload actually on the wire.
 
   contact:
     name: Workforce Management — claudioed
@@ -92,7 +107,7 @@ servers:
     description: |
       Shared warehouse-systems Kafka cluster. Workforce Management publishes
       its outbound domain events here; downstream bounded contexts (Work
-      Planning, Fulfillment Execution) consume from the same cluster.
+      Planning) consume from the same cluster.
 
 defaultContentType: application/cloudevents+json
 
@@ -102,28 +117,51 @@ channels:
       The single outbound topic for this bounded context, matching the
       `Topic` constant in `internal/adapters/outbound/kafka/publisher.go`
       (`warehouse.workforce.events`). Messages are CloudEvents 1.0
-      structured-mode JSON. Consumers must tolerate unknown `type` values:
-      the catalog on this channel is expected to grow as more of the
-      in-process events below are wired to the publisher.
+      structured-mode JSON with the `content-type:
+      application/cloudevents+json; charset=UTF-8` Kafka header. Consumers
+      must dispatch on the full `type`, ignore unknown `type` values, and
+      dedupe on `id`.
     subscribe:
       operationId: consumeWorkforceEvents
       summary: Consume Workforce Management domain events.
       description: |
         Subscribe to the Workforce Management domain-event stream. Every
-        message is a CloudEvents 1.0 structured-mode JSON envelope; route on
-        the `type` context attribute, which follows
+        message is a CloudEvents 1.0 structured-mode event; route on the full
+        `type` context attribute, which follows
         `com.warehouse.wes.workforce-management.<entity>.<EventName>`.
 
-        Only `ShiftPlanCommitted` is published to this topic today, and it is
-        fanned out into one message per `PathPlan` line of the committed
-        plan. The remaining messages listed here are part of the domain-event
-        catalog but are in-process only at this version — see each message's
-        description.
+        Only `ShiftPlanCommitted` is published to this topic, fanned out into
+        one message per `PathPlan` line of the committed plan, each with its
+        own unique `id`. The remaining messages listed here are published to
+        the analytics topic only — see each message's description.
       tags:
         - name: workforce-management
       message:
         oneOf:
           - $ref: "#/components/messages/ShiftPlanCommitted"
+
+  warehouse.workforce.analytics:
+    description: |
+      Internal analytics topic (ADR-0010), matching the `AnalyticsTopic`
+      constant in `internal/adapters/outbound/kafka/analytics_publisher.go`.
+      Every domain event this context raises is published here as a
+      CloudEvents 1.0 structured-mode event with dataschema
+      `urn:warehouse:workforce-management:analytics:<EventName>:v1`. Consumed
+      by this service's own analytics projector (`workforce-analytics`
+      consumer group), which dedupes on `id` and dead-letters anything that
+      fails CloudEvents validation to `warehouse.workforce.analytics.dlq`.
+    subscribe:
+      operationId: consumeWorkforceAnalytics
+      summary: Consume Workforce Management analytics events.
+      description: |
+        Subscribe to the analytics stream. Route on the full `type`; the same
+        occurrence carries the same `type` as on the integration topic, and
+        `dataschema` distinguishes the analytics payload shape.
+      tags:
+        - name: workforce-management
+      message:
+        oneOf:
+          - $ref: "#/components/messages/ShiftPlanCommittedAnalytics"
           - $ref: "#/components/messages/ShiftPlanProposed"
           - $ref: "#/components/messages/PathUnderstaffed"
           - $ref: "#/components/messages/AssociateShiftStarted"
@@ -147,8 +185,9 @@ components:
         `installedStations(path)`, and planned hours must fit the shift's max
         hours.
 
-        **Published to Kafka today.** This is the only domain event currently
-        wired to the outbound Kafka adapter. The adapter loads the committed
+        **Published to `warehouse.workforce.events`.** This is the only
+        domain event on the integration topic; wes-work-planning dispatches on
+        its exact `type`. The adapter loads the committed
         plan through the `ShiftPlanRepo` and **fans the single domain event
         out into one Kafka message per `PathPlan` line** — a plan committed
         with three path lines produces three messages on
@@ -156,7 +195,10 @@ components:
         `path_id`, `planned_heads`, `planned_rate` and `planned_hours`
         alongside the plan's `building_id` and `shift_id`. Consumers must
         therefore expect N messages per commit, not one, and must not assume
-        a message carries the whole plan.
+        a message carries the whole plan. Every line message has its own
+        unique CloudEvents `id` (minted once and persisted with the outbox
+        row, so a redelivery repeats it); `subject` is the ShiftPlan aggregate
+        id `<buildingId>/<shiftId>`, identical to the Kafka key.
       contentType: application/cloudevents+json
       tags:
         - name: shiftplan
@@ -174,6 +216,7 @@ components:
             subject: "BLD1/SHIFT1"
             time: "2026-08-21T22:00:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1"
             data:
               building_id: "BLD1"
               shift_id: "SHIFT1"
@@ -181,6 +224,38 @@ components:
               planned_heads: 3
               planned_rate: 50
               planned_hours: 24
+
+    ShiftPlanCommittedAnalytics:
+      name: ShiftPlanCommitted
+      title: Shift plan committed (analytics)
+      summary: The analytics-topic form of a shift-plan commit — one message per commit, not per line.
+      description: |
+        Published only to `warehouse.workforce.analytics`. Same `type` as the
+        integration message, different `dataschema` and payload: one message
+        per commit carrying just the plan's identity. Kafka key is the
+        building id; `subject` is the ShiftPlan aggregate id
+        `<buildingId>/<shiftId>`.
+      contentType: application/cloudevents+json
+      tags:
+        - name: shiftplan
+        - name: workforce-management
+      payload:
+        $ref: "#/components/schemas/ShiftPlanCommittedAnalyticsEvent"
+      examples:
+        - name: planCommittedAnalytics
+          summary: The analytics record of a plan committed for building BLD1, shift SHIFT1.
+          payload:
+            specversion: "1.0"
+            id: "4f2a9c1d-7b3e-4d8a-9e61-2c5b7a0d3f19"
+            source: "/warehouse/workforce-management"
+            type: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted"
+            subject: "BLD1/SHIFT1"
+            time: "2026-08-21T22:00:00Z"
+            datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1"
+            data:
+              building_id: "BLD1"
+              shift_id: "SHIFT1"
 
     ShiftPlanProposed:
       name: ShiftPlanProposed
@@ -192,8 +267,9 @@ components:
         — before a human commits anything. A proposal is advisory: the
         software proposes, a human commits.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: shiftplan
@@ -211,6 +287,7 @@ components:
             subject: "BLD1/pack"
             time: "2026-08-21T21:30:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1"
             data:
               building_id: "BLD1"
               path_id: "pack"
@@ -228,8 +305,9 @@ components:
         bounded context surfaces the gap and never moves anyone in response.
         Rebalancing is a human call, recorded back here as a new assignment.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: shiftplan
@@ -247,6 +325,7 @@ components:
             subject: "pack"
             time: "2026-08-22T02:15:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1"
             data:
               path_id: "pack"
               planned_heads: 5
@@ -258,12 +337,13 @@ components:
       summary: An associate's roster entry was created for the shift, with their certifications.
       description: |
         Raised by the `AssociateShift` aggregate when an associate's shift
-        roster entry is created. The certifications carried here are the
+        roster entry is created. The associate's certifications are the
         qualification gate for assignment: an associate untrained on a path
         cannot be placed on it.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: associate
@@ -272,7 +352,7 @@ components:
         $ref: "#/components/schemas/AssociateShiftStartedEvent"
       examples:
         - name: associateOnShift
-          summary: Associate A-1001 starts a shift holding the pack and pick certifications.
+          summary: Associate A-1001 starts a shift.
           payload:
             specversion: "1.0"
             id: "c4d9a1b2-5e63-4f8a-b0d7-2a9c3e1f7b44"
@@ -281,11 +361,9 @@ components:
             subject: "A-1001"
             time: "2026-08-21T22:05:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:AssociateShiftStarted:v1"
             data:
               associate_id: "A-1001"
-              certifications:
-                - "pack"
-                - "pick"
 
     AssociateCertified:
       name: AssociateCertified
@@ -297,8 +375,9 @@ components:
         Certifications gate assignment: `AssignLabor` rejects an associate
         who does not hold the path's required certification.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: associate
@@ -316,6 +395,7 @@ components:
             subject: "A-1001"
             time: "2026-08-22T00:40:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:AssociateCertified:v1"
             data:
               associate_id: "A-1001"
               certification: "hazmat"
@@ -329,8 +409,9 @@ components:
         logged break. While a break is active the associate cannot be given a
         new `LaborAssignment` — `AssignLabor` rejects the attempt.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: associate
@@ -348,6 +429,7 @@ components:
             subject: "A-1001"
             time: "2026-08-22T01:00:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:AssociateBreakStarted:v1"
             data:
               associate_id: "A-1001"
 
@@ -360,8 +442,9 @@ components:
         break ends. The associate becomes eligible for a new
         `LaborAssignment` again, subject to the certification gate.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: associate
@@ -379,6 +462,7 @@ components:
             subject: "A-1001"
             time: "2026-08-22T01:30:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:AssociateBreakEnded:v1"
             data:
               associate_id: "A-1001"
 
@@ -392,8 +476,9 @@ components:
         associate, so downstream consumers should treat this as a terminal
         signal for the associate's labor picture on the shift.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: associate
@@ -411,6 +496,7 @@ components:
             subject: "A-1001"
             time: "2026-08-22T06:00:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:AssociateShiftEnded:v1"
             data:
               associate_id: "A-1001"
 
@@ -429,8 +515,9 @@ components:
         on a specific task. Dispatching individual tasks belongs to
         Fulfillment Execution.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: assignment
@@ -448,6 +535,7 @@ components:
             subject: "A-1001"
             time: "2026-08-21T22:10:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:LaborAssigned:v1"
             data:
               associate_id: "A-1001"
               path_id: "pack"
@@ -463,8 +551,9 @@ components:
         intact. The move is always a human call recorded here; this context
         never decides a rebalance on its own.
 
-        **Not yet wired to the outbound Kafka adapter — documented here as
-        part of the domain-event catalog, in-process only today.**
+        **Not on the integration topic.** Published only to the internal
+        analytics topic `warehouse.workforce.analytics` (dataschema
+        `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
       contentType: application/cloudevents+json
       tags:
         - name: assignment
@@ -482,6 +571,7 @@ components:
             subject: "A-1001"
             time: "2026-08-22T02:20:00Z"
             datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:LaborReassigned:v1"
             data:
               associate_id: "A-1001"
               from_path_id: "pack"
@@ -493,13 +583,19 @@ components:
       title: CloudEvents 1.0 context attributes
       description: |
         The CloudEvents 1.0 structured-mode context attributes shared by
-        every message on this channel. Each event schema below composes this
-        base with an `allOf` and pins its own `type` and `data` shape.
+        every message (ADR-0026). Every attribute is REQUIRED. Each event
+        schema below composes this base with an `allOf` and pins its own
+        `type` const and `dataschema` const.
       required:
         - specversion
         - id
         - source
         - type
+        - subject
+        - time
+        - datacontenttype
+        - dataschema
+        - data
       properties:
         specversion:
           type: string
@@ -508,11 +604,16 @@ components:
         id:
           type: string
           format: uuid
-          description: Unique identifier of this event occurrence, a UUID v4 generated by the publisher.
+          description: |
+            Unique identifier of this event occurrence, a UUID v4 minted once
+            by the publisher and persisted with the outbox row, so a
+            redelivery carries the same id. `(source, id)` is the consumer
+            idempotency key.
         source:
           type: string
           format: uri-reference
           description: The producing context. Always "/warehouse/workforce-management".
+          enum: ["/warehouse/workforce-management"]
         type:
           type: string
           description: |
@@ -522,7 +623,9 @@ components:
           type: string
           description: |
             Identifier of the aggregate instance this occurrence is about —
-            an associate id, a path id, or a `buildingId/shiftId` pair.
+            an associate id, a path id, or a `buildingId/shiftId` pair. Never
+            empty.
+          minLength: 1
         time:
           type: string
           format: date-time
@@ -531,11 +634,20 @@ components:
           type: string
           description: Content type of the `data` member. Always "application/json".
           enum: ["application/json"]
+        dataschema:
+          type: string
+          format: uri
+          description: |
+            Absolute URI naming the payload shape,
+            `urn:warehouse:workforce-management:<events|analytics>:<EventName>:v<N>`.
+        data:
+          type: object
+          description: The event payload.
 
     ShiftPlanCommittedEvent:
-      title: ShiftPlanCommitted envelope
+      title: ShiftPlanCommitted CloudEvent
       description: |
-        CloudEvents envelope for one `PathPlan` line of a committed
+        CloudEvent for one `PathPlan` line of a committed
         `ShiftPlan`. The `data` fields mirror exactly what the Kafka
         publisher emits per line.
       allOf:
@@ -543,12 +655,17 @@ components:
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted"]
+              const: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1"
             data:
               type: object
               description: One committed PathPlan line, in the context of its building and shift.
@@ -580,20 +697,58 @@ components:
                   type: number
                   description: Total labor hours committed to this path for the shift.
 
-    ShiftPlanProposedEvent:
-      title: ShiftPlanProposed envelope
-      description: CloudEvents envelope for a proposed, not-yet-committed headcount figure for one path.
+    ShiftPlanCommittedAnalyticsEvent:
+      title: ShiftPlanCommitted analytics CloudEvent
+      description: CloudEvent for one shift-plan commit on the analytics topic.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
+            - data
+          properties:
+            type:
+              type: string
+              description: Fixed type for this event (same occurrence type as the integration message).
+              const: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1"
+            data:
+              type: object
+              description: The committed plan's identity.
+              required:
+                - building_id
+                - shift_id
+              properties:
+                building_id:
+                  type: string
+                  description: Building the shift plan was committed for.
+                shift_id:
+                  type: string
+                  description: Shift the plan covers.
+
+    ShiftPlanProposedEvent:
+      title: ShiftPlanProposed CloudEvent
+      description: CloudEvent for a proposed, not-yet-committed headcount figure for one path.
+      allOf:
+        - $ref: "#/components/schemas/CloudEventBase"
+        - type: object
+          required:
+            - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed"]
+              const: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1"
             data:
               type: object
               description: The computed proposal for one path, ahead of a human commit.
@@ -618,19 +773,24 @@ components:
                   description: Planned units per hour per head used in the computation.
 
     PathUnderstaffedEvent:
-      title: PathUnderstaffed envelope
-      description: CloudEvents envelope for the staffing-gap flag on a single path.
+      title: PathUnderstaffed CloudEvent
+      description: CloudEvent for the staffing-gap flag on a single path.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed"]
+              const: "com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1"
             data:
               type: object
               description: Planned versus actually active heads for one path.
@@ -652,50 +812,56 @@ components:
                   description: Count of currently ACTIVE LaborAssignments on this path.
 
     AssociateShiftStartedEvent:
-      title: AssociateShiftStarted envelope
-      description: CloudEvents envelope for the creation of an associate's shift roster entry.
+      title: AssociateShiftStarted CloudEvent
+      description: CloudEvent for the creation of an associate's shift roster entry.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.associate.AssociateShiftStarted"]
+              const: "com.warehouse.wes.workforce-management.associate.AssociateShiftStarted"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:AssociateShiftStarted:v1"
             data:
               type: object
-              description: The associate now on shift and the certifications they hold.
+              description: |
+                The associate now on shift. The certifications held at shift
+                start are not carried on the wire; each one is published as its
+                own AssociateCertified event.
               required:
                 - associate_id
-                - certifications
               properties:
                 associate_id:
                   type: string
                   description: Identifier of the associate starting the shift.
-                certifications:
-                  type: array
-                  description: Named qualifications held at shift start, e.g. "pack", "pick", "hazmat".
-                  items:
-                    type: string
-                    description: One named certification.
 
     AssociateCertifiedEvent:
-      title: AssociateCertified envelope
-      description: CloudEvents envelope for adding one certification to an associate.
+      title: AssociateCertified CloudEvent
+      description: CloudEvent for adding one certification to an associate.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.associate.AssociateCertified"]
+              const: "com.warehouse.wes.workforce-management.associate.AssociateCertified"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:AssociateCertified:v1"
             data:
               type: object
               description: The associate and the certification granted to them.
@@ -711,19 +877,24 @@ components:
                   description: The named qualification granted, e.g. "hazmat".
 
     AssociateBreakStartedEvent:
-      title: AssociateBreakStarted envelope
-      description: CloudEvents envelope for the start of an associate's logged break.
+      title: AssociateBreakStarted CloudEvent
+      description: CloudEvent for the start of an associate's logged break.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.associate.AssociateBreakStarted"]
+              const: "com.warehouse.wes.workforce-management.associate.AssociateBreakStarted"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:AssociateBreakStarted:v1"
             data:
               type: object
               description: The associate who went on break.
@@ -735,19 +906,24 @@ components:
                   description: Identifier of the associate starting a break.
 
     AssociateBreakEndedEvent:
-      title: AssociateBreakEnded envelope
-      description: CloudEvents envelope for the end of an associate's logged break.
+      title: AssociateBreakEnded CloudEvent
+      description: CloudEvent for the end of an associate's logged break.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.associate.AssociateBreakEnded"]
+              const: "com.warehouse.wes.workforce-management.associate.AssociateBreakEnded"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:AssociateBreakEnded:v1"
             data:
               type: object
               description: The associate who returned from break.
@@ -759,19 +935,24 @@ components:
                   description: Identifier of the associate ending a break.
 
     AssociateShiftEndedEvent:
-      title: AssociateShiftEnded envelope
-      description: CloudEvents envelope for the close of an associate's shift.
+      title: AssociateShiftEnded CloudEvent
+      description: CloudEvent for the close of an associate's shift.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.associate.AssociateShiftEnded"]
+              const: "com.warehouse.wes.workforce-management.associate.AssociateShiftEnded"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:AssociateShiftEnded:v1"
             data:
               type: object
               description: The associate whose shift closed, ending all active assignments.
@@ -783,19 +964,24 @@ components:
                   description: Identifier of the associate whose shift ended.
 
     LaborAssignedEvent:
-      title: LaborAssigned envelope
-      description: CloudEvents envelope for placing an associate on a process path.
+      title: LaborAssigned CloudEvent
+      description: CloudEvent for placing an associate on a process path.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.assignment.LaborAssigned"]
+              const: "com.warehouse.wes.workforce-management.assignment.LaborAssigned"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:LaborAssigned:v1"
             data:
               type: object
               description: The associate and the path they were assigned to.
@@ -811,19 +997,24 @@ components:
                   description: Process path the associate now works, e.g. "pack". Never a task id.
 
     LaborReassignedEvent:
-      title: LaborReassigned envelope
-      description: CloudEvents envelope for moving an associate from one path to another.
+      title: LaborReassigned CloudEvent
+      description: CloudEvent for moving an associate from one path to another.
       allOf:
         - $ref: "#/components/schemas/CloudEventBase"
         - type: object
           required:
             - type
+            - dataschema
             - data
           properties:
             type:
               type: string
               description: Fixed type for this event.
-              enum: ["com.warehouse.wes.workforce-management.assignment.LaborReassigned"]
+              const: "com.warehouse.wes.workforce-management.assignment.LaborReassigned"
+            dataschema:
+              type: string
+              description: Fixed dataschema for this event.
+              const: "urn:warehouse:workforce-management:analytics:LaborReassigned:v1"
             data:
               type: object
               description: The associate moved, and the paths they moved between.

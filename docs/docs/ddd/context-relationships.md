@@ -52,8 +52,10 @@ read-only at `GET /paths/{pathId}/labor-plan-view`. That translation step is an
 anti-corruption boundary in the classic sense: this context's model does not
 leak into Work Planning's aggregate.
 
-**The published language is stable and narrow.** One event type, a flat
-payload of six scalars, one message per `PathPlan` line. Nothing about
+**The published language is stable and narrow.** One event type
+(`com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`, a
+CloudEvents 1.0 event — [ADR 0026](../adr/0026-cloudevents-mandatory-event-envelope.md)),
+a `data` payload of six scalars, one message per `PathPlan` line. Nothing about
 `AssociateShift`, nothing about individual assignments, nothing about break
 state. What the customer gets is the *plan*, not the roster.
 
