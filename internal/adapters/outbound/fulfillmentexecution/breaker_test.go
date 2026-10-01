@@ -69,7 +69,7 @@ func TestBreakerClient_OpensAfterConsecutiveFailures_ShortCircuitsToFallback(t *
 	client := fulfillmentexecution.NewBreakerClient(inner, recorder)
 
 	for i := 0; i < 5; i++ {
-		_, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+		_, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 		if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
 			t.Fatalf("call %d: err = %v, want ErrInstalledCapacityUnavailable (breaker still closed)", i, err)
 		}
@@ -79,7 +79,7 @@ func TestBreakerClient_OpensAfterConsecutiveFailures_ShortCircuitsToFallback(t *
 	}
 	callsBeforeShortCircuit := atomic.LoadInt32(&fake.calls)
 
-	_, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+	_, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 	if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
 		t.Fatalf("while open, err = %v, want %v (the existing permissive fail-loud behaviour)", err, ports.ErrInstalledCapacityUnavailable)
 	}
@@ -123,7 +123,7 @@ func TestBreakerClient_HalfOpenProbeRecoversToClosed(t *testing.T) {
 	client := fulfillmentexecution.NewBreakerClientWithTimeout(inner, recorder, 100*time.Millisecond)
 
 	for i := 0; i < 5; i++ {
-		if _, err := client.InstalledCapacity(context.Background(), shared.PathId("pack")); err == nil {
+		if _, err := client.InstalledCapacity(context.Background(), shared.Capability("pack")); err == nil {
 			t.Fatalf("call %d unexpectedly succeeded before the fake doer's failure budget was exhausted", i)
 		}
 	}
@@ -134,7 +134,7 @@ func TestBreakerClient_HalfOpenProbeRecoversToClosed(t *testing.T) {
 	// Wait out the cooldown so the breaker allows a half-open probe.
 	time.Sleep(150 * time.Millisecond)
 
-	installed, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+	installed, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 	if err != nil {
 		t.Fatalf("half-open probe: InstalledCapacity: %v", err)
 	}
@@ -157,7 +157,7 @@ func TestBreakerClient_NeverRetries(t *testing.T) {
 	inner := fulfillmentexecution.NewClient("http://fulfillment-execution.local", fake)
 	client := fulfillmentexecution.NewBreakerClient(inner, nil)
 
-	_, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+	_, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 	if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
 		t.Fatalf("err = %v, want ErrInstalledCapacityUnavailable", err)
 	}

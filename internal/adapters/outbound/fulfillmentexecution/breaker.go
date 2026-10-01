@@ -92,15 +92,15 @@ func newBreakerClient(inner *Client, recorder resilience.StateRecorder, cooldown
 // probes), it falls back to PermissiveClient.InstalledCapacity -- the
 // EXISTING fail-loud behaviour, unchanged -- rather than fabricating a
 // capacity number.
-func (c *BreakerClient) InstalledCapacity(ctx context.Context, pathId shared.PathId) (int, error) {
+func (c *BreakerClient) InstalledCapacity(ctx context.Context, capability shared.Capability) (int, error) {
 	callCtx, cancel := resilience.CallTimeout(ctx, DefaultTimeout)
 	defer cancel()
 
 	v, err := c.breaker.Execute(func() (int, error) {
-		return c.inner.InstalledCapacity(callCtx, pathId)
+		return c.inner.InstalledCapacity(callCtx, capability)
 	})
 	if isBreakerRejection(err) {
-		return c.fallback.InstalledCapacity(ctx, pathId)
+		return c.fallback.InstalledCapacity(ctx, capability)
 	}
 	if err != nil {
 		return 0, err

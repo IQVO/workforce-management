@@ -76,17 +76,18 @@ type installedCapacityResponse struct {
 }
 
 // InstalledCapacity calls GET /capacity/{capability} on
-// fulfillment-execution, using pathId's own lowercase string form
-// directly as the capability -- fulfillment-execution's Station
-// capabilities and this repo's PathId share the same lowercase
-// convention (e.g. "pick", "pack"), so no mapping table is needed here
-// (unlike labor-performance's uppercase TaskType, which does need one).
+// fulfillment-execution with capability sent verbatim. The caller passes
+// a real station capability (e.g. "pick", "pack") that CommitShiftPlan
+// resolved from the process-path catalogue's requiredCapabilities -- never
+// a process-path id: fulfillment-execution counts stations by the exact
+// capability strings they were registered with, so a path id such as the
+// canonical "PICK" (or "pick-zone-a") would silently count 0 stations.
 // Returns ports.ErrInstalledCapacityUnavailable (never a raw
 // transport/decode error) on ANY failure -- unreachable service,
 // non-200, or malformed body -- so CommitShiftPlan's single
 // error-handling branch never needs to distinguish those cases.
-func (c *Client) InstalledCapacity(ctx context.Context, pathId shared.PathId) (int, error) {
-	endpoint := fmt.Sprintf("%s/capacity/%s", c.baseURL, url.PathEscape(string(pathId)))
+func (c *Client) InstalledCapacity(ctx context.Context, capability shared.Capability) (int, error) {
+	endpoint := fmt.Sprintf("%s/capacity/%s", c.baseURL, url.PathEscape(string(capability)))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

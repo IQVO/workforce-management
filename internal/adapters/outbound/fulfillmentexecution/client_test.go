@@ -37,7 +37,7 @@ func TestInstalledCapacityCallsPublishedContract(t *testing.T) {
 	srv := newServer(t, http.StatusOK, `{"capability":"pack","installed":4}`, &got)
 
 	client := fulfillmentexecution.NewClient(srv.URL+"/", nil)
-	installed, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+	installed, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 	if err != nil {
 		t.Fatalf("InstalledCapacity: %v", err)
 	}
@@ -49,20 +49,35 @@ func TestInstalledCapacityCallsPublishedContract(t *testing.T) {
 	}
 }
 
-func TestInstalledCapacityUsesPathIdVerbatimAsCapability(t *testing.T) {
-	// Unlike labor-performance's uppercase TaskType mapping, this
-	// client sends pathId's own lowercase form directly -- no mapping
-	// table, since fulfillment-execution's Station capabilities and
-	// this repo's PathId already share the same lowercase convention.
-	var got captured
-	srv := newServer(t, http.StatusOK, `{"installed":0}`, &got)
-
-	client := fulfillmentexecution.NewClient(srv.URL, nil)
-	if _, err := client.InstalledCapacity(context.Background(), shared.PathId("pick-zone-a")); err != nil {
-		t.Fatalf("InstalledCapacity: %v", err)
+// TestInstalledCapacitySendsCapabilityVerbatim proves the client puts
+// the capability it is given on the wire byte-for-byte -- no case
+// folding, no path-id translation. Resolving a process path to its
+// capability is CommitShiftPlan's job (through the process-path
+// catalogue), not this adapter's: fulfillment-execution matches the
+// registered capability string exactly, so live "GET /capacity/PICK"
+// returns 0 while "GET /capacity/pick" returns the real count.
+func TestInstalledCapacitySendsCapabilityVerbatim(t *testing.T) {
+	tests := []struct {
+		capability shared.Capability
+		wantPath   string
+	}{
+		{capability: "pick", wantPath: "/capacity/pick"},
+		{capability: "rebin", wantPath: "/capacity/rebin"},
+		{capability: "PICK", wantPath: "/capacity/PICK"},
 	}
-	if got.path != "/capacity/pick-zone-a" {
-		t.Fatalf("path = %q, want /capacity/pick-zone-a", got.path)
+	for _, tt := range tests {
+		t.Run(string(tt.capability), func(t *testing.T) {
+			var got captured
+			srv := newServer(t, http.StatusOK, `{"installed":0}`, &got)
+
+			client := fulfillmentexecution.NewClient(srv.URL, nil)
+			if _, err := client.InstalledCapacity(context.Background(), tt.capability); err != nil {
+				t.Fatalf("InstalledCapacity: %v", err)
+			}
+			if got.path != tt.wantPath {
+				t.Fatalf("path = %q, want %q", got.path, tt.wantPath)
+			}
+		})
 	}
 }
 
@@ -74,7 +89,7 @@ func TestInstalledCapacityZeroIsARealAnswerNotAnError(t *testing.T) {
 	srv := newServer(t, http.StatusOK, `{"capability":"unknown","installed":0}`, &captured{})
 
 	client := fulfillmentexecution.NewClient(srv.URL, nil)
-	installed, err := client.InstalledCapacity(context.Background(), shared.PathId("unknown"))
+	installed, err := client.InstalledCapacity(context.Background(), shared.Capability("unknown"))
 	if err != nil {
 		t.Fatalf("InstalledCapacity: %v", err)
 	}
@@ -96,7 +111,7 @@ func TestInstalledCapacityMapsEveryFailureModeToErrInstalledCapacityUnavailable(
 		t.Run(tt.name, func(t *testing.T) {
 			srv := newServer(t, tt.status, tt.responseBody, &captured{})
 			client := fulfillmentexecution.NewClient(srv.URL, nil)
-			_, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+			_, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 			if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
 				t.Fatalf("want ErrInstalledCapacityUnavailable, got %v", err)
 			}
@@ -106,7 +121,7 @@ func TestInstalledCapacityMapsEveryFailureModeToErrInstalledCapacityUnavailable(
 
 func TestInstalledCapacityUnreachableServer_ReturnsErrInstalledCapacityUnavailable(t *testing.T) {
 	client := fulfillmentexecution.NewClient("http://127.0.0.1:1", nil)
-	_, err := client.InstalledCapacity(context.Background(), shared.PathId("pack"))
+	_, err := client.InstalledCapacity(context.Background(), shared.Capability("pack"))
 	if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
 		t.Fatalf("want ErrInstalledCapacityUnavailable, got %v", err)
 	}

@@ -262,7 +262,7 @@ func TestCommitShiftPlan_SaveAndPublishRunInsideOneUnitOfWork(t *testing.T) {
 	plans := &scopedShiftPlans{ShiftPlanRepo: f.shiftPlans}
 	pub := &scopedPublisher{}
 	uow := &recordingUnitOfWork{}
-	uc := &CommitShiftPlan{ShiftPlans: plans, Events: pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}, MaxHoursPerShift: 8, UnitOfWork: uow}
+	uc := &CommitShiftPlan{ShiftPlans: plans, Events: pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8, UnitOfWork: uow}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	if _, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 10}); err != nil {
@@ -274,7 +274,7 @@ func TestCommitShiftPlan_SaveAndPublishRunInsideOneUnitOfWork(t *testing.T) {
 func TestCommitShiftPlan_PublishFailureRollsBack(t *testing.T) {
 	f := newFixtures()
 	uow := &recordingUnitOfWork{}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{err: errBoom}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}, MaxHoursPerShift: 8, UnitOfWork: uow}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{err: errBoom}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8, UnitOfWork: uow}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	if _, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 10}); !errors.Is(err, errBoom) {
@@ -288,7 +288,7 @@ func TestCommitShiftPlan_PublishFailureRollsBack(t *testing.T) {
 func TestCommitShiftPlan_RejectedPlanOpensNoUnitOfWork(t *testing.T) {
 	f := newFixtures()
 	uow := &recordingUnitOfWork{}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 1}}, MaxHoursPerShift: 8, UnitOfWork: uow}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 1}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8, UnitOfWork: uow}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	if _, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 10}); err == nil {
@@ -429,7 +429,7 @@ func TestProposePathPlan_PublishRunsInsideOneUnitOfWork(t *testing.T) {
 
 func TestGetStaffingGap_PublishRunsInsideOneUnitOfWorkOnlyWhenUnderstaffed(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("setup: %v", err)

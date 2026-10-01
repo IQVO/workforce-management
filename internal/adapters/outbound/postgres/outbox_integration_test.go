@@ -24,6 +24,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -66,10 +67,26 @@ type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
 
-type fixedCapacity map[shared.PathId]int
+// fixedCapacity scripts installed capacity per station CAPABILITY, the
+// key fulfillment-execution actually counts by.
+type fixedCapacity map[shared.Capability]int
 
-func (c fixedCapacity) InstalledCapacity(_ context.Context, id shared.PathId) (int, error) {
-	return c[id], nil
+func (c fixedCapacity) InstalledCapacity(_ context.Context, capability shared.Capability) (int, error) {
+	return c[capability], nil
+}
+
+// fleetCatalogue mirrors the fleet's real process-path catalogue
+// (process-path-management / warehouse-infra sortable-fc.yaml):
+// UPPER-case canonical path ids, each requiring the lower-case capability
+// stations are registered with in fulfillment-execution. CommitShiftPlan
+// resolves a line's path through it to the capability it queries.
+func fleetCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
 }
 
 // recordingSink records what the relay sends and can fail on one event type.
@@ -151,6 +168,7 @@ func TestOutbox_CommitShiftPlan_CommitsAggregateAndBothTopicsTogether(t *testing
 		Events:            d.pub,
 		Clock:             fixedClock{t: time.Now().UTC()},
 		InstalledCapacity: fixedCapacity{"pack": 10, "pick": 10},
+		Catalogue:         fleetCatalogue(),
 		MaxHoursPerShift:  8,
 		UnitOfWork:        d.uow,
 	}
@@ -277,6 +295,7 @@ func TestOutbox_PublishFailure_RollsBackAggregate(t *testing.T) {
 		Events:            postgres.NewOutboxPublisher(pool, failingEncoder{err: errors.New("encoder exploded")}),
 		Clock:             fixedClock{t: time.Now().UTC()},
 		InstalledCapacity: fixedCapacity{"pack": 10},
+		Catalogue:         fleetCatalogue(),
 		MaxHoursPerShift:  8,
 		UnitOfWork:        postgres.NewUnitOfWork(pool),
 	}
@@ -327,7 +346,7 @@ func TestOutboxRelay_PublishesInIdOrderAcrossTopicsAndMarksRows(t *testing.T) {
 	d := newDeps(pool)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	start := &usecases.StartAssociateShift{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now}, UnitOfWork: d.uow}
-	commit := &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.pub, Clock: fixedClock{t: now}, InstalledCapacity: fixedCapacity{"pack": 10}, MaxHoursPerShift: 8, UnitOfWork: d.uow}
+	commit := &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.pub, Clock: fixedClock{t: now}, InstalledCapacity: fixedCapacity{"pack": 10}, Catalogue: fleetCatalogue(), MaxHoursPerShift: 8, UnitOfWork: d.uow}
 	certify := &usecases.CertifyAssociate{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now.Add(time.Second)}, UnitOfWork: d.uow}
 
 	if _, err := start.Execute(ctx, "A1", nil); err != nil {

@@ -195,7 +195,11 @@ the analytics projector
 
 - **`fulfillment-execution` — `GET /capacity/{capability}`**
   (`internal/adapters/outbound/fulfillmentexecution`). It is called for every
-  line of every `CommitShiftPlan` and is **fail-loud**: any failure rejects the
+  distinct capability the commit's paths require — each line's path is first
+  resolved through the process-path catalogue to its `requiredCapabilities`
+  (path `PICK` → capability `pick`; the path id itself is never sent), and a
+  path's ceiling is the smallest count across its capabilities. It is
+  **fail-loud**: any failure rejects the
   whole commit with `503 installed-capacity-unavailable`. The default
   `permissive` client always fails, so a commit only succeeds when
   `INSTALLED_CAPACITY_MODE=http`.
