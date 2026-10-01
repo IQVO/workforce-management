@@ -9,6 +9,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -28,7 +29,7 @@ func (c fixedClock) Now() time.Time { return c.now }
 // to separately script the live-capacity fetch Feature C introduced.
 type unlimitedInstalledCapacity struct{}
 
-func (unlimitedInstalledCapacity) InstalledCapacity(_ context.Context, _ shared.PathId) (int, error) {
+func (unlimitedInstalledCapacity) InstalledCapacity(_ context.Context, _ shared.Capability) (int, error) {
 	return math.MaxInt32, nil
 }
 
@@ -63,7 +64,7 @@ func newHarness(t *testing.T) *harness {
 		shiftPlans:  shiftPlans,
 		assignments: assignments,
 		start:       &usecases.StartAssociateShift{Associates: associates, Events: publisher, Clock: clk},
-		commit:      &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: publisher, Clock: clk, InstalledCapacity: unlimitedInstalledCapacity{}, MaxHoursPerShift: maxHours},
+		commit:      &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: publisher, Clock: clk, InstalledCapacity: unlimitedInstalledCapacity{}, Catalogue: fleetCatalogue(), MaxHoursPerShift: maxHours},
 		clock:       clk,
 	}
 }
@@ -321,4 +322,18 @@ func TestParseStaffingURI(t *testing.T) {
 			}
 		})
 	}
+}
+
+// fleetCatalogue mirrors the fleet's real process-path catalogue
+// (process-path-management / warehouse-infra sortable-fc.yaml):
+// UPPER-case canonical path ids, each requiring the lower-case capability
+// stations are registered with in fulfillment-execution. CommitShiftPlan
+// resolves a line's path through it to the capability it queries.
+func fleetCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
 }

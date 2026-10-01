@@ -81,7 +81,8 @@ measured rate is a soft, optional enrichment to a mere PROPOSAL.
 ```go
 // internal/application/ports/ports.go
 type InstalledCapacityClient interface {
-	InstalledCapacity(ctx context.Context, pathId shared.PathId) (int, error)
+	// capability, not path id -- see the addendum below.
+	InstalledCapacity(ctx context.Context, capability shared.Capability) (int, error)
 }
 var ErrInstalledCapacityUnavailable = errors.New("installed capacity unavailable")
 ```
@@ -92,7 +93,9 @@ func (uc *CommitShiftPlan) Execute(ctx context.Context, buildingId, shiftId stri
 	lines []shiftplan.PathPlan, installedStations map[shared.PathId]int) (*shiftplan.ShiftPlan, error) {
 	installedCapacity := make(map[shared.PathId]int, len(lines))
 	for _, line := range lines {
-		capacity, err := uc.InstalledCapacity.InstalledCapacity(ctx, line.PathId)
+		// resolved via PathCatalogue -> requiredCapabilities -> MIN of
+		// InstalledCapacity(capability); see the addendum below.
+		capacity, err := uc.installedCapacityForPath(ctx, line.PathId, memo)
 		if err != nil {
 			return nil, err // FAILS THE ENTIRE COMMIT — no fallback
 		}
@@ -114,20 +117,18 @@ mutates real state. A soft proposal can afford to guess; a commit cannot.
 ```go
 // internal/adapters/outbound/fulfillmentexecution/client.go
 type Client struct{ baseURL string; doer HTTPDoer }
-func (c *Client) InstalledCapacity(ctx context.Context, pathId shared.PathId) (int, error) {
-	// GET {baseURL}/capacity/{pathId} -- pathId's own lowercase string
-	// form is used VERBATIM as the capability. Unlike labor-performance's
-	// uppercase TaskType mapping (taskTypeForPathId), no translation
-	// table is needed: fulfillment-execution's Station capabilities and
-	// this repo's PathId already share the same lowercase convention
-	// (e.g. "pick", "pack").
+func (c *Client) InstalledCapacity(ctx context.Context, capability shared.Capability) (int, error) {
+	// GET {baseURL}/capacity/{capability}, capability sent verbatim.
+	// CommitShiftPlan resolves the capability from the process-path
+	// catalogue first -- see the addendum below; the ORIGINAL text of
+	// this ADR sent the path id here, which was wrong.
 }
 ```
 
 ```go
 // internal/adapters/outbound/fulfillmentexecution/permissive.go
 type PermissiveClient struct{}
-func (PermissiveClient) InstalledCapacity(_ context.Context, _ shared.PathId) (int, error) {
+func (PermissiveClient) InstalledCapacity(_ context.Context, _ shared.Capability) (int, error) {
 	return 0, ports.ErrInstalledCapacityUnavailable
 }
 ```
@@ -197,3 +198,79 @@ same pitfall class this fleet has hit before), a real Postgres
 integration test (`TestShiftPlanRepo_*`, run against a live local
 Postgres via `-tags=integration`) proving the persistence layer is
 unaffected, and `cd docs && npm run build` all pass.
+
+## Addendum: query by the path's required capability, not by its path id
+
+### What was wrong
+
+The original decision (and the code shipped with it) sent the line's
+`PathId` verbatim as the `{capability}` segment, on the stated assumption
+that "fulfillment-execution's Station capabilities and this repo's PathId
+already share the same lowercase convention". They do not. The fleet's
+canonical process-path ids are upper-case (`PICK`, `PACK`, `REBIN`, `SLAM`
+in `process-path-management` and `warehouse-infra`'s `sortable-fc.yaml`),
+real path ids carry suffixes (`pick-zone-a`), and stations are registered
+with the lower-case capability strings the catalogue declares in
+`requiredCapabilities` (`pick`, `pack`, ...). fulfillment-execution's
+`GET /capacity/{capability}` matches that string exactly and answers an
+unknown capability with a valid `0`, so the mismatch never surfaced as an
+error. Live evidence against the develop builds:
+
+```text
+GET  fulfillment-execution /capacity/pick   -> {"installed":41}
+GET  fulfillment-execution /capacity/PICK   -> {"installed":0}
+POST workforce-management /shift-plans  (pathId PICK, plannedHeads 4)
+     -> 409 exceeds-installed-capacity       (always, for every canonical path)
+```
+
+### Decision
+
+`CommitShiftPlan` resolves each line's path to the capabilities it requires
+through the existing `ports.PathCatalogue` (ADR-0013 — the same file- or
+Kafka-sourced catalogue the HTTP adapter already validates path ids
+against), and checks `plannedHeads` against the stations able to serve that
+path:
+
+- **Port contract.** `InstalledCapacityClient.InstalledCapacity` takes a new
+  `shared.Capability` value type instead of `shared.PathId`, so the contract
+  says what fulfillment-execution actually counts. A `PathId` can no longer
+  be passed by accident; the only way to obtain a `Capability` is from the
+  catalogue's `requiredCapabilities`.
+- **Ceiling = MIN over required capabilities.** A station can serve a path
+  only if it holds every capability the path requires, and
+  fulfillment-execution counts one capability at a time, so the tightest
+  bound it can give is the smallest of those counts. Every path the fleet
+  declares today requires exactly one capability, for which this is just
+  that capability's count.
+- **No capabilities declared ⇒ ceiling 0 (fail closed).** Not
+  "unconstrained", and not "lower-case the path id": this ADR already treats
+  a missing capacity entry as a 0 ceiling rather than a skipped check, and
+  guessing a capability from the path id is exactly the bug being fixed.
+  Both catalogue sources reject an empty `requiredCapabilities`
+  (`filecatalog`'s loader and process-path-management's
+  `ErrNoRequiredCapabilities`), so this is defensive only.
+- **Unknown path ⇒ `400 unknown-path-id`.** `pathcatalog.ErrUnknownPath`
+  (already mapped to RFC 7807 `unknown-path-id` by ADR-0013) is returned
+  from the use case before fulfillment-execution is called, so the rule
+  holds for every inbound adapter, not only the HTTP handler's pre-check.
+- **Catalogue required.** `CommitShiftPlan.Catalogue` must be wired; a nil
+  catalogue fails every commit (500) rather than guessing.
+- Each distinct capability is fetched once per commit (`pick` and
+  `pick-zone-a` share one call). The fail-loud contract is unchanged: any
+  `ErrInstalledCapacityUnavailable` still fails the whole commit with `503
+  installed-capacity-unavailable`.
+
+### Verification
+
+`internal/application/usecases/usecases_test.go`:
+`TestCommitShiftPlan_QueriesInstalledCapacityByRequiredCapability` (table:
+`PICK`/`pick`/`pick-zone-a` → queried as `pick`; over-capacity rejection;
+multi-capability MIN; no-capability fail-closed; unknown path rejected
+before any call), `_PathIdIsNeverSentAsCapability` (the live symptom),
+`_UnreachableFulfillmentExecutionStillFailsLoud`, `_FetchesEachCapabilityOnce`,
+`_RequiresCatalogue`. HTTP: `TestCommitShiftPlan_CanonicalPathIdIsCheckedAgainstItsCapability`.
+Client: `TestInstalledCapacitySendsCapabilityVerbatim`. BDD
+(`features/shift_plan.feature`): a fake station registry keyed by exact
+capability string proves `PICK` commits against 41 `pick` stations,
+`pack-station-3` is rejected against 3 `pack` stations, and an undeclared
+path is `400 unknown-path-id`.

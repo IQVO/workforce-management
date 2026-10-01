@@ -68,8 +68,9 @@ table.
 
 The one live edge is narrow and physical. On every `CommitShiftPlan`, this
 context reads `fulfillment-execution`'s installed station count for each
-path's capability (`GET /capacity/{capability}`) and treats it as a ceiling on
-planned heads ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)). This
+path's capability (`GET /capacity/{capability}`, the capability resolved from
+the process-path catalogue's `requiredCapabilities`, never the raw path id) and
+treats it as a ceiling on planned heads ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)). This
 makes it a downstream Conformist on a *count*, not on the task model.
 
 This is an ecosystem fact worth stating explicitly, because both services deal
