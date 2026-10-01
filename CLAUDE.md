@@ -46,6 +46,7 @@ internal/
     outbound/analyticsstore/      analytical projection writer + read-only reader + memory store
     outbound/memory/              in-memory repos for tests/local
     outbound/events/              log/buffered publisher + multi (fan-out) publisher
+    kafka/cloudevents/            the ONLY CloudEvents 1.0 builder/decoder + exact type constants (ADR-0026)
     outbound/kafka/               integration + analytics publishers, outbox relay sink, trace-context carrier
     outbound/fulfillmentexecution/  InstalledCapacityClient HTTP client (ADR-0014)
     outbound/laborperformance/      MeasuredRateClient HTTP client (ADR-0012)
@@ -65,10 +66,43 @@ Deep-dive references, split out so this file stays a short index:
   domain events, use cases, REST API surface.
 - **rules/integrations.md** — outbound clients (measured rate, idle share,
   installed capacity), the process-path catalogue, the two opt-in consumed
-  topics, Kafka events + transactional outbox, CORS.
+  topics, Kafka events (CloudEvents 1.0) + transactional outbox, CORS.
 - **rules/analytics-and-observability.md** — the analytics data product
   (ADR-0010), the MCP inbound adapter (ADR-0008), OTel traces/metrics/logs.
 - **rules/frontend.md** — the `web/` micro-frontend remote.
+
+## Events: CloudEvents 1.0 is MANDATORY
+
+Every Kafka message this service produces or consumes (integration
+`warehouse.<ctx>.events` AND analytics `warehouse.<ctx>.analytics`) is a
+CloudEvents 1.0 event in structured content mode. This is a hard fleet rule,
+not a preference:
+
+- No flat envelope (`event_id`/`event_type`/`occurred_at`), no dual-write,
+  no dual-read, no envelope toggle env var (`EVENT_ENVELOPE_MODE` is gone).
+- Build/validate/(un)marshal with `github.com/cloudevents/sdk-go/v2/event`
+  via `internal/adapters/kafka/cloudevents/`; transport stays kafka-go.
+- Kafka header `content-type: application/cloudevents+json; charset=UTF-8`.
+- Required attributes: `specversion=1.0`, `id` (UUID, stable across outbox
+  redelivery), `source=/warehouse/workforce-management`, `type`, `subject` (aggregate id), `time`
+  (occurred-at, UTC), `datacontenttype=application/json`,
+  `dataschema=urn:warehouse:workforce-management:<events|analytics>:<EventName>:v<N>`.
+- `type` = `com.warehouse.<subdomain>.<bounded-context>.<entity>.<EventName>`;
+  for this service: `com.warehouse.wes.workforce-management.<entity>.<EventName>`. Breaking payload
+  change => new `.v2` type + new dataschema version, never mutate.
+- Consumers dispatch on the FULL `type`, ignore unknown types, dedupe on
+  `id`, and DLQ/skip (never crash, never parse a legacy shape) anything that
+  fails CloudEvents validation.
+
+Full standard and the fleet's cross-service type catalogue: ADR-0026
+(`docs/docs/adr/`).
+
+Entity segments: `shiftplan` (ShiftPlanCommitted/Proposed, PathUnderstaffed),
+`associate` (AssociateShift*/Break*/Certified), `assignment`
+(LaborAssigned/Reassigned). `ShiftPlanCommitted` is fanned out one message per
+`PathPlan` line, each with its own `id`; `subject` = Kafka key =
+`<buildingId>/<shiftId>`. Exact type strings live in
+`internal/adapters/kafka/cloudevents/types.go`.
 
 ## Key Commands
 

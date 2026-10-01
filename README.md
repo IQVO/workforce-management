@@ -348,14 +348,22 @@ the full edge list.
   with 3 path lines publishes **3** Kafka messages — one per path line, each
   carrying that single path's `planned_heads`/`planned_rate`/`planned_hours`.
   This matches how `wes-work-planning` keys its read model, by `path_id`.
-- **Envelope** (identical shape across all warehouse-systems services):
+- **Envelope**: CloudEvents 1.0, mandatory, structured content mode
+  ([ADR-0026](docs/docs/adr/0026-cloudevents-mandatory-event-envelope.md)).
+  Every message carries the Kafka header
+  `content-type: application/cloudevents+json; charset=UTF-8`; each fanned-out
+  line has its own `id`, and `subject` equals the Kafka key:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "2026-08-21T22:00:00Z",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "uuid-v4",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "<building_id>/<shift_id>",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "2026-08-21T22:00:00Z",
   "data": {
     "building_id": "...",
     "shift_id": "...",
