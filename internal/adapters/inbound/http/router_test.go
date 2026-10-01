@@ -40,24 +40,26 @@ func testCatalogue() *pathcatalog.Catalogue {
 }
 
 // fakeInstalledCapacityClient is a test double for
-// ports.InstalledCapacityClient. A nil capacityByPath (the zero value)
+// ports.InstalledCapacityClient, keyed by station CAPABILITY (what
+// fulfillment-execution counts), not by path id. A nil
+// capacityByCapability (the zero value)
 // means "always return unlimited" -- so tests focused on the
 // caller-supplied installedStations check don't need to separately
 // script the live-capacity fetch. Tests that DO care about the live
-// ceiling set capacityByPath explicitly.
+// ceiling set capacityByCapability explicitly.
 type fakeInstalledCapacityClient struct {
-	capacityByPath map[shared.PathId]int
-	err            error
+	capacityByCapability map[shared.Capability]int
+	err                  error
 }
 
-func (f *fakeInstalledCapacityClient) InstalledCapacity(_ context.Context, pathId shared.PathId) (int, error) {
+func (f *fakeInstalledCapacityClient) InstalledCapacity(_ context.Context, capability shared.Capability) (int, error) {
 	if f.err != nil {
 		return 0, f.err
 	}
-	if f.capacityByPath == nil {
+	if f.capacityByCapability == nil {
 		return math.MaxInt32, nil
 	}
-	return f.capacityByPath[pathId], nil
+	return f.capacityByCapability[capability], nil
 }
 
 func newTestHandler() *Handler {
@@ -72,7 +74,7 @@ func newTestHandler() *Handler {
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: pub, Clock: clock},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: associates, Events: pub, Clock: clock},
 		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock},
-		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: &fakeInstalledCapacityClient{}, MaxHoursPerShift: maxHoursPerShift},
+		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: &fakeInstalledCapacityClient{}, Catalogue: testCatalogue(), MaxHoursPerShift: maxHoursPerShift},
 		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
 		StartBreak:          &usecases.StartBreak{Associates: associates, Events: pub, Clock: clock},
 		EndBreak:            &usecases.EndBreak{Associates: associates, Events: pub, Clock: clock},
@@ -358,7 +360,7 @@ func TestCommitShiftPlan_RejectsPlannedHeadsExceedingInstalledStations(t *testin
 // separate 409.
 func TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity(t *testing.T) {
 	handler := newTestHandler()
-	handler.CommitShiftPlan.InstalledCapacity = &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 3}}
+	handler.CommitShiftPlan.InstalledCapacity = &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 3}}
 	router := NewRouter(handler, testLogger, "")
 
 	req := commitShiftPlanRequest{
@@ -373,6 +375,31 @@ func TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity(t *testing.T)
 		t.Fatalf("expected 409, got %d: %s", rec.Code, rec.Body.String())
 	}
 	assertProblemDetails(t, rec, http.StatusConflict, "exceeds-installed-capacity", "/shift-plans")
+}
+
+// TestCommitShiftPlan_CanonicalPathIdIsCheckedAgainstItsCapability is the
+// HTTP-level regression for the live bug where POST /shift-plans for the
+// canonical path id "PICK" always failed 409 exceeds-installed-capacity:
+// the service used to query fulfillment-execution with the PATH id
+// ("PICK" -> 0 stations) instead of the path's required CAPABILITY
+// ("pick" -> the real count). The fake reports capacity only for the
+// lower-case capability, exactly like the real endpoint.
+func TestCommitShiftPlan_CanonicalPathIdIsCheckedAgainstItsCapability(t *testing.T) {
+	handler := newTestHandler()
+	handler.CommitShiftPlan.InstalledCapacity = &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pick": 41}}
+	router := NewRouter(handler, testLogger, "")
+
+	req := commitShiftPlanRequest{
+		BuildingId: "bldg-1",
+		ShiftId:    "shift-1",
+		Lines: []pathPlanLineRequest{
+			{PathId: "PICK", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 32, InstalledStations: 10},
+		},
+	}
+	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
 }
 
 // TestCommitShiftPlan_ServiceUnavailableWhenInstalledCapacityUnreachable

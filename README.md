@@ -105,6 +105,12 @@ migrations/analytics/         golang-migrate SQL files (analytical DB, owned by 
   is **also** checked against the live installed capacity fetched from
   fulfillment-execution (`GET /capacity/{capability}`). This is a second,
   independent ceiling that fails loud (503) when it cannot be verified.
+  The capability is **resolved through the process-path catalogue**, never
+  taken from the path id: path `PICK` (or `pick-zone-a`) declares
+  `requiredCapabilities: [pick]`, so the ceiling is the count of stations
+  registered with `pick`. A path requiring several capabilities is capped by
+  the scarcest one (MIN); a path the catalogue does not declare is rejected
+  `400 unknown-path-id` before fulfillment-execution is called.
 - **`GetStaffingGap` takes `buildingId`/`shiftId` as query parameters**
   (`GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`) because
   `ShiftPlan` is keyed by building + shift, and a path's planned heads only
@@ -538,7 +544,7 @@ go test ./... -run TestFeatures -v
 
 | Feature file | Covers |
 | --- | --- |
-| `features/shift_plan.feature` | `CommitShiftPlan` — within capacity, and rejected when `plannedHeads` exceed installed stations |
+| `features/shift_plan.feature` | `CommitShiftPlan` — within capacity, rejected when `plannedHeads` exceed installed stations, live capacity resolved by the path's required capability (`PICK` → `pick`), unknown path rejected |
 | `features/labor_assignment.feature` | `AssignLabor` — certified assignment, uncertified rejection, no double-booking, and rejection while on break |
 | `features/breaks.feature` | `StartBreak` / `EndBreak` — break state gates assignment, then releases it |
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |

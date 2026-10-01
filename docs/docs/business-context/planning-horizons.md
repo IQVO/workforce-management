@@ -54,7 +54,9 @@ has no dependency on Work Planning and does not want one — so the caller
 carries the numbers it needs to be validated against. See
 [Design decisions](#design-decisions-that-fall-out-of-this) below.
 Independently of that, each line is also checked against the live installed
-capacity that `fulfillment-execution` reports for the path's capability. That
+capacity that `fulfillment-execution` reports for the path's capability (the
+`requiredCapabilities` the process-path catalogue declares for it — path
+`PICK` is staffed at stations registered with `pick`). That
 is a physical ceiling, and it fails loud (503) when it cannot be verified
 ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)).
 

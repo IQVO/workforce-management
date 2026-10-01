@@ -39,7 +39,7 @@ func (c evalFixedClock) Now() time.Time { return c.now }
 // never constrains plan commits, so eval seeding never scripts capacity.
 type evalUnlimitedCapacity struct{}
 
-func (evalUnlimitedCapacity) InstalledCapacity(_ context.Context, _ shared.PathId) (int, error) {
+func (evalUnlimitedCapacity) InstalledCapacity(_ context.Context, _ shared.Capability) (int, error) {
 	return math.MaxInt32, nil
 }
 
@@ -101,7 +101,7 @@ func newEvalHarness(t *testing.T) *evalHarness {
 	}}
 	ctx := context.Background()
 
-	commit := &usecases.CommitShiftPlan{ShiftPlans: h.shiftPlans, Events: h.publisher, Clock: h.clock, InstalledCapacity: evalUnlimitedCapacity{}, MaxHoursPerShift: maxEvalHours}
+	commit := &usecases.CommitShiftPlan{ShiftPlans: h.shiftPlans, Events: h.publisher, Clock: h.clock, InstalledCapacity: evalUnlimitedCapacity{}, Catalogue: fleetCatalogue(), MaxHoursPerShift: maxEvalHours}
 	if _, err := commit.Execute(ctx, "B1", "S1",
 		[]shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 10, PlannedHours: 0}},
 		map[shared.PathId]int{"pack": 13},
