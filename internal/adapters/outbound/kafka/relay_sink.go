@@ -27,7 +27,7 @@ type RelaySink struct {
 func NewRelaySink(brokers []string) *RelaySink {
 	return NewRelaySinkWithWriter(&segmentio.Writer{
 		Addr:                   segmentio.TCP(brokers...),
-		Balancer:               &segmentio.LeastBytes{},
+		Balancer:               &segmentio.Hash{},
 		AllowAutoTopicCreation: true,
 	})
 }

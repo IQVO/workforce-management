@@ -12,6 +12,7 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
@@ -163,6 +164,24 @@ func readAllPartitions(t *testing.T, ctx context.Context, brokers []string, topi
 		m, err := reader.ReadMessage(readCtx)
 		if err != nil {
 			t.Fatalf("read message %d/%d: %v", len(got)+1, want, err)
+		}
+		// Each message on the real wire is a CloudEvents 1.0 structured-mode
+		// event carrying the content-type header (ADR-0026).
+		e, err := cloudevents.Decode(m.Value)
+		if err != nil {
+			t.Fatalf("message %d is not a CloudEvent: %v", len(got)+1, err)
+		}
+		if e.Type() != cloudevents.TypeShiftPlanCommitted || e.Subject() != string(m.Key) {
+			t.Fatalf("message %d: type=%q subject=%q key=%q", len(got)+1, e.Type(), e.Subject(), m.Key)
+		}
+		var ct string
+		for _, h := range m.Headers {
+			if h.Key == "content-type" {
+				ct = string(h.Value)
+			}
+		}
+		if ct != cloudevents.MediaType {
+			t.Fatalf("message %d: content-type header = %q, want %q", len(got)+1, ct, cloudevents.MediaType)
 		}
 		got = append(got, m.Partition)
 	}

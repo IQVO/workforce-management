@@ -39,7 +39,7 @@ package kafkacatalog
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -49,12 +49,13 @@ import (
 
 	kafkago "github.com/segmentio/kafka-go"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 )
 
 // Topic is process-path-management's publish topic — this service has no
 // business knowing anything else about that service beyond this topic
-// name and the envelope/payload shape below.
+// name, the CloudEvents `type` strings and the payload shape below.
 const Topic = "warehouse.process-path-management.events"
 
 // consumerGroupPrefix names this service's dedicated, PER-PROCESS
@@ -62,21 +63,6 @@ const Topic = "warehouse.process-path-management.events"
 // the package doc comment's bug (2) for why per-process uniqueness is a
 // correctness requirement here, not a cosmetic choice.
 const consumerGroupPrefix = "workforce-management-process-path-catalogue"
-
-// Event types this consumer acts on — process-path-management's own
-// past-tense domain events, verbatim.
-const (
-	eventTypeCreated     = "ProcessPathCreated"
-	eventTypeUpdated     = "ProcessPathUpdated"
-	eventTypeDeactivated = "ProcessPathDeactivated"
-)
-
-// envelope is the CloudEvents-like wrapper shared across every
-// warehouse-systems publisher.
-type envelope struct {
-	EventType string          `json:"event_type"`
-	Data      json.RawMessage `json:"data"`
-}
 
 // pathData is the payload shape for all three event types on Topic.
 // Direct is read but has no home in this service's own
@@ -289,7 +275,9 @@ func (c *Consumer) Ids() []string {
 
 // Run consumes Topic until ctx is cancelled or the reader returns a
 // fatal error. A handling error is logged and the loop continues, so one
-// malformed message cannot wedge this consumer.
+// malformed message cannot wedge this consumer. A message that is not a
+// valid CloudEvents 1.0 event (including the retired flat envelope) is
+// logged at WARN and skipped — this replay consumer has no DLQ (ADR-0026).
 func (c *Consumer) Run(ctx context.Context) error {
 	for {
 		msg, err := c.Reader.ReadMessage(ctx)
@@ -299,7 +287,10 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		if err := c.handle(msg); err != nil {
+		if err := c.handle(msg); errors.Is(err, cloudevents.ErrNotCloudEvent) {
+			c.Logger.WarnContext(ctx, "process-path catalogue: skipping message that is not a valid CloudEvents 1.0 event",
+				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
+		} else if err != nil {
 			c.Logger.ErrorContext(ctx, "process-path catalogue message handling failed",
 				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
 		}
@@ -329,23 +320,26 @@ func (c *Consumer) checkReady(msg kafkago.Message) {
 	}
 }
 
+// handle decodes msg as a CloudEvents 1.0 event and dispatches on its FULL
+// `type` string. The catalogue is a latest-value-per-path cache, so a
+// redelivered id is an idempotent overwrite and needs no id-based dedupe.
 func (c *Consumer) handle(msg kafkago.Message) error {
-	var env envelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
-		return fmt.Errorf("kafkacatalog: unmarshal envelope: %w", err)
+	e, err := cloudevents.Decode(msg.Value)
+	if err != nil {
+		return fmt.Errorf("kafkacatalog: %w", err)
 	}
 
-	switch env.EventType {
-	case eventTypeCreated, eventTypeUpdated:
+	switch e.Type() {
+	case cloudevents.TypeProcessPathCreated, cloudevents.TypeProcessPathUpdated:
 		var data pathData
-		if err := json.Unmarshal(env.Data, &data); err != nil {
-			return fmt.Errorf("kafkacatalog: unmarshal %s data: %w", env.EventType, err)
+		if err := e.DataAs(&data); err != nil {
+			return fmt.Errorf("kafkacatalog: decode %s data: %w", e.Type(), err)
 		}
 		c.applyUpsert(data)
-	case eventTypeDeactivated:
+	case cloudevents.TypeProcessPathDeactivated:
 		var data pathData
-		if err := json.Unmarshal(env.Data, &data); err != nil {
-			return fmt.Errorf("kafkacatalog: unmarshal %s data: %w", env.EventType, err)
+		if err := e.DataAs(&data); err != nil {
+			return fmt.Errorf("kafkacatalog: decode %s data: %w", e.Type(), err)
 		}
 		c.applyDeactivated(data.PathId)
 	default:
