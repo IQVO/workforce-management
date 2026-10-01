@@ -14,6 +14,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/domain/assignment"
 	"github.com/claudioed/workforce-management/internal/domain/associate"
+	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -239,21 +240,38 @@ func (f *fakeIdleShareClient) IdleSharePct(_ context.Context, _ shared.PathId) (
 }
 
 // fakeInstalledCapacityClient is a test double for
-// ports.InstalledCapacityClient. capacityByPath scripts a per-path
-// return value; err (if set) applies to every call, taking precedence
-// over capacityByPath -- mirroring fakeMeasuredRateClient's shape.
+// ports.InstalledCapacityClient. capacityByCapability scripts a
+// per-CAPABILITY return value (fulfillment-execution counts stations by
+// capability, not by path); err (if set) applies to every call, taking
+// precedence over capacityByCapability -- mirroring
+// fakeMeasuredRateClient's shape. calledFor records every capability
+// actually queried, so a test can prove which one hit the wire.
 type fakeInstalledCapacityClient struct {
-	capacityByPath map[shared.PathId]int
-	err            error
-	calledFor      []shared.PathId
+	capacityByCapability map[shared.Capability]int
+	err                  error
+	calledFor            []shared.Capability
 }
 
-func (f *fakeInstalledCapacityClient) InstalledCapacity(_ context.Context, pathId shared.PathId) (int, error) {
-	f.calledFor = append(f.calledFor, pathId)
+func (f *fakeInstalledCapacityClient) InstalledCapacity(_ context.Context, capability shared.Capability) (int, error) {
+	f.calledFor = append(f.calledFor, capability)
 	if f.err != nil {
 		return 0, f.err
 	}
-	return f.capacityByPath[pathId], nil
+	return f.capacityByCapability[capability], nil
+}
+
+// testCatalogue mirrors the fleet's real process-path catalogue
+// (warehouse-infra's sortable-fc.yaml / process-path-management): the
+// canonical path ids are UPPER-case, while the capability each requires
+// is the lower-case string stations are registered with in
+// fulfillment-execution.
+func testCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
 }
 
 // TestProposePathPlan_FallsBackToMeasuredRateWhenNoCallerRate covers the
@@ -536,8 +554,8 @@ func TestProposePathPlan_CustomIdleShareTrimThreshold(t *testing.T) {
 
 func TestCommitShiftPlan_PersistsAndPublishes(t *testing.T) {
 	f := newFixtures()
-	installedCapacity := &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, MaxHoursPerShift: 8}
+	installedCapacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	installed := map[shared.PathId]int{"pack": 10}
@@ -566,8 +584,8 @@ func TestCommitShiftPlan_PersistsAndPublishes(t *testing.T) {
 // Definition-of-Done named failing-path test at the application layer.
 func TestCommitShiftPlan_RejectsPlannedHeadsExceedingInstalledStations(t *testing.T) {
 	f := newFixtures()
-	installedCapacity := &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, MaxHoursPerShift: 8}
+	installedCapacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 11, PlannedRate: 30, PlannedHours: 40}}
 	installed := map[shared.PathId]int{"pack": 10}
@@ -584,8 +602,8 @@ func TestCommitShiftPlan_RejectsPlannedHeadsExceedingInstalledStations(t *testin
 // below plannedHeads still rejects the commit.
 func TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity(t *testing.T) {
 	f := newFixtures()
-	installedCapacity := &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, MaxHoursPerShift: 8}
+	installedCapacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 8, PlannedRate: 30, PlannedHours: 64}}
 	installedStations := map[shared.PathId]int{"pack": 20} // structural check alone would pass
@@ -606,7 +624,7 @@ func TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity(t *testing.T)
 func TestCommitShiftPlan_FailsLoudWhenInstalledCapacityUnavailable(t *testing.T) {
 	f := newFixtures()
 	installedCapacity := &fakeInstalledCapacityClient{err: ports.ErrInstalledCapacityUnavailable}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, MaxHoursPerShift: 8}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	installed := map[shared.PathId]int{"pack": 10}
@@ -630,8 +648,8 @@ func TestCommitShiftPlan_FailsLoudWhenInstalledCapacityUnavailable(t *testing.T)
 // more than once per distinct PathId.
 func TestCommitShiftPlan_FetchesInstalledCapacityOncePerDistinctPath(t *testing.T) {
 	f := newFixtures()
-	installedCapacity := &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 20, "pick": 20}}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, MaxHoursPerShift: 8}
+	installedCapacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 20, "pick": 20}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: installedCapacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{
 		{PathId: "pack", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16},
@@ -644,6 +662,203 @@ func TestCommitShiftPlan_FetchesInstalledCapacityOncePerDistinctPath(t *testing.
 	}
 	if len(installedCapacity.calledFor) != 2 {
 		t.Fatalf("expected exactly 2 InstalledCapacity calls (one per distinct path), got %v", installedCapacity.calledFor)
+	}
+}
+
+// TestCommitShiftPlan_QueriesInstalledCapacityByRequiredCapability is the
+// regression suite for the live bug where every canonical path id failed
+// 409 exceeds-installed-capacity: CommitShiftPlan used to send the PATH id
+// to fulfillment-execution's GET /capacity/{capability}, which counts
+// stations by the exact lower-case capability they were registered with
+// ("pick"), so "PICK" always counted 0. The fake registry below behaves
+// exactly like the real endpoint: only the capability string counts.
+func TestCommitShiftPlan_QueriesInstalledCapacityByRequiredCapability(t *testing.T) {
+	multiCapability := pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "HAZMAT-PICK", MatchPrefix: "hazmat-pick", RequiredCapabilities: []string{"pick", "hazmat"}},
+		{Id: "GHOST", MatchPrefix: "ghost", RequiredCapabilities: nil},
+	})
+	registry := map[shared.Capability]int{"pick": 41, "pack": 3, "hazmat": 2}
+
+	tests := []struct {
+		name          string
+		catalogue     ports.PathCatalogue
+		pathId        shared.PathId
+		plannedHeads  int
+		wantErr       error
+		wantQueried   []shared.Capability
+		wantCommitted bool
+	}{
+		{
+			name:         "canonical PICK is checked against capability pick, not the path id",
+			pathId:       "PICK",
+			plannedHeads: 4, wantQueried: []shared.Capability{"pick"}, wantCommitted: true,
+		},
+		{
+			name:         "lower-case path id resolves to the same capability",
+			pathId:       "pick",
+			plannedHeads: 41, wantQueried: []shared.Capability{"pick"}, wantCommitted: true,
+		},
+		{
+			name:         "suffixed real-fleet path id resolves through the catalogue prefix",
+			pathId:       "pick-zone-a",
+			plannedHeads: 4, wantQueried: []shared.Capability{"pick"}, wantCommitted: true,
+		},
+		{
+			name:         "plannedHeads above the capability's station count is rejected",
+			pathId:       "PACK",
+			plannedHeads: 4, wantErr: shiftplan.ErrExceedsInstalledCapacity, wantQueried: []shared.Capability{"pack"},
+		},
+		{
+			name:         "a path requiring several capabilities is capped by the scarcest one",
+			catalogue:    multiCapability,
+			pathId:       "hazmat-pick",
+			plannedHeads: 3, wantErr: shiftplan.ErrExceedsInstalledCapacity, wantQueried: []shared.Capability{"pick", "hazmat"},
+		},
+		{
+			name:         "a multi-capability path within the scarcest count commits",
+			catalogue:    multiCapability,
+			pathId:       "HAZMAT-PICK",
+			plannedHeads: 2, wantQueried: []shared.Capability{"pick", "hazmat"}, wantCommitted: true,
+		},
+		{
+			name:         "a path declaring no capabilities fails closed with a 0 ceiling",
+			catalogue:    multiCapability,
+			pathId:       "ghost",
+			plannedHeads: 1, wantErr: shiftplan.ErrExceedsInstalledCapacity,
+		},
+		{
+			name:         "an unknown path is rejected before fulfillment-execution is called",
+			pathId:       "not-a-real-path",
+			plannedHeads: 1, wantErr: pathcatalog.ErrUnknownPath,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixtures()
+			catalogue := tt.catalogue
+			if catalogue == nil {
+				catalogue = testCatalogue()
+			}
+			capacity := &fakeInstalledCapacityClient{capacityByCapability: registry}
+			uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: capacity, Catalogue: catalogue, MaxHoursPerShift: 8}
+
+			lines := []shiftplan.PathPlan{{PathId: tt.pathId, PlannedHeads: tt.plannedHeads, PlannedRate: 30, PlannedHours: float64(tt.plannedHeads) * 8}}
+			_, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{tt.pathId: 100})
+
+			assertCommitOutcome(t, err, tt.wantErr)
+			assertQueriedCapabilities(t, capacity.calledFor, tt.wantQueried)
+			assertPlanPersisted(t, f, tt.wantCommitted)
+		})
+	}
+}
+
+func assertCommitOutcome(t *testing.T, err, wantErr error) {
+	t.Helper()
+	if wantErr == nil && err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if wantErr != nil && !errors.Is(err, wantErr) {
+		t.Fatalf("expected %v, got %v", wantErr, err)
+	}
+}
+
+func assertQueriedCapabilities(t *testing.T, got, want []shared.Capability) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("queried capabilities %v, want %v", got, want)
+	}
+	for i, c := range want {
+		if got[i] != c {
+			t.Fatalf("queried capabilities %v, want %v", got, want)
+		}
+	}
+}
+
+func assertPlanPersisted(t *testing.T, f *fixtures, wantCommitted bool) {
+	t.Helper()
+	_, findErr := f.shiftPlans.FindByBuildingAndShift(context.Background(), "bldg-1", "shift-1")
+	if wantCommitted && findErr != nil {
+		t.Fatalf("expected the plan to be persisted: %v", findErr)
+	}
+	if !wantCommitted && !errors.Is(findErr, ports.ErrNotFound) {
+		t.Fatalf("expected nothing persisted, FindByBuildingAndShift returned: %v", findErr)
+	}
+}
+
+// TestCommitShiftPlan_PathIdIsNeverSentAsCapability pins the exact live
+// symptom: with the real registry shape ({"pick": 41}), querying by the
+// path id "PICK" would see 0 and reject 4 heads. The commit must succeed.
+func TestCommitShiftPlan_PathIdIsNeverSentAsCapability(t *testing.T) {
+	f := newFixtures()
+	capacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pick": 41}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: capacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
+
+	lines := []shiftplan.PathPlan{{PathId: "PICK", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 32}}
+	if _, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"PICK": 10}); err != nil {
+		t.Fatalf("expected PICK with 41 pick stations to commit, got %v", err)
+	}
+	for _, c := range capacity.calledFor {
+		if c == "PICK" {
+			t.Fatal("the path id PICK was sent to fulfillment-execution as a capability")
+		}
+	}
+}
+
+// TestCommitShiftPlan_UnreachableFulfillmentExecutionStillFailsLoud keeps
+// ADR-0014's fail-loud contract intact after the capability resolution
+// step was added: the sentinel must reach the caller unwrapped-compatible
+// (errors.Is) so the HTTP adapter still answers 503.
+func TestCommitShiftPlan_UnreachableFulfillmentExecutionStillFailsLoud(t *testing.T) {
+	f := newFixtures()
+	capacity := &fakeInstalledCapacityClient{err: ports.ErrInstalledCapacityUnavailable}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: capacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
+
+	lines := []shiftplan.PathPlan{{PathId: "PICK", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8}}
+	_, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"PICK": 10})
+	if !errors.Is(err, ports.ErrInstalledCapacityUnavailable) {
+		t.Fatalf("expected ErrInstalledCapacityUnavailable, got %v", err)
+	}
+	if len(capacity.calledFor) != 1 || capacity.calledFor[0] != "pick" {
+		t.Fatalf("expected one query for capability pick, got %v", capacity.calledFor)
+	}
+}
+
+// TestCommitShiftPlan_FetchesEachCapabilityOnce proves two different
+// paths resolving to the same capability ("pick" and "pick-zone-a") cost
+// one fulfillment-execution round trip, not two, and are both bounded by
+// the same station count.
+func TestCommitShiftPlan_FetchesEachCapabilityOnce(t *testing.T) {
+	f := newFixtures()
+	capacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pick": 5}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: capacity, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
+
+	lines := []shiftplan.PathPlan{
+		{PathId: "pick", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16},
+		{PathId: "pick-zone-a", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24},
+	}
+	if _, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pick": 10, "pick-zone-a": 10}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(capacity.calledFor) != 1 || capacity.calledFor[0] != "pick" {
+		t.Fatalf("expected exactly one query for capability pick, got %v", capacity.calledFor)
+	}
+}
+
+// TestCommitShiftPlan_RequiresCatalogue proves a mis-wired use case fails
+// every commit instead of silently guessing a capability from the path id.
+func TestCommitShiftPlan_RequiresCatalogue(t *testing.T) {
+	f := newFixtures()
+	capacity := &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pick": 41}}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: capacity, MaxHoursPerShift: 8}
+
+	lines := []shiftplan.PathPlan{{PathId: "pick", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8}}
+	_, err := uc.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pick": 10})
+	if !errors.Is(err, ErrCommitShiftPlanNoCatalogue) {
+		t.Fatalf("expected ErrCommitShiftPlanNoCatalogue, got %v", err)
+	}
+	if len(capacity.calledFor) != 0 {
+		t.Fatalf("expected no capacity query without a catalogue, got %v", capacity.calledFor)
 	}
 }
 
@@ -803,7 +1018,7 @@ func TestStartBreak_And_EndBreak(t *testing.T) {
 
 func TestGetStaffingGap_RaisesPathUnderstaffed(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -951,7 +1166,7 @@ func TestProposePathPlan_PublishError(t *testing.T) {
 func TestCommitShiftPlan_SaveError(t *testing.T) {
 	f := newFixtures()
 	repo := &failingShiftPlanRepo{ShiftPlanRepo: f.shiftPlans, saveErr: errBoom}
-	uc := &CommitShiftPlan{ShiftPlans: repo, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}, MaxHoursPerShift: 8}
+	uc := &CommitShiftPlan{ShiftPlans: repo, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	installed := map[shared.PathId]int{"pack": 10}
@@ -965,7 +1180,7 @@ func TestCommitShiftPlan_SaveError(t *testing.T) {
 func TestCommitShiftPlan_PublishError(t *testing.T) {
 	f := newFixtures()
 	pub := &failingPublisher{LogPublisher: f.pub, err: errBoom}
-	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 10}}, MaxHoursPerShift: 8}
+	uc := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 10}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40}}
 	installed := map[shared.PathId]int{"pack": 10}
@@ -1138,7 +1353,7 @@ func TestGetStaffingGap_PlanNotFound(t *testing.T) {
 
 func TestGetStaffingGap_CountActiveError(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1154,7 +1369,7 @@ func TestGetStaffingGap_CountActiveError(t *testing.T) {
 
 func TestGetStaffingGap_PublishErrorWhenUnderstaffed(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1176,7 +1391,7 @@ func TestGetStaffingGap_NotUnderstaffed(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1205,7 +1420,7 @@ func TestGetStaffingGap_NotUnderstaffed(t *testing.T) {
 // no change to the existing gap computation.
 func TestGetStaffingGap_ObservedIdlePctSurfaced(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 8}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1230,7 +1445,7 @@ func TestGetStaffingGap_ObservedIdlePctSurfaced(t *testing.T) {
 // wired): ObservedIdlePct must be nil, never a fabricated 0.
 func TestGetStaffingGap_ObservedIdlePctNilWhenUnwired(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 8}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1251,7 +1466,7 @@ func TestGetStaffingGap_ObservedIdlePctNilWhenUnwired(t *testing.T) {
 // nil, and the error must never fail Execute (pure surfacing).
 func TestGetStaffingGap_ObservedIdlePctNilOnErrIdleShareUnavailable(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 8}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -1287,7 +1502,7 @@ func assertPathGap(t *testing.T, byPath map[shared.PathId]StaffingGap, path stri
 // gathered for every line in the committed plan in one call).
 func TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5, "pick": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5, "pick": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{
 		{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24},
 		{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8},
@@ -1335,7 +1550,7 @@ func TestGetStaffingGap_ExecuteAll_ReturnsGapForEveryPlannedPath(t *testing.T) {
 // line -- mirroring the outbox's atomic-batch discipline (ADR 0016).
 func TestGetStaffingGap_ExecuteAll_PublishesEveryUnderstaffedPathInOneScope(t *testing.T) {
 	f := newFixtures()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5, "pick": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: &scopedPublisher{}, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5, "pick": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{
 		{PathId: "pack", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16},
 		{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8},
@@ -1381,7 +1596,7 @@ func TestGetStaffingGap_ExecuteAll_NoUnderstaffedPaths_OpensNoScope(t *testing.T
 	if _, err := (&AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: f.pub, Clock: f.clock, MaxHoursPerShift: 8}).Execute(context.Background(), "assoc-1", "pack"); err != nil {
 		t.Fatalf("setup assign: %v", err)
 	}
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{{PathId: "pack", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8}}
 	if _, err := commit.Execute(context.Background(), "bldg-1", "shift-1", lines, map[shared.PathId]int{"pack": 5}); err != nil {
 		t.Fatalf("setup: %v", err)
@@ -1677,7 +1892,7 @@ func (r *pathFailingAssignmentRepo) CountActiveByPath(ctx context.Context, pathI
 // ExecuteAll tests.
 func commitTwoPathPlan(t *testing.T, f *fixtures) {
 	t.Helper()
-	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByPath: map[shared.PathId]int{"pack": 5, "pick": 5}}, MaxHoursPerShift: 8}
+	commit := &CommitShiftPlan{ShiftPlans: f.shiftPlans, Events: f.pub, Clock: f.clock, InstalledCapacity: &fakeInstalledCapacityClient{capacityByCapability: map[shared.Capability]int{"pack": 5, "pick": 5}}, Catalogue: testCatalogue(), MaxHoursPerShift: 8}
 	lines := []shiftplan.PathPlan{
 		{PathId: "pack", PlannedHeads: 2, PlannedRate: 30, PlannedHours: 16},
 		{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8},

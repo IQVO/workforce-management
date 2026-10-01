@@ -10,8 +10,8 @@ description: The workforce-management analytical data product — a Labor Utiliz
 The analytical **data product** owned by Workforce Management. It is built
 entirely from this service's own domain events (never another service's
 database) and served read-only. See [ADR-0010](../adr/0010-analytical-data-product.md)
-for the decision and the cross-service `warehouse-infra/docs/analytics/`
-Envelope v1 contract and governance charter for the cross-service rules.
+for the decision, and [ADR-0026](../adr/0026-cloudevents-mandatory-event-envelope.md)
+for the CloudEvents 1.0 envelope every analytics event uses.
 
 ## Name & owner
 
@@ -43,9 +43,15 @@ Metrics per row:
 ## Inputs (analytics topic events)
 
 Consumed from **`warehouse.workforce.analytics`** (the dedicated analytics topic,
-separate from the integration topic — Envelope v1):
+separate from the integration topic). Every message is a CloudEvents 1.0 event
+with `dataschema` `urn:warehouse:workforce-management:analytics:<EventName>:v1`;
+the projector dispatches on the full `type`
+(`com.warehouse.wes.workforce-management.<entity>.<EventName>`, entity
+`associate`, `assignment` or `shiftplan`), uses `time` as the occurred-at
+instant, dedupes on `id`, and dead-letters anything that fails CloudEvents
+validation to `warehouse.workforce.analytics.dlq`.
 
-| `event_type` | Contributes |
+| Event (`type` suffix) | Contributes |
 |---|---|
 | `AssociateShiftStarted` | `shiftsStarted` |
 | `AssociateShiftEnded` | `shiftsEnded` |
@@ -122,8 +128,9 @@ consistent with [ADR-0008](../adr/0008-mcp-inbound-adapter.md).
 
 - Additive fields (new optional row metric, new query filter) are non-breaking.
 - A breaking change to a row's shape or meaning is a new endpoint/tool version.
-- The analytics event contract versions independently via the Envelope
-  `schema_version` and the analytics topic suffix (see Envelope v1).
+- The analytics event contract versions independently via the CloudEvents
+  `dataschema` (`...:analytics:<EventName>:v<N>`); a breaking payload change
+  is a new `.v2` type with a new dataschema version.
 
 ## Runbook notes
 

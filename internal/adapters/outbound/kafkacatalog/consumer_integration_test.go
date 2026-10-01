@@ -40,8 +40,16 @@ func TestNewConsumerForTopic_TwoInstancesInARow_BothReplayFully(t *testing.T) {
 
 	writer := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: topic}
 	defer func() { _ = writer.Close() }()
-	if err := writer.WriteMessages(ctx, kafkago.Message{Value: []byte(`{"event_type":"ProcessPathCreated","data":{"path_id":"ITEST","match_prefix":"itest","direct":true,"required_capabilities":["itest"]}}`)}); err != nil {
-		t.Fatalf("seed event: %v", err)
+	// A retired flat-envelope message first (must be skipped, never parsed,
+	// never wedge readiness), then the real CloudEvents 1.0 event.
+	if err := writer.WriteMessages(ctx,
+		kafkago.Message{Value: []byte(`{"event_id":"legacy","event_type":"ProcessPathCreated","occurred_at":"2026-09-30T12:00:00Z","source":"process-path-management","data":{"path_id":"LEGACY","match_prefix":"legacy"}}`)},
+		kafkago.Message{
+			Value:   []byte(`{"specversion":"1.0","id":"evt-itest-1","source":"/warehouse/process-path-management","type":"com.warehouse.wes.process-path-management.processpath.ProcessPathCreated","subject":"ITEST","datacontenttype":"application/json","dataschema":"urn:warehouse:process-path-management:events:ProcessPathCreated:v1","time":"2026-09-30T12:00:00Z","data":{"path_id":"ITEST","match_prefix":"itest","direct":true,"required_capabilities":["itest"]}}`),
+			Headers: []kafkago.Header{{Key: "content-type", Value: []byte("application/cloudevents+json; charset=UTF-8")}},
+		},
+	); err != nil {
+		t.Fatalf("seed events: %v", err)
 	}
 
 	for instance := 1; instance <= 2; instance++ {
@@ -62,6 +70,11 @@ func TestNewConsumerForTopic_TwoInstancesInARow_BothReplayFully(t *testing.T) {
 			runCancel()
 			_ = consumer.Close()
 			t.Fatalf("consumer %d did not replay the path: %v", instance, err)
+		}
+		if _, err := consumer.Lookup("legacy-order"); err == nil {
+			runCancel()
+			_ = consumer.Close()
+			t.Fatalf("consumer %d parsed a legacy flat-envelope message", instance)
 		}
 
 		runCancel()

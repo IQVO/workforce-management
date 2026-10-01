@@ -257,7 +257,13 @@ paths:
         path's capability (a SEPARATE, independent check — see ADR-0014;
         fetched fresh on every commit, and this service fails the entire
         commit loud, without any fallback, if fulfillment-execution cannot
-        be reached), and that plannedHours does not exceed
+        be reached). The capability is resolved through the process-path
+        catalogue, never taken from pathId: a path's live ceiling is the
+        number of stations registered with each of its declared
+        requiredCapabilities (the smallest count when it declares several),
+        so pathId PICK (or pick-zone-a) is checked against stations holding
+        capability pick. A pathId the catalogue does not declare is rejected
+        with 400 unknown-path-id. It also validates that plannedHours does not exceed
         plannedHeads * the configured max hours per shift. Naturally
         idempotent by the client-supplied (buildingId, shiftId) key: the
         underlying repository upserts on that key.
@@ -307,8 +313,10 @@ paths:
           description: >-
             Malformed body, an empty required field (buildingId, shiftId, or
             a line's pathId), no path plan lines supplied
-            (shift-plan-no-path-plans), or a line references a path with no
-            installedStations entry (shift-plan-missing-installed-stations).
+            (shift-plan-no-path-plans), a line references a path with no
+            installedStations entry (shift-plan-missing-installed-stations),
+            or a line's pathId is not declared by the process-path catalogue
+            (unknown-path-id).
           content:
             application/problem+json:
               schema:
@@ -324,7 +332,8 @@ paths:
             Conflict — a line's plannedHeads exceeds installedStations
             (planned-heads-exceed-installed), a line's plannedHeads exceeds
             the LIVE installed capacity fulfillment-execution reports for
-            that path's capability (exceeds-installed-capacity — see
+            that path's capability, resolved from the process-path
+            catalogue's requiredCapabilities (exceeds-installed-capacity — see
             ADR-0014; this is a SEPARATE, independent check from
             installedStations), or plannedHours exceeds what plannedHeads
             can work within the shift's max hours

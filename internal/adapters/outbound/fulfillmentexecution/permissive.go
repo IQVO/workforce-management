@@ -23,6 +23,6 @@ type PermissiveClient struct{}
 // NewPermissiveClient constructs a PermissiveClient.
 func NewPermissiveClient() *PermissiveClient { return &PermissiveClient{} }
 
-func (PermissiveClient) InstalledCapacity(_ context.Context, _ shared.PathId) (int, error) {
+func (PermissiveClient) InstalledCapacity(_ context.Context, _ shared.Capability) (int, error) {
 	return 0, ports.ErrInstalledCapacityUnavailable
 }

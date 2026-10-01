@@ -103,18 +103,24 @@ type IdleShareClient interface {
 var ErrIdleShareUnavailable = errors.New("idle share unavailable")
 
 // InstalledCapacityClient queries fulfillment-execution for the real,
-// live count of registered stations that hold a path's capability, so
+// live count of registered stations that hold a given CAPABILITY, so
 // CommitShiftPlan can enforce plannedHeads against physical reality
 // instead of trusting a caller-supplied installedStations count alone.
-// See ADR-0014 in this repo's docs for the full "why a new outbound
-// Supplier, why fail-LOUD (unlike MeasuredRateClient's fail-open)"
-// rationale: unlike a measured rate (a soft, optional enrichment to a
-// PROPOSAL), this feeds a hard ceiling on a COMMIT that mutates real
-// state -- this fleet's own rule is to fail loud for anything that
-// mutates real state.
+// The argument is a shared.Capability, never a shared.PathId:
+// fulfillment-execution's GET /capacity/{capability} counts stations by
+// the capability strings they were registered with (lower-case "pick",
+// "pack", ...), which is a different vocabulary from a process-path id
+// (canonical "PICK", or a real "pick-zone-a"). CommitShiftPlan resolves
+// each path to its required capabilities through PathCatalogue first.
+// See ADR-0014 (and its addendum) in this repo's docs for the full "why
+// a new outbound Supplier, why fail-LOUD (unlike MeasuredRateClient's
+// fail-open)" rationale: unlike a measured rate (a soft, optional
+// enrichment to a PROPOSAL), this feeds a hard ceiling on a COMMIT that
+// mutates real state -- this fleet's own rule is to fail loud for
+// anything that mutates real state.
 type InstalledCapacityClient interface {
 	// InstalledCapacity returns the real count of stations registered
-	// with pathId's capability in fulfillment-execution, or
+	// with capability in fulfillment-execution, or
 	// ErrInstalledCapacityUnavailable on ANY failure to produce one --
 	// unreachable service, malformed response, or a non-200. Unlike
 	// MeasuredRateClient, there is no "genuinely no stations yet" case
@@ -122,8 +128,8 @@ type InstalledCapacityClient interface {
 	// treats zero registered stations for a capability as a real,
 	// valid answer of 0, not an error -- so a real 0 here means
 	// exactly that, and CommitShiftPlan must reject any plannedHeads
-	// greater than 0 for that path.
-	InstalledCapacity(ctx context.Context, pathId shared.PathId) (int, error)
+	// greater than 0 for a path that requires it.
+	InstalledCapacity(ctx context.Context, capability shared.Capability) (int, error)
 }
 
 // ErrInstalledCapacityUnavailable is returned by an InstalledCapacityClient

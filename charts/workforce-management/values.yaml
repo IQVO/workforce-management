@@ -307,7 +307,7 @@ analytics:
     # left at api's 4, because the analytics topic is keyed by
     # aggregate id (AssociateId/PathId, AnalyticsPublisher.Encode), so
     # ordering is only guaranteed per-aggregate/per-partition, and
-    # every write is already idempotent on event_id
+    # every write is already idempotent on the CloudEvents id
     # (ConsumedEventsRepo.MarkProcessed) -- correctness does not
     # regress at 2, but there is no throughput case yet that justifies
     # more. See the top-level autoscaling.projector block.

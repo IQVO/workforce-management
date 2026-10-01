@@ -22,35 +22,36 @@ sibling context genuinely needs to react to it on the integration topic,
 or that it belongs in the Labor Utilization & Staffing report on the
 analytics topic — they are not the same audience.
 
-### 2. Envelope: this repo's own cross-service shape
+### 2. Envelope: CloudEvents 1.0, mandatory (ADR-0026)
 
-Every message on `warehouse.workforce.events` uses the shape documented
-in `INTEGRATION.md` and implemented in `publisher.go`'s `envelope`
-struct:
+Every message on BOTH topics is a CloudEvents 1.0 structured-mode event —
+there is no other envelope and no toggle. Never hand-build one: call
+`cloudevents.New(cloudevents.Spec{...})` from
+`internal/adapters/kafka/cloudevents` and attach
+`cloudevents.ContentTypeHeader()` to the `Encoded.Headers`:
 
 ```json
 {
-  "event_id": "<uuid>",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "<RFC3339>",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "<uuid, minted once in Encode>",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "<aggregate id; here buildingId/shiftId = the Kafka key>",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "<occurred-at, RFC3339 UTC>",
   "data": { "building_id": "...", "shift_id": "...", "path_id": "...",
             "planned_heads": 0, "planned_rate": 0, "planned_hours": 0 }
 }
 ```
 
-`event_type` here is the bare past-tense event name (`ShiftPlanCommitted`)
-— the wire code's `envelope` struct has no `type`/`specversion` fields at
-all. This is narrower than what `apis/asyncapi.yaml` documents: the spec
-frames the channel as full CloudEvents 1.0 with a reverse-DNS `type`
-context attribute (`com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`),
-and says so explicitly in its own intro ("This document is the complete
-reference catalog ... deliberately broader than what leaves the process
-today"). Don't take the AsyncAPI spec's CloudEvents framing as proof of
-what's literally on the wire today — read `publisher.go`'s `envelope`
-struct for the ACTUAL current field names before writing a consumer
-against this topic; the spec is the target/contract, not always a
-byte-for-byte mirror of the current adapter.
+- `type` = `com.warehouse.wes.workforce-management.<entity>.<EventName>`;
+  entity is the raising aggregate (`shiftplan`, `associate`, `assignment`).
+  Add the full string to `internal/adapters/kafka/cloudevents/types.go`.
+- `dataschema` stream is `events` (integration) or `analytics`.
+- A breaking payload change is a new `.v2` type plus a new dataschema
+  version — never mutate an existing one.
+- `apis/asyncapi.yaml` documents exactly what is on the wire.
 
 ### 3. Implementation: encode inside the outbox, not a bare Publish
 
@@ -67,7 +68,7 @@ adding logic to `Publish`:
   invent a new payload shape at the adapter layer.
 - Add the event's case to `Publisher.Encode` in
   `internal/adapters/outbound/kafka/publisher.go` — this is where the
-  envelope is built and marshaled, `Publisher` implements both
+  CloudEvent is built via `cloudevents.New` and the id is minted, `Publisher` implements both
   `ports.EventPublisher` (direct call) and `kafka.Encoder` (outbox call);
   both `Publish` and `postgres.OutboxPublisher` route through the same
   `Encode`, so they can never disagree on wire format.
@@ -77,10 +78,10 @@ adding logic to `Publish`:
   that read runs INSIDE the use case's transaction because
   `postgres.OutboxPublisher` calls `Encode` before commit — it must see
   the row the use case just saved, not a stale one.
-- Give the message a partition key that keeps ordering where it matters,
-  if this event needs one (the current `ShiftPlanCommitted` messages
-  carry no key, matching the pre-existing integration contract —
-  `INTEGRATION.md` is the source of truth, don't add a key unilaterally).
+- Give the message the aggregate id as both its Kafka key and its
+  CloudEvents `subject` (`ShiftPlanCommitted` uses `<buildingId>/<shiftId>`,
+  ADR-0023); writers use the `kafkago.Hash{}` balancer so the key actually
+  routes.
 - Every publishing use case wraps its `Save`s and `Publish` in one
   `atomically(ctx, uc.UnitOfWork, func(ctx) error {...})` scope
   (`internal/application/usecases/unit_of_work.go`) — see
@@ -94,14 +95,17 @@ adding logic to `Publish`:
   matching the entity-grouping convention already there.
 - This repo's analytics topic has no generated HTML reference; its
   narrative counterpart is `docs/docs/ecosystem/integration.md` — update
-  both together if the analytics envelope changes shape.
+  both together if an analytics payload changes shape.
 - `docs-api-drift` CI only checks the REST OpenAPI-generated tree
   (`docs/api-reference/rest`); it does NOT catch AsyncAPI drift in this
   repo today — don't rely on CI to catch a stale `asyncapi.yaml`.
 
 ### 5. Test
 
-Unit test the marshal shape against a fake `Writer` (see
+Add an exact-JSON golden test for the new type (all attributes + the
+`content-type` header — see `TestPublish_GoldenCloudEvent` and
+`TestAnalyticsPublisher_GoldenCloudEventPerEventType`), and unit test the
+marshal shape against a fake `Writer` (see
 `internal/adapters/outbound/kafka/encode_test.go` for both `Publisher.Encode`
 and `AnalyticsPublisher.Encode` — never a real broker in a unit test).
 If a new outbox path needs coverage that the atomic-transaction guarantee
@@ -119,10 +123,17 @@ This service knows a sibling's topic name and payload shape ONLY — never
 its Go types. Both real consumers in this repo document this explicitly:
 `internal/adapters/outbound/kafkacatalog/consumer.go`'s package doc
 comment ("This service has no business knowing anything else about that
-service beyond this topic name and the envelope/payload shape below") and
+service beyond this topic name, the CloudEvents `type` strings and the
+payload shape below") and
 `internal/adapters/outbound/laborperformancecache/consumer.go`'s
 identical framing for `labor-performance`. Hand-mirror the payload struct
-locally (`pathData`, `taskPerformanceData`); do not add a Go module
+locally (`pathData`, `taskPerformanceData`) and decode it with
+`cloudevents.Decode` + `e.DataAs(&payload)`. Dispatch on the producer's FULL
+`type` string (add it to `cloudevents/types.go`, byte-identical to the
+fleet catalogue), ignore unknown types, dedupe on `id` if the read model is
+not naturally idempotent, and WARN-and-skip (or DLQ) on
+`cloudevents.ErrNotCloudEvent` — never parse any other shape. Add a
+legacy-flat-message-rejected test. Do not add a Go module
 dependency on the sibling repo — `internal/architecture/`'s fitness tests
 enforce this.
 

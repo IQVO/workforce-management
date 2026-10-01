@@ -17,7 +17,7 @@ import (
 
 // TestNewConsumerForTopic_ReplaysTaskPerformanceRecordedAndComputesMean
 // verifies the real replay/readiness path against an isolated Kafka
-// broker: publish a fake TaskPerformanceRecorded envelope onto a
+// broker: publish fake TaskPerformanceRecorded CloudEvents onto a
 // throwaway topic, the Consumer replays it, MeanActualSeconds returns
 // the right value.
 func TestNewConsumerForTopic_ReplaysTaskPerformanceRecordedAndComputesMean(t *testing.T) {
@@ -52,8 +52,13 @@ func TestNewConsumerForTopic_ReplaysTaskPerformanceRecordedAndComputesMean(t *te
 	// nil, same as an explicit JSON null) -- it must contribute to the
 	// idle-share denominator (actual_seconds) only, never the numerator.
 	messages := []kafkago.Message{
-		{Value: []byte(`{"event_id":"evt-1","event_type":"TaskPerformanceRecorded","occurred_at":"2026-09-05T09:30:00Z","source":"labor-performance","data":{"task_id":"task-1","associate_id":"assoc-1","task_type":"PICK","efficiency_pct":91.2,"actual_seconds":40,"idle_seconds_before":20,"completed_at":"2026-09-05T09:30:00Z"}}`)},
-		{Value: []byte(`{"event_id":"evt-2","event_type":"TaskPerformanceRecorded","occurred_at":"2026-09-05T10:00:00Z","source":"labor-performance","data":{"task_id":"task-2","associate_id":"","task_type":"PICK","efficiency_pct":null,"actual_seconds":60,"completed_at":"2026-09-05T10:00:00Z"}}`)},
+		{Value: []byte(`{"specversion":"1.0","id":"evt-1","source":"/warehouse/labor-performance","type":"com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded","subject":"task-1","datacontenttype":"application/json","dataschema":"urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1","time":"2026-09-05T09:30:00Z","data":{"task_id":"task-1","associate_id":"assoc-1","task_type":"PICK","efficiency_pct":91.2,"actual_seconds":40,"idle_seconds_before":20,"completed_at":"2026-09-05T09:30:00Z"}}`)},
+		{Value: []byte(`{"specversion":"1.0","id":"evt-2","source":"/warehouse/labor-performance","type":"com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded","subject":"task-2","datacontenttype":"application/json","dataschema":"urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1","time":"2026-09-05T10:00:00Z","data":{"task_id":"task-2","associate_id":"","task_type":"PICK","efficiency_pct":null,"actual_seconds":60,"completed_at":"2026-09-05T10:00:00Z"}}`)},
+		// An at-least-once redelivery of evt-2 (same CloudEvents id) must
+		// not be folded into the mean twice.
+		{Value: []byte(`{"specversion":"1.0","id":"evt-2","source":"/warehouse/labor-performance","type":"com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded","subject":"task-2","datacontenttype":"application/json","dataschema":"urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1","time":"2026-09-05T10:00:00Z","data":{"task_id":"task-2","associate_id":"","task_type":"PICK","efficiency_pct":null,"actual_seconds":60,"completed_at":"2026-09-05T10:00:00Z"}}`)},
+		// A retired flat-envelope message must be skipped, never parsed.
+		{Value: []byte(`{"event_id":"legacy","event_type":"TaskPerformanceRecorded","occurred_at":"2026-09-05T10:00:00Z","source":"labor-performance","data":{"task_id":"legacy","task_type":"PICK","actual_seconds":9000}}`)},
 	}
 	if err := writer.WriteMessages(ctx, messages...); err != nil {
 		t.Fatalf("seed events: %v", err)
@@ -137,7 +142,7 @@ func TestNewConsumerForTopic_TwoInstancesInARow_BothReplayFully(t *testing.T) {
 	writer := &kafkago.Writer{Addr: kafkago.TCP(brokers...), Topic: topic}
 	defer func() { _ = writer.Close() }()
 	if err := writer.WriteMessages(ctx, kafkago.Message{
-		Value: []byte(`{"event_id":"evt-1","event_type":"TaskPerformanceRecorded","occurred_at":"2026-09-05T09:30:00Z","source":"labor-performance","data":{"task_id":"task-1","associate_id":"assoc-1","task_type":"PACK","efficiency_pct":80.0,"actual_seconds":25,"completed_at":"2026-09-05T09:30:00Z"}}`),
+		Value: []byte(`{"specversion":"1.0","id":"evt-1","source":"/warehouse/labor-performance","type":"com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded","subject":"task-1","datacontenttype":"application/json","dataschema":"urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1","time":"2026-09-05T09:30:00Z","data":{"task_id":"task-1","associate_id":"assoc-1","task_type":"PACK","efficiency_pct":80.0,"actual_seconds":25,"completed_at":"2026-09-05T09:30:00Z"}}`),
 	}); err != nil {
 		t.Fatalf("seed event: %v", err)
 	}

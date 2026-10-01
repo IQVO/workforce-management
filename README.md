@@ -105,6 +105,12 @@ migrations/analytics/         golang-migrate SQL files (analytical DB, owned by 
   is **also** checked against the live installed capacity fetched from
   fulfillment-execution (`GET /capacity/{capability}`). This is a second,
   independent ceiling that fails loud (503) when it cannot be verified.
+  The capability is **resolved through the process-path catalogue**, never
+  taken from the path id: path `PICK` (or `pick-zone-a`) declares
+  `requiredCapabilities: [pick]`, so the ceiling is the count of stations
+  registered with `pick`. A path requiring several capabilities is capped by
+  the scarcest one (MIN); a path the catalogue does not declare is rejected
+  `400 unknown-path-id` before fulfillment-execution is called.
 - **`GetStaffingGap` takes `buildingId`/`shiftId` as query parameters**
   (`GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`) because
   `ShiftPlan` is keyed by building + shift, and a path's planned heads only
@@ -348,14 +354,22 @@ the full edge list.
   with 3 path lines publishes **3** Kafka messages — one per path line, each
   carrying that single path's `planned_heads`/`planned_rate`/`planned_hours`.
   This matches how `wes-work-planning` keys its read model, by `path_id`.
-- **Envelope** (identical shape across all warehouse-systems services):
+- **Envelope**: CloudEvents 1.0, mandatory, structured content mode
+  ([ADR-0026](docs/docs/adr/0026-cloudevents-mandatory-event-envelope.md)).
+  Every message carries the Kafka header
+  `content-type: application/cloudevents+json; charset=UTF-8`; each fanned-out
+  line has its own `id`, and `subject` equals the Kafka key:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "2026-08-21T22:00:00Z",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "uuid-v4",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "<building_id>/<shift_id>",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "2026-08-21T22:00:00Z",
   "data": {
     "building_id": "...",
     "shift_id": "...",
@@ -530,7 +544,7 @@ go test ./... -run TestFeatures -v
 
 | Feature file | Covers |
 | --- | --- |
-| `features/shift_plan.feature` | `CommitShiftPlan` — within capacity, and rejected when `plannedHeads` exceed installed stations |
+| `features/shift_plan.feature` | `CommitShiftPlan` — within capacity, rejected when `plannedHeads` exceed installed stations, live capacity resolved by the path's required capability (`PICK` → `pick`), unknown path rejected |
 | `features/labor_assignment.feature` | `AssignLabor` — certified assignment, uncertified rejection, no double-booking, and rejection while on break |
 | `features/breaks.feature` | `StartBreak` / `EndBreak` — break state gates assignment, then releases it |
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |
