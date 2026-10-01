@@ -10,7 +10,11 @@ description: An analytical read model (the "report") built from this service's o
 
 ## Status
 
-**Accepted.**
+**Accepted**; the analytics **Envelope v1** wrapper (`schema_version`) in §1 is
+**superseded by [ADR-0026](./0026-cloudevents-mandatory-event-envelope.md)** —
+the analytics topic now carries CloudEvents 1.0 events with
+`dataschema` `urn:warehouse:workforce-management:analytics:<EventName>:v1`. The
+rest of this record stands.
 
 ## Context
 

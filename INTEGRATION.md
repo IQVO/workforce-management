@@ -1,7 +1,8 @@
 # Cross-service integration (additive — Task 7, do NOT touch existing domain code)
 
-> **Historical brief.** This is the original Task 7 specification and is kept
-> as the source of the flat envelope shape. The "does not need to consume
+> **Historical brief.** This is the original Task 7 specification. Its flat
+> envelope is RETIRED: every message is now a CloudEvents 1.0 event
+> (ADR-0026, shown below). The "does not need to consume
 > anything" and `docker-compose.kafka.yml` statements below describe that
 > round only. For the current edges (two opt-in consumed topics, two
 > synchronous sibling reads, the transactional outbox, the in-cluster shared
@@ -12,21 +13,25 @@ This service PUBLISHES `ShiftPlanCommitted` over Kafka to a shared broker. This
 round it does not need to consume anything. Strictly additive: new adapter
 only, no change to existing aggregates, invariants, or use cases.
 
-## Envelope (identical across all four warehouse-systems services)
+## Envelope (CloudEvents 1.0, mandatory — ADR-0026)
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "2026-08-21T22:00:00Z",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "uuid-v4",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "<building_id>/<shift_id>",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "2026-08-21T22:00:00Z",
   "data": {
     "building_id": "...",
     "shift_id": "...",
     "path_id": "...",
-    "planned_heads": N,
-    "planned_rate": N,
-    "planned_hours": N
+    "planned_heads": 3,
+    "planned_rate": 30,
+    "planned_hours": 24
   }
 }
 ```
@@ -56,7 +61,7 @@ Downstream consumer: wes-work-planning projects these into its own
 ## Definition of done for Task 7
 
 - New Kafka publisher adapter compiles and is unit-tested (e.g. against an
-  in-memory kafka-go writer fake, or by asserting the envelope shape and the
+  in-memory kafka-go writer fake, or by asserting the CloudEvents shape and the
   one-message-per-path-line fan-out).
 - Existing full suite (`go build ./...`, `go vet ./...`, `go test ./...`,
   `go test ./... -race`) still green, unchanged.

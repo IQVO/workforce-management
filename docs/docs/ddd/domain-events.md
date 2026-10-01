@@ -30,10 +30,13 @@ names are fixed vocabulary — they appear verbatim in the Go code, in
 
 ## Which ones leave the process
 
-**One.** As of this version the outbound Kafka adapter
+**One, to other contexts.** The integration Kafka adapter
 (`internal/adapters/outbound/kafka/publisher.go`) forwards **only**
-`ShiftPlanCommitted`. Every other event is raised, published through the
-`EventPublisher` port, and consumed in-process by the log/buffered publisher.
+`ShiftPlanCommitted` to `warehouse.workforce.events`. Every event — including
+the other nine — also goes to this service's own internal analytics topic
+(`warehouse.workforce.analytics`, [ADR 0010](../adr/0010-analytical-data-product.md)),
+which no sibling consumes. All of them are CloudEvents 1.0 events
+([ADR 0026](../adr/0026-cloudevents-mandatory-event-envelope.md)).
 
 ```mermaid
 flowchart LR
@@ -63,11 +66,11 @@ flowchart LR
   TOPIC --> WP["wes-work-planning<br/>LaborPlanObserved read model"]
 ```
 
-`apis/asyncapi.yaml` documents all ten as the complete **reference catalog** of
-this context's domain events, which is deliberately broader than what leaves
-the process today. Each message in that spec states its publication status
-explicitly. See the [Events page](../api-reference/events.md) for the
-CloudEvents envelope, the `type` naming convention, and every payload shape.
+`apis/asyncapi.yaml` documents all ten as CloudEvents 1.0 events with their
+exact `type` and `dataschema`. Only `ShiftPlanCommitted` is on the integration
+topic; all ten reach the internal analytics topic. See the
+[Events page](../api-reference/events.md) for the CloudEvents attributes, the
+`type` naming convention, and every payload shape.
 
 ## The fan-out that catches people out
 
@@ -96,7 +99,7 @@ picture — which is precisely the picture this context refuses to expose past
 the path boundary. If a real downstream need appears, the right shape is a
 read-model endpoint, not an event stream of individual moves.
 
-`PathUnderstaffed` is likewise in-process today. It is a **flag, not a
+`PathUnderstaffed` likewise stays off the integration topic. It is a **flag, not a
 decision**, and the platform's rebalancing authority is human, so it currently
 surfaces through `GetStaffingGap`'s response rather than a topic.
 
