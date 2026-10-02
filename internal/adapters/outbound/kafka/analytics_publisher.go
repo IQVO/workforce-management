@@ -47,6 +47,7 @@ type AnalyticsPublisher struct {
 // AnalyticsTopic on brokers. newId mints the CloudEvents id.
 func NewAnalyticsPublisher(brokers []string, newId func() string) *AnalyticsPublisher {
 	return NewAnalyticsPublisherWithWriter(&segmentio.Writer{
+		BatchTimeout:           syncWriterBatchTimeout,
 		Addr:                   segmentio.TCP(brokers...),
 		Topic:                  AnalyticsTopic,
 		Balancer:               &segmentio.Hash{},
