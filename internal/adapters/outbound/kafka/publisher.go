@@ -1,15 +1,13 @@
 // Package kafka provides a Kafka-backed ports.EventPublisher implementation.
 // It publishes to the shared cross-service broker described in
-// INTEGRATION.md: one ShiftPlanCommitted message per PathPlan line, on topic
-// warehouse.workforce.events.
+// INTEGRATION.md: one ShiftPlanCommitted CloudEvent per PathPlan line, on topic
+// warehouse.workforce.events (ADR-0026).
 package kafka
 
 import (
 	"context"
 	"crypto/rand"
-	"encoding/json"
 	"fmt"
-	"time"
 
 	segmentio "github.com/segmentio/kafka-go"
 	"go.opentelemetry.io/otel"
@@ -18,6 +16,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
@@ -28,20 +27,14 @@ const Topic = "warehouse.workforce.events"
 // tracerName identifies this adapter's instrumentation scope.
 const tracerName = "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 
-// source identifies this service in the published envelope.
-const source = "workforce-management"
+// integrationSchemaVersion is the dataschema version of the integration
+// ShiftPlanCommitted payload (urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1).
+const integrationSchemaVersion = 1
 
-// envelope is the cross-service message shape shared by every
-// warehouse-systems service, as documented in INTEGRATION.md.
-type envelope struct {
-	EventID    string       `json:"event_id"`
-	EventType  string       `json:"event_type"`
-	OccurredAt string       `json:"occurred_at"`
-	Source     string       `json:"source"`
-	Data       envelopeData `json:"data"`
-}
-
-type envelopeData struct {
+// shiftPlanCommittedData is the CloudEvents `data` payload of one
+// ShiftPlanCommitted PathPlan-line message — byte-for-byte the payload shape
+// this topic has always carried.
+type shiftPlanCommittedData struct {
 	BuildingId   string  `json:"building_id"`
 	ShiftId      string  `json:"shift_id"`
 	PathId       string  `json:"path_id"`
@@ -62,14 +55,19 @@ type envelopeData struct {
 type Publisher struct {
 	writer     Writer
 	shiftPlans ports.ShiftPlanRepo
+	// newID mints each line message's CloudEvents id (NewEventID in
+	// production; pinned in golden tests).
+	newID func() string
 }
 
 // NewPublisher constructs a Publisher writing to brokers on Topic.
 func NewPublisher(brokers []string, shiftPlans ports.ShiftPlanRepo) *Publisher {
 	return NewPublisherWithWriter(&segmentio.Writer{
+		BatchTimeout:           syncWriterBatchTimeout,
+		RequiredAcks:           syncWriterRequiredAcks,
 		Addr:                   segmentio.TCP(brokers...),
 		Topic:                  Topic,
-		Balancer:               &segmentio.LeastBytes{},
+		Balancer:               &segmentio.Hash{},
 		AllowAutoTopicCreation: true,
 	}, shiftPlans)
 }
@@ -78,7 +76,7 @@ func NewPublisher(brokers []string, shiftPlans ports.ShiftPlanRepo) *Publisher {
 // (a fake in tests). writer is expected to have Topic pinned to Topic, as
 // NewPublisher does; Encode leaves Message.Topic empty accordingly.
 func NewPublisherWithWriter(writer Writer, shiftPlans ports.ShiftPlanRepo) *Publisher {
-	return &Publisher{writer: writer, shiftPlans: shiftPlans}
+	return &Publisher{writer: writer, shiftPlans: shiftPlans, newID: NewEventID}
 }
 
 // Close releases the underlying Kafka writer's resources.
@@ -89,8 +87,13 @@ func (p *Publisher) Close() error {
 	return nil
 }
 
-// Encode fans ShiftPlanCommitted events out into one wire-ready message per
-// PathPlan line. Other event types are ignored: this round only publishes
+// Encode fans ShiftPlanCommitted events out into one wire-ready CloudEvents
+// 1.0 structured-mode message per PathPlan line (ADR-0026). Every line message
+// gets its OWN freshly minted CloudEvents `id` (minted here, once, so the
+// outbox persists and later republishes the exact same id), `type`
+// com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted, and
+// `subject` = the ShiftPlan aggregate id "<buildingId>/<shiftId>" — the same
+// value as the Kafka key; the line's path_id stays in `data`. Other event types are ignored: this round only publishes
 // ShiftPlanCommitted, per INTEGRATION.md. Every message is keyed with
 // shiftPlanKey(buildingId, shiftId) — the ShiftPlan aggregate's identity
 // (ShiftPlan is keyed by building + shift, see internal/domain/shiftplan) —
@@ -118,12 +121,15 @@ func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([
 		}
 		key := []byte(shiftPlanKey(committed.BuildingId, committed.ShiftId))
 		for _, line := range sp.Lines() {
-			env := envelope{
-				EventID:    newEventID(),
-				EventType:  committed.EventName(),
-				OccurredAt: committed.OccurredAt().UTC().Format(time.RFC3339),
-				Source:     source,
-				Data: envelopeData{
+			b, err := cloudevents.New(cloudevents.Spec{
+				ID:        p.newID(),
+				Entity:    cloudevents.EntityShiftPlan,
+				EventName: committed.EventName(),
+				Subject:   string(key),
+				Time:      committed.OccurredAt(),
+				Stream:    cloudevents.StreamEvents,
+				Version:   integrationSchemaVersion,
+				Data: shiftPlanCommittedData{
 					BuildingId:   committed.BuildingId,
 					ShiftId:      committed.ShiftId,
 					PathId:       string(line.PathId),
@@ -131,12 +137,17 @@ func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([
 					PlannedRate:  line.PlannedRate,
 					PlannedHours: line.PlannedHours,
 				},
-			}
-			b, err := json.Marshal(env)
+			})
 			if err != nil {
-				return nil, fmt.Errorf("kafka publisher: marshal envelope: %w", err)
+				return nil, fmt.Errorf("kafka publisher: encode cloudevent: %w", err)
 			}
-			enc := Encoded{Topic: Topic, EventType: committed.EventName(), Key: key, Value: b}
+			enc := Encoded{
+				Topic:     Topic,
+				EventType: cloudevents.TypeShiftPlanCommitted,
+				Key:       key,
+				Value:     b,
+				Headers:   []segmentio.Header{cloudevents.ContentTypeHeader()},
+			}
 			propagator.Inject(ctx, propagation.TextMapCarrier(headerCarrier{headers: &enc.Headers}))
 			out = append(out, enc)
 		}
@@ -198,14 +209,9 @@ func shiftPlanKey(buildingId, shiftId string) string {
 	return buildingId + "/" + shiftId
 }
 
-// newEventID generates a random UUID v4 without pulling in a UUID
-// dependency beyond what INTEGRATION.md already requires (kafka-go).
-func newEventID() string {
-	return NewEventID()
-}
-
-// NewEventID generates a random UUID v4. It is exported so a composition root
-// can supply it as the analytics publisher's envelope id minter without
+// NewEventID generates a random UUID v4 without pulling in a UUID
+// dependency. It is exported so a composition root
+// can supply it as the analytics publisher's CloudEvents id minter without
 // duplicating the generator.
 func NewEventID() string {
 	var b [16]byte

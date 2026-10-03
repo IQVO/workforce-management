@@ -19,10 +19,12 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -65,10 +67,26 @@ type fixedClock struct{ t time.Time }
 
 func (c fixedClock) Now() time.Time { return c.t }
 
-type fixedCapacity map[shared.PathId]int
+// fixedCapacity scripts installed capacity per station CAPABILITY, the
+// key fulfillment-execution actually counts by.
+type fixedCapacity map[shared.Capability]int
 
-func (c fixedCapacity) InstalledCapacity(_ context.Context, id shared.PathId) (int, error) {
-	return c[id], nil
+func (c fixedCapacity) InstalledCapacity(_ context.Context, capability shared.Capability) (int, error) {
+	return c[capability], nil
+}
+
+// fleetCatalogue mirrors the fleet's real process-path catalogue
+// (process-path-management / warehouse-infra sortable-fc.yaml):
+// UPPER-case canonical path ids, each requiring the lower-case capability
+// stations are registered with in fulfillment-execution. CommitShiftPlan
+// resolves a line's path through it to the capability it queries.
+func fleetCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
 }
 
 // recordingSink records what the relay sends and can fail on one event type.
@@ -150,6 +168,7 @@ func TestOutbox_CommitShiftPlan_CommitsAggregateAndBothTopicsTogether(t *testing
 		Events:            d.pub,
 		Clock:             fixedClock{t: time.Now().UTC()},
 		InstalledCapacity: fixedCapacity{"pack": 10, "pick": 10},
+		Catalogue:         fleetCatalogue(),
 		MaxHoursPerShift:  8,
 		UnitOfWork:        d.uow,
 	}
@@ -171,21 +190,54 @@ func TestOutbox_CommitShiftPlan_CommitsAggregateAndBothTopicsTogether(t *testing
 	// One integration row per PathPlan line — proof that the integration
 	// Encoder's repo read happened INSIDE the transaction and saw the
 	// just-saved plan.
-	if got := countOutbox(t, pool, "published_at IS NULL AND topic = '"+outboundkafka.Topic+"' AND event_type = 'ShiftPlanCommitted'"); got != 2 {
+	if got := countOutbox(t, pool, "published_at IS NULL AND topic = '"+outboundkafka.Topic+"' AND event_type = '"+cloudevents.TypeShiftPlanCommitted+"'"); got != 2 {
 		t.Fatalf("expected 2 unpublished integration rows (one per line), got %d", got)
 	}
 	// Exactly one analytics row for the same event.
-	if got := countOutbox(t, pool, "published_at IS NULL AND topic = '"+outboundkafka.AnalyticsTopic+"' AND event_type = 'ShiftPlanCommitted'"); got != 1 {
+	if got := countOutbox(t, pool, "published_at IS NULL AND topic = '"+outboundkafka.AnalyticsTopic+"' AND event_type = '"+cloudevents.TypeShiftPlanCommitted+"'"); got != 1 {
 		t.Fatalf("expected 1 unpublished analytics row, got %d", got)
 	}
-	// Trace headers persisted as JSON.
+	// Trace headers and the CloudEvents content-type header persisted as JSON.
 	var headers []byte
 	if err := pool.QueryRow(ctx, "SELECT headers FROM outbox_events ORDER BY id LIMIT 1").Scan(&headers); err != nil {
 		t.Fatalf("read headers: %v", err)
 	}
 	var hs []map[string]string
-	if err := json.Unmarshal(headers, &hs); err != nil || len(hs) == 0 || hs[0]["key"] != "traceparent" {
-		t.Fatalf("expected persisted traceparent header, got %s err=%v", headers, err)
+	if err := json.Unmarshal(headers, &hs); err != nil {
+		t.Fatalf("decode headers %s: %v", headers, err)
+	}
+	got := map[string]string{}
+	for _, h := range hs {
+		got[h["key"]] = h["value"]
+	}
+	if got["traceparent"] == "" || got["content-type"] != cloudevents.MediaType {
+		t.Fatalf("expected persisted traceparent and content-type headers, got %s", headers)
+	}
+	// Every persisted value is a valid CloudEvent, and the fanned-out
+	// integration rows each carry their own unique id.
+	rows, err := pool.Query(ctx, "SELECT topic, value FROM outbox_events ORDER BY id")
+	if err != nil {
+		t.Fatalf("read values: %v", err)
+	}
+	defer rows.Close()
+	ids := map[string]bool{}
+	for rows.Next() {
+		var topic string
+		var value []byte
+		if err := rows.Scan(&topic, &value); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		e, err := cloudevents.Decode(value)
+		if err != nil {
+			t.Fatalf("persisted %s value is not a CloudEvent: %v", topic, err)
+		}
+		if ids[e.ID()] {
+			t.Fatalf("duplicate CloudEvents id %q across outbox rows", e.ID())
+		}
+		ids[e.ID()] = true
+	}
+	if len(ids) != 3 {
+		t.Fatalf("expected 3 distinct ids (2 integration lines + 1 analytics), got %d", len(ids))
 	}
 }
 
@@ -243,6 +295,7 @@ func TestOutbox_PublishFailure_RollsBackAggregate(t *testing.T) {
 		Events:            postgres.NewOutboxPublisher(pool, failingEncoder{err: errors.New("encoder exploded")}),
 		Clock:             fixedClock{t: time.Now().UTC()},
 		InstalledCapacity: fixedCapacity{"pack": 10},
+		Catalogue:         fleetCatalogue(),
 		MaxHoursPerShift:  8,
 		UnitOfWork:        postgres.NewUnitOfWork(pool),
 	}
@@ -293,7 +346,7 @@ func TestOutboxRelay_PublishesInIdOrderAcrossTopicsAndMarksRows(t *testing.T) {
 	d := newDeps(pool)
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	start := &usecases.StartAssociateShift{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now}, UnitOfWork: d.uow}
-	commit := &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.pub, Clock: fixedClock{t: now}, InstalledCapacity: fixedCapacity{"pack": 10}, MaxHoursPerShift: 8, UnitOfWork: d.uow}
+	commit := &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.pub, Clock: fixedClock{t: now}, InstalledCapacity: fixedCapacity{"pack": 10}, Catalogue: fleetCatalogue(), MaxHoursPerShift: 8, UnitOfWork: d.uow}
 	certify := &usecases.CertifyAssociate{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now.Add(time.Second)}, UnitOfWork: d.uow}
 
 	if _, err := start.Execute(ctx, "A1", nil); err != nil {
@@ -315,10 +368,10 @@ func TestOutboxRelay_PublishesInIdOrderAcrossTopicsAndMarksRows(t *testing.T) {
 	// AssociateShiftStarted(analytics), ShiftPlanCommitted(integration),
 	// ShiftPlanCommitted(analytics), AssociateCertified(analytics).
 	want := []struct{ topic, typ string }{
-		{outboundkafka.AnalyticsTopic, "AssociateShiftStarted"},
-		{outboundkafka.Topic, "ShiftPlanCommitted"},
-		{outboundkafka.AnalyticsTopic, "ShiftPlanCommitted"},
-		{outboundkafka.AnalyticsTopic, "AssociateCertified"},
+		{outboundkafka.AnalyticsTopic, cloudevents.TypeAssociateShiftStarted},
+		{outboundkafka.Topic, cloudevents.TypeShiftPlanCommitted},
+		{outboundkafka.AnalyticsTopic, cloudevents.TypeShiftPlanCommitted},
+		{outboundkafka.AnalyticsTopic, cloudevents.TypeAssociateCertified},
 	}
 	if n != len(want) || len(sink.sent) != len(want) {
 		t.Fatalf("expected %d published, got n=%d sent=%d", len(want), n, len(sink.sent))
@@ -330,6 +383,18 @@ func TestOutboxRelay_PublishesInIdOrderAcrossTopicsAndMarksRows(t *testing.T) {
 	}
 	if string(sink.sent[0].Key) != "A1" {
 		t.Fatalf("analytics key must be the aggregate id, got %q", sink.sent[0].Key)
+	}
+	// The relay republishes the exact persisted bytes: the CloudEvents id was
+	// minted once at Encode time, so the relayed id is the stored id.
+	var storedValue []byte
+	if err := pool.QueryRow(ctx, "SELECT value FROM outbox_events ORDER BY id LIMIT 1").Scan(&storedValue); err != nil {
+		t.Fatalf("read stored value: %v", err)
+	}
+	if string(storedValue) != string(sink.sent[0].Value) {
+		t.Fatalf("relayed value differs from the persisted outbox value")
+	}
+	if e, err := cloudevents.Decode(sink.sent[0].Value); err != nil || e.ID() == "" {
+		t.Fatalf("relayed message is not a CloudEvent with an id: %v", err)
 	}
 	if got := countOutbox(t, pool, "published_at IS NULL"); got != 0 {
 		t.Fatalf("expected every row marked published, %d still pending", got)
@@ -363,13 +428,13 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRecoversInOrder(t *testing.T
 		t.Fatalf("break: %v", err)
 	}
 
-	sink := &recordingSink{failOn: "AssociateCertified", failErr: errors.New("broker down")}
+	sink := &recordingSink{failOn: cloudevents.TypeAssociateCertified, failErr: errors.New("broker down")}
 	relay := postgres.NewOutboxRelay(pool, sink, slog.Default())
 	n, err := relay.RelayOnce(ctx)
 	if err == nil {
 		t.Fatal("expected the failing row to surface an error")
 	}
-	if n != 1 || len(sink.sent) != 1 || sink.sent[0].EventType != "AssociateShiftStarted" {
+	if n != 1 || len(sink.sent) != 1 || sink.sent[0].EventType != cloudevents.TypeAssociateShiftStarted {
 		t.Fatalf("expected only AssociateShiftStarted published before the failure, got n=%d sent=%v", n, sink.sent)
 	}
 	if got := countOutbox(t, pool, "published_at IS NULL"); got != 2 {
@@ -377,13 +442,13 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRecoversInOrder(t *testing.T
 	}
 	var attempts int
 	var lastErr string
-	if err := pool.QueryRow(ctx, "SELECT attempts, coalesce(last_error,'') FROM outbox_events WHERE event_type = 'AssociateCertified'").Scan(&attempts, &lastErr); err != nil {
+	if err := pool.QueryRow(ctx, "SELECT attempts, coalesce(last_error,'') FROM outbox_events WHERE event_type = $1", cloudevents.TypeAssociateCertified).Scan(&attempts, &lastErr); err != nil {
 		t.Fatalf("read failed row: %v", err)
 	}
 	if attempts != 1 || lastErr == "" {
 		t.Fatalf("expected the failed row to record the attempt, got attempts=%d last_error=%q", attempts, lastErr)
 	}
-	if got := countOutbox(t, pool, "event_type = 'AssociateBreakStarted' AND attempts = 0"); got != 1 {
+	if got := countOutbox(t, pool, "event_type = '"+cloudevents.TypeAssociateBreakStarted+"' AND attempts = 0"); got != 1 {
 		t.Fatal("the row behind the failure must remain untouched")
 	}
 
@@ -393,13 +458,13 @@ func TestOutboxRelay_SinkFailure_StopsAtFailedRowAndRecoversInOrder(t *testing.T
 	if err != nil || n != 2 {
 		t.Fatalf("recovery pass: n=%d err=%v", n, err)
 	}
-	if sink.sent[1].EventType != "AssociateCertified" || sink.sent[2].EventType != "AssociateBreakStarted" {
+	if sink.sent[1].EventType != cloudevents.TypeAssociateCertified || sink.sent[2].EventType != cloudevents.TypeAssociateBreakStarted {
 		t.Fatalf("expected AssociateCertified then AssociateBreakStarted after recovery, got %v", sink.sent)
 	}
 	if got := countOutbox(t, pool, "published_at IS NULL"); got != 0 {
 		t.Fatalf("expected outbox drained, %d pending", got)
 	}
-	if got := countOutbox(t, pool, "event_type = 'AssociateCertified' AND attempts = 2 AND last_error IS NULL"); got != 1 {
+	if got := countOutbox(t, pool, "event_type = '"+cloudevents.TypeAssociateCertified+"' AND attempts = 2 AND last_error IS NULL"); got != 1 {
 		t.Fatal("expected the recovered row to clear last_error and count both attempts")
 	}
 }

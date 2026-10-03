@@ -52,8 +52,10 @@ read-only at `GET /paths/{pathId}/labor-plan-view`. That translation step is an
 anti-corruption boundary in the classic sense: this context's model does not
 leak into Work Planning's aggregate.
 
-**The published language is stable and narrow.** One event type, a flat
-payload of six scalars, one message per `PathPlan` line. Nothing about
+**The published language is stable and narrow.** One event type
+(`com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`, a
+CloudEvents 1.0 event — [ADR 0026](../adr/0026-cloudevents-mandatory-event-envelope.md)),
+a `data` payload of six scalars, one message per `PathPlan` line. Nothing about
 `AssociateShift`, nothing about individual assignments, nothing about break
 state. What the customer gets is the *plan*, not the roster.
 
@@ -66,8 +68,9 @@ table.
 
 The one live edge is narrow and physical. On every `CommitShiftPlan`, this
 context reads `fulfillment-execution`'s installed station count for each
-path's capability (`GET /capacity/{capability}`) and treats it as a ceiling on
-planned heads ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)). This
+path's capability (`GET /capacity/{capability}`, the capability resolved from
+the process-path catalogue's `requiredCapabilities`, never the raw path id) and
+treats it as a ceiling on planned heads ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)). This
 makes it a downstream Conformist on a *count*, not on the task model.
 
 This is an ecosystem fact worth stating explicitly, because both services deal

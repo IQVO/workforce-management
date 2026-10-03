@@ -3,7 +3,7 @@ id: integration
 title: Integration
 sidebar_label: Integration
 sidebar_position: 4
-description: The topics this service publishes and consumes, its two synchronous sibling calls, the envelope on the wire, and how to smoke-test it.
+description: The topics this service publishes and consumes, its two synchronous sibling calls, the CloudEvents wire format, and how to smoke-test it.
 ---
 
 # Integration
@@ -32,7 +32,7 @@ therefore live there.
 | | |
 | --- | --- |
 | **Topic** | `warehouse.workforce.events` |
-| **Event** | `ShiftPlanCommitted` — and only this one, today |
+| **Event** | `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` — the only type on this topic |
 | **Trigger** | a successful `CommitShiftPlan` |
 | **Fan-out** | **one message per `PathPlan` line** |
 | **Client** | `github.com/segmentio/kafka-go` |
@@ -71,16 +71,23 @@ about message granularity.
 
 ## The envelope on the wire
 
-The Kafka adapter writes the **flat cross-service envelope** that every
-`warehouse-systems` service shares, exactly as specified in this repo's
-`INTEGRATION.md`:
+Every message on both topics is a **CloudEvents 1.0** event in structured
+content mode — mandatory, no other envelope, no toggle
+([ADR 0026](../adr/0026-cloudevents-mandatory-event-envelope.md)). The Kafka
+message value is the JSON event format and every message carries the header
+`content-type: application/cloudevents+json; charset=UTF-8` next to the W3C
+trace headers. One line of a committed plan, byte for byte:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "2026-08-21T22:00:00Z",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "9f1c2b7e-4c3a-4a1d-9f0b-6c2b8a7d1e33",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "bldg-1/shift-1",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "2026-08-21T22:00:00Z",
   "data": {
     "building_id": "bldg-1",
     "shift_id": "shift-1",
@@ -92,25 +99,19 @@ The Kafka adapter writes the **flat cross-service envelope** that every
 }
 ```
 
-`event_id` is a UUID v4 generated at publish time; `source` is always this
-service's own name; `occurred_at` is RFC 3339 UTC.
+- `id` is a UUID v4 minted once per line message when the event is encoded and
+  persisted with the outbox row, so a relay retry republishes the same id.
+  Every line of a fan-out has its own id.
+- `subject` is the ShiftPlan aggregate id `<buildingId>/<shiftId>` — the same
+  value as the Kafka key, so every line of a plan lands on one partition.
+- `time` is the domain occurred-at, RFC 3339 UTC.
+- `dataschema` is `...:events:...` on this topic and `...:analytics:...` on
+  `warehouse.workforce.analytics`; the `type` is the same on both.
 
-:::caution The wire format and the AsyncAPI catalog differ today
-`apis/asyncapi.yaml` documents the **CloudEvents 1.0 structured-mode** envelope
-(`specversion`/`id`/`source`/`type`/`subject`/`time`/`datacontenttype` at the
-top level) as this context's published contract, with reverse-DNS `type` values
-like
-`com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`.
-
-The shipped Kafka adapter still writes the older flat envelope shown above,
-because that is what `wes-work-planning`'s consumer parses today and what the
-cross-service smoke test was verified against. The AsyncAPI catalog is the
-**target** contract; the flat envelope is what is **on the wire** as of this
-version. Both are documented rather than one being quietly presented as the
-other. See the [Events page](../api-reference/events.md) for the full
-CloudEvents catalog and [ADR 0004](../adr/0004-kafka-integration-events-and-cloudevents-catalog.md)
-for the reasoning and the migration path.
-:::
+Helpers live in one package, `internal/adapters/kafka/cloudevents`
+(`New`/`Decode`/`ContentTypeHeader`, built on the official
+`github.com/cloudevents/sdk-go/v2/event`). The full catalog is on the
+[Events page](../api-reference/events.md).
 
 ## Smoke-testing the edge
 
@@ -141,7 +142,8 @@ kafka-console-consumer.sh \
 
 ## What is deliberately not published
 
-`LaborAssigned`, `LaborReassigned` and `PathUnderstaffed` stay in-process.
+`LaborAssigned`, `LaborReassigned` and `PathUnderstaffed` never go on the
+integration topic; they reach only this service's own analytics topic.
 
 Publishing individual assignment moves would let a downstream context
 reconstruct a per-associate location feed — exactly the picture the
@@ -149,8 +151,9 @@ reconstruct a per-associate location feed — exactly the picture the
 real downstream need appears, the right answer is a read-model endpoint with a
 defined shape, not a firehose of moves.
 
-The remaining `AssociateShift` events are in-process for the simpler reason
-that nobody has asked: no sibling consumes roster or break events today.
+The remaining `AssociateShift` events stay off the integration topic for the
+simpler reason that nobody has asked: no sibling consumes roster or break
+events.
 
 ## What is consumed
 
@@ -169,11 +172,20 @@ every start:
   `ProposePathPlan` and the observed idle share to `GetStaffingGap` and
   `ProposePathPlan`.
 
+Both consumers decode every message with the CloudEvents SDK, dispatch on the
+full `type` (`com.warehouse.wes.process-path-management.processpath.ProcessPathCreated`
+/ `Updated` / `Deactivated` and
+`com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`), and
+log at WARN and skip anything that is not a valid CloudEvents 1.0 event. The
+labor-performance cache also dedupes on the CloudEvents `id`, because its
+running mean is a sum.
+
 Both consumers use a **per-process-unique consumer group** (prefix + host +
 PID + timestamp), so every process replays the full history. Before serving
 traffic, each one waits up to 60s (`WaitReadyTimeout`) for the replay to catch
 up. Neither writes to Postgres, so there is no processed-events table on the
-OLTP side. The only dedupe table (`analytics_processed_events`) belongs to
+OLTP side. The only dedupe table (`analytics_processed_events`, keyed by the
+CloudEvents `id`) belongs to
 the analytics projector
 (`cmd/workforce-projector`), which consumes this service's own
 `warehouse.workforce.analytics` topic under the fixed group
@@ -183,7 +195,11 @@ the analytics projector
 
 - **`fulfillment-execution` — `GET /capacity/{capability}`**
   (`internal/adapters/outbound/fulfillmentexecution`). It is called for every
-  line of every `CommitShiftPlan` and is **fail-loud**: any failure rejects the
+  distinct capability the commit's paths require — each line's path is first
+  resolved through the process-path catalogue to its `requiredCapabilities`
+  (path `PICK` → capability `pick`; the path id itself is never sent), and a
+  path's ceiling is the smallest count across its capabilities. It is
+  **fail-loud**: any failure rejects the
   whole commit with `503 installed-capacity-unavailable`. The default
   `permissive` client always fails, so a commit only succeeds when
   `INSTALLED_CAPACITY_MODE=http`.

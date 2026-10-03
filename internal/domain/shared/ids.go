@@ -48,3 +48,13 @@ func NewCertification(v string) (Certification, error) {
 	}
 	return Certification(v), nil
 }
+
+// Capability is a physical station capability as fulfillment-execution's
+// Station registry records it (e.g. "pick", "pack", "rebin", "slam"). It is
+// deliberately a DIFFERENT type from PathId: a process path (e.g. the
+// canonical "PICK", or a real "pick-zone-a") declares the capabilities a
+// station must hold to serve it via the process-path catalogue's
+// requiredCapabilities, and the two vocabularies do not share a case or
+// shape convention. Never convert a PathId into a Capability by casting —
+// resolve it through the catalogue (see ADR-0014's addendum).
+type Capability string

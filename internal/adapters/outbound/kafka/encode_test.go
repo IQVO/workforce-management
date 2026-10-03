@@ -2,7 +2,6 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -12,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -63,20 +63,17 @@ func TestPublisherEncode_OneMessagePerLineOnIntegrationTopic(t *testing.T) {
 		if enc.Topic != Topic {
 			t.Errorf("topic = %q, want %q", enc.Topic, Topic)
 		}
-		if enc.EventType != "ShiftPlanCommitted" {
-			t.Errorf("event_type = %q, want ShiftPlanCommitted", enc.EventType)
+		if enc.EventType != cloudevents.TypeShiftPlanCommitted {
+			t.Errorf("EventType = %q, want %q", enc.EventType, cloudevents.TypeShiftPlanCommitted)
 		}
 		if string(enc.Key) != "BLD1/SHIFT1" {
 			t.Errorf("integration messages must be keyed by the ShiftPlan aggregate id (buildingId/shiftId), got %q", enc.Key)
 		}
-		var env envelope
-		if err := json.Unmarshal(enc.Value, &env); err != nil {
-			t.Fatalf("unmarshal envelope: %v", err)
+		_, data := assertCommittedLineEvent(t, enc.Value)
+		if v, ok := headerValue(enc.Headers, "content-type"); !ok || v != cloudevents.MediaType {
+			t.Errorf("content-type header = %q, want %q", v, cloudevents.MediaType)
 		}
-		if env.Source != source || env.EventID == "" || env.Data.BuildingId != "BLD1" {
-			t.Errorf("unexpected envelope %+v", env)
-		}
-		seen[env.Data.PathId] = true
+		seen[data.PathId] = true
 	}
 	for _, l := range lines {
 		if !seen[string(l.PathId)] {
@@ -99,6 +96,9 @@ func TestPublisherEncode_InjectsTraceHeadersWhenSpanActive(t *testing.T) {
 	}
 	if v, ok := headerValue(encoded[0].Headers, "traceparent"); !ok || v == "" {
 		t.Fatalf("expected a traceparent header on the encoded message, got headers=%v", encoded[0].Headers)
+	}
+	if v, ok := headerValue(encoded[0].Headers, "content-type"); !ok || v != cloudevents.MediaType {
+		t.Fatalf("expected the content-type header alongside the trace headers, got headers=%v", encoded[0].Headers)
 	}
 }
 
@@ -129,20 +129,23 @@ func TestAnalyticsPublisherEncode_TopicKeyTypeAndHeaders(t *testing.T) {
 		t.Fatalf("expected the unknown event to be skipped (2 encoded), got %d", len(encoded))
 	}
 	first := encoded[0]
-	if first.Topic != AnalyticsTopic || first.EventType != "LaborAssigned" || string(first.Key) != "a6" {
+	if first.Topic != AnalyticsTopic || first.EventType != cloudevents.TypeLaborAssigned || string(first.Key) != "a6" {
 		t.Errorf("unexpected first message: topic=%q type=%q key=%q", first.Topic, first.EventType, first.Key)
 	}
-	var env AnalyticsEnvelope
-	if err := json.Unmarshal(first.Value, &env); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	e, err := cloudevents.Decode(first.Value)
+	if err != nil {
+		t.Fatalf("decode: %v", err)
 	}
-	if env.EventId != "evt-1" || env.SchemaVersion != analyticsSchemaVersion || !env.OccurredAt.Equal(at) {
-		t.Errorf("unexpected envelope %+v", env)
+	if e.ID() != "evt-1" || e.DataSchema() != "urn:warehouse:workforce-management:analytics:LaborAssigned:v1" || !e.Time().Equal(at) {
+		t.Errorf("unexpected event %+v", e)
 	}
 	if _, ok := headerValue(first.Headers, "traceparent"); !ok {
 		t.Errorf("expected traceparent header, got %v", first.Headers)
 	}
-	if encoded[1].EventType != "PathUnderstaffed" || string(encoded[1].Key) != "pack" {
+	if v, ok := headerValue(first.Headers, "content-type"); !ok || v != cloudevents.MediaType {
+		t.Errorf("expected content-type header, got %v", first.Headers)
+	}
+	if encoded[1].EventType != cloudevents.TypePathUnderstaffed || string(encoded[1].Key) != "pack" {
 		t.Errorf("unexpected second message: type=%q key=%q", encoded[1].EventType, encoded[1].Key)
 	}
 }

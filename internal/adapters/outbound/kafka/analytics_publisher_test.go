@@ -2,7 +2,6 @@ package kafka_test
 
 import (
 	"context"
-	"encoding/json"
 	"testing"
 	"time"
 
@@ -13,7 +12,7 @@ import (
 )
 
 // fakeAnalyticsWriter captures the messages handed to WriteMessages so a test
-// can assert on the published envelope without a live broker.
+// can assert on the published CloudEvent without a live broker.
 type fakeAnalyticsWriter struct {
 	msgs []segmentio.Message
 }
@@ -23,170 +22,125 @@ func (w *fakeAnalyticsWriter) WriteMessages(_ context.Context, msgs ...segmentio
 	return nil
 }
 
-// analyticsPublishAt is the fixed occurred_at every publisher case is built
-// with and asserted against.
-var analyticsPublishAt = time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+// goldenAt is the fixed occurred-at every golden case is built with. It is
+// deliberately NOT UTC so the golden also proves `time` is normalised to UTC.
+var goldenAt = time.Date(2026, 1, 2, 0, 4, 5, 0, time.FixedZone("BRT", -3*3600))
 
-// analyticsPublishCase pins, for one event type, the envelope the analytics
-// publisher must write: routing key, event_type, and one representative
-// data field from the payload.
-type analyticsPublishCase struct {
-	name          string
-	event         shared.DomainEvent
-	wantType      string
-	wantKey       string
-	wantDataField string
-	wantDataValue any
+// analyticsGoldenCase pins, for one event type, the exact CloudEvents 1.0
+// structured-mode JSON the analytics publisher must write (every required
+// attribute, the full type, subject, dataschema and the byte-identical data
+// payload) plus the Kafka key.
+type analyticsGoldenCase struct {
+	name   string
+	event  shared.DomainEvent
+	key    string
+	golden string
 }
 
-// analyticsPublishCases is the per-event-type contract table: every domain
-// event this context raises must reach the analytics topic with the right
-// key, event_type, and payload shape.
-var analyticsPublishCases = []analyticsPublishCase{
+// analyticsGoldenCases is the per-event-type wire contract for
+// warehouse.workforce.analytics (ADR-0026).
+var analyticsGoldenCases = []analyticsGoldenCase{
 	{
-		name:          "AssociateShiftStarted",
-		event:         shared.NewAssociateShiftStarted(analyticsPublishAt, "a1", nil),
-		wantType:      "AssociateShiftStarted",
-		wantKey:       "a1",
-		wantDataField: "associate_id",
-		wantDataValue: "a1",
+		name:   "AssociateShiftStarted",
+		event:  shared.NewAssociateShiftStarted(goldenAt, "a1", nil),
+		key:    "a1",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.associate.AssociateShiftStarted","subject":"a1","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:AssociateShiftStarted:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a1"}}`,
 	},
 	{
-		name:          "AssociateShiftEnded",
-		event:         shared.NewAssociateShiftEnded(analyticsPublishAt, "a2"),
-		wantType:      "AssociateShiftEnded",
-		wantKey:       "a2",
-		wantDataField: "associate_id",
-		wantDataValue: "a2",
+		name:   "AssociateShiftEnded",
+		event:  shared.NewAssociateShiftEnded(goldenAt, "a2"),
+		key:    "a2",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.associate.AssociateShiftEnded","subject":"a2","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:AssociateShiftEnded:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a2"}}`,
 	},
 	{
-		name:          "AssociateBreakStarted",
-		event:         shared.NewAssociateBreakStarted(analyticsPublishAt, "a3"),
-		wantType:      "AssociateBreakStarted",
-		wantKey:       "a3",
-		wantDataField: "associate_id",
-		wantDataValue: "a3",
+		name:   "AssociateBreakStarted",
+		event:  shared.NewAssociateBreakStarted(goldenAt, "a3"),
+		key:    "a3",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.associate.AssociateBreakStarted","subject":"a3","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:AssociateBreakStarted:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a3"}}`,
 	},
 	{
-		name:          "AssociateBreakEnded",
-		event:         shared.NewAssociateBreakEnded(analyticsPublishAt, "a4"),
-		wantType:      "AssociateBreakEnded",
-		wantKey:       "a4",
-		wantDataField: "associate_id",
-		wantDataValue: "a4",
+		name:   "AssociateBreakEnded",
+		event:  shared.NewAssociateBreakEnded(goldenAt, "a4"),
+		key:    "a4",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.associate.AssociateBreakEnded","subject":"a4","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:AssociateBreakEnded:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a4"}}`,
 	},
 	{
-		name:          "AssociateCertified",
-		event:         shared.NewAssociateCertified(analyticsPublishAt, "a5", "hazmat"),
-		wantType:      "AssociateCertified",
-		wantKey:       "a5",
-		wantDataField: "certification",
-		wantDataValue: "hazmat",
+		name:   "AssociateCertified",
+		event:  shared.NewAssociateCertified(goldenAt, "a5", "hazmat"),
+		key:    "a5",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.associate.AssociateCertified","subject":"a5","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:AssociateCertified:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a5","certification":"hazmat"}}`,
 	},
 	{
-		name:          "LaborAssigned",
-		event:         shared.NewLaborAssigned(analyticsPublishAt, "a6", "pack"),
-		wantType:      "LaborAssigned",
-		wantKey:       "a6",
-		wantDataField: "path_id",
-		wantDataValue: "pack",
+		name:   "LaborAssigned",
+		event:  shared.NewLaborAssigned(goldenAt, "a6", "pack"),
+		key:    "a6",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborAssigned","subject":"a6","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborAssigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a6","path_id":"pack"}}`,
 	},
 	{
-		name:          "LaborReassigned",
-		event:         shared.NewLaborReassigned(analyticsPublishAt, "a7", "pick", "pack"),
-		wantType:      "LaborReassigned",
-		wantKey:       "a7",
-		wantDataField: "to_path_id",
-		wantDataValue: "pack",
+		name:   "LaborReassigned",
+		event:  shared.NewLaborReassigned(goldenAt, "a7", "pick", "pack"),
+		key:    "a7",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborReassigned","subject":"a7","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborReassigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a7","from_path_id":"pick","to_path_id":"pack"}}`,
 	},
 	{
-		name:          "PathUnderstaffed",
-		event:         shared.NewPathUnderstaffed(analyticsPublishAt, "pack", 5, 3),
-		wantType:      "PathUnderstaffed",
-		wantKey:       "pack",
-		wantDataField: "active_heads",
-		wantDataValue: float64(3),
+		name:   "PathUnderstaffed",
+		event:  shared.NewPathUnderstaffed(goldenAt, "pack", 5, 3),
+		key:    "pack",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1","time":"2026-01-02T03:04:05Z","data":{"active_heads":3,"path_id":"pack","planned_heads":5}}`,
 	},
 	{
-		name:          "ShiftPlanProposed",
-		event:         shared.NewShiftPlanProposed(analyticsPublishAt, "b1", "pack", 4, 10.0),
-		wantType:      "ShiftPlanProposed",
-		wantKey:       "pack",
-		wantDataField: "building_id",
-		wantDataValue: "b1",
+		name:   "ShiftPlanProposed",
+		event:  shared.NewShiftPlanProposed(goldenAt, "b1", "pack", 4, 10.5),
+		key:    "pack",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b1","path_id":"pack","planned_heads":4,"planned_rate":10.5}}`,
 	},
 	{
-		name:          "ShiftPlanCommitted",
-		event:         shared.NewShiftPlanCommitted(analyticsPublishAt, "b2", "s2"),
-		wantType:      "ShiftPlanCommitted",
-		wantKey:       "b2",
-		wantDataField: "shift_id",
-		wantDataValue: "s2",
+		name:   "ShiftPlanCommitted",
+		event:  shared.NewShiftPlanCommitted(goldenAt, "b2", "s2"),
+		key:    "b2",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted","subject":"b2/s2","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b2","shift_id":"s2"}}`,
 	},
 }
 
-// assertAnalyticsEnvelope publishes one case's event through the analytics
-// publisher and asserts the single envelope it wrote: routing key, the
-// fixed event_id/source/schema_version/occurred_at wrapper, and one
-// representative data field.
-func assertAnalyticsEnvelope(t *testing.T, tt analyticsPublishCase) {
-	t.Helper()
-	w := &fakeAnalyticsWriter{}
-	p := outboundkafka.NewAnalyticsPublisher(nil, func() string { return "evt-fixed" })
-	p.Writer = w
-
-	if err := p.Publish(context.Background(), tt.event); err != nil {
-		t.Fatalf("Publish: %v", err)
+func headerOf(msg segmentio.Message, key string) []string {
+	var out []string
+	for _, h := range msg.Headers {
+		if h.Key == key {
+			out = append(out, string(h.Value))
+		}
 	}
-	if len(w.msgs) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(w.msgs))
-	}
-	msg := w.msgs[0]
-	if string(msg.Key) != tt.wantKey {
-		t.Errorf("key = %q, want %q", string(msg.Key), tt.wantKey)
-	}
-
-	var env outboundkafka.AnalyticsEnvelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
-		t.Fatalf("unmarshal envelope: %v", err)
-	}
-	if env.EventType != tt.wantType {
-		t.Errorf("event_type = %q, want %q", env.EventType, tt.wantType)
-	}
-	if env.EventId != "evt-fixed" {
-		t.Errorf("event_id = %q, want evt-fixed", env.EventId)
-	}
-	if env.Source != "workforce-management" {
-		t.Errorf("source = %q, want workforce-management", env.Source)
-	}
-	if env.SchemaVersion != 1 {
-		t.Errorf("schema_version = %d, want 1", env.SchemaVersion)
-	}
-	if !env.OccurredAt.Equal(analyticsPublishAt) {
-		t.Errorf("occurred_at = %v, want %v", env.OccurredAt, analyticsPublishAt)
-	}
-
-	var data map[string]any
-	if err := json.Unmarshal(env.Data, &data); err != nil {
-		t.Fatalf("unmarshal data: %v", err)
-	}
-	if got := data[tt.wantDataField]; got != tt.wantDataValue {
-		t.Errorf("data[%q] = %v (%T), want %v (%T)", tt.wantDataField, got, got, tt.wantDataValue, tt.wantDataValue)
-	}
+	return out
 }
 
-func TestAnalyticsPublisher_PublishesEachEventType(t *testing.T) {
-	for _, tt := range analyticsPublishCases {
+func TestAnalyticsPublisher_GoldenCloudEventPerEventType(t *testing.T) {
+	for _, tt := range analyticsGoldenCases {
 		t.Run(tt.name, func(t *testing.T) {
-			assertAnalyticsEnvelope(t, tt)
+			w := &fakeAnalyticsWriter{}
+			p := outboundkafka.NewAnalyticsPublisherWithWriter(w, func() string { return "evt-fixed" })
+
+			if err := p.Publish(context.Background(), tt.event); err != nil {
+				t.Fatalf("Publish: %v", err)
+			}
+			if len(w.msgs) != 1 {
+				t.Fatalf("expected 1 message, got %d", len(w.msgs))
+			}
+			msg := w.msgs[0]
+			if string(msg.Key) != tt.key {
+				t.Errorf("key = %q, want %q", msg.Key, tt.key)
+			}
+			if got := string(msg.Value); got != tt.golden {
+				t.Errorf("value mismatch\n got: %s\nwant: %s", got, tt.golden)
+			}
+			if ct := headerOf(msg, "content-type"); len(ct) != 1 || ct[0] != "application/cloudevents+json; charset=UTF-8" {
+				t.Errorf("content-type header = %v, want exactly one application/cloudevents+json; charset=UTF-8", ct)
+			}
 		})
 	}
 }
 
 func TestAnalyticsPublisher_SkipsUnknownEvents(t *testing.T) {
 	w := &fakeAnalyticsWriter{}
-	p := outboundkafka.NewAnalyticsPublisher(nil, func() string { return "evt" })
-	p.Writer = w
+	p := outboundkafka.NewAnalyticsPublisherWithWriter(w, func() string { return "evt" })
 
 	if err := p.Publish(context.Background(), unknownEvent{}); err != nil {
 		t.Fatalf("Publish: %v", err)

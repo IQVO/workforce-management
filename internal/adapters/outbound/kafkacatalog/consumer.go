@@ -39,7 +39,7 @@ package kafkacatalog
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -49,12 +49,13 @@ import (
 
 	kafkago "github.com/segmentio/kafka-go"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 )
 
 // Topic is process-path-management's publish topic — this service has no
 // business knowing anything else about that service beyond this topic
-// name and the envelope/payload shape below.
+// name, the CloudEvents `type` strings and the payload shape below.
 const Topic = "warehouse.process-path-management.events"
 
 // consumerGroupPrefix names this service's dedicated, PER-PROCESS
@@ -62,21 +63,6 @@ const Topic = "warehouse.process-path-management.events"
 // the package doc comment's bug (2) for why per-process uniqueness is a
 // correctness requirement here, not a cosmetic choice.
 const consumerGroupPrefix = "workforce-management-process-path-catalogue"
-
-// Event types this consumer acts on — process-path-management's own
-// past-tense domain events, verbatim.
-const (
-	eventTypeCreated     = "ProcessPathCreated"
-	eventTypeUpdated     = "ProcessPathUpdated"
-	eventTypeDeactivated = "ProcessPathDeactivated"
-)
-
-// envelope is the CloudEvents-like wrapper shared across every
-// warehouse-systems publisher.
-type envelope struct {
-	EventType string          `json:"event_type"`
-	Data      json.RawMessage `json:"data"`
-}
 
 // pathData is the payload shape for all three event types on Topic.
 // Direct is read but has no home in this service's own
@@ -143,12 +129,7 @@ func NewConsumerForTopic(ctx context.Context, brokers []string, topic string, lo
 		return nil, fmt.Errorf("kafkacatalog: determine readiness target: %w", err)
 	}
 
-	reader := kafkago.NewReader(kafkago.ReaderConfig{
-		Brokers:     brokers,
-		Topic:       topic,
-		GroupID:     uniqueConsumerGroup(),
-		StartOffset: kafkago.FirstOffset,
-	})
+	reader := kafkago.NewReader(readerConfig(brokers, topic, uniqueConsumerGroup()))
 
 	c := &Consumer{
 		Reader:  reader,
@@ -164,6 +145,41 @@ func NewConsumerForTopic(ctx context.Context, brokers []string, topic string, lo
 		c.markReady()
 	}
 	return c, nil
+}
+
+// replayCommitInterval makes the replay reader commit offsets
+// periodically and asynchronously instead of after every message.
+//
+// With a GroupID set and CommitInterval left at zero, kafka-go's
+// Reader.ReadMessage performs a SYNCHRONOUS CommitMessages broker round
+// trip after EVERY message, which turns boot replay into
+// O(history) x RTT. Against the real cluster broker that capped the replay
+// at ~126 msg/s (2,000 messages in 15.8s) versus ~3,200 msg/s (10,000
+// messages in 3.1s) with a 1s interval — slow enough that order-management
+// could not replay warehouse.work-planning.events (~10,600 messages)
+// inside WaitReadyTimeout and was killed in a CrashLoopBackOff.
+//
+// Async commits are safe here, and only here: the consumer group is unique
+// to this process instance (uniqueConsumerGroup), its committed offsets are
+// never resumed by any other process, and a restart replays from
+// FirstOffset under a NEW group. Commit durability is therefore irrelevant
+// to correctness — losing the last interval's commits on a crash changes
+// nothing — so the per-message synchronous commit is pure overhead. Do NOT
+// copy this to a consumer on a fixed, shared group that commits after
+// handling (at-least-once): there the synchronous commit is deliberate.
+const replayCommitInterval = time.Second
+
+// readerConfig builds the kafka-go ReaderConfig for the full-replay cache
+// reader: a process-unique group starting at the earliest offset, with
+// periodic asynchronous commits (see replayCommitInterval).
+func readerConfig(brokers []string, topic, group string) kafkago.ReaderConfig {
+	return kafkago.ReaderConfig{
+		Brokers:        brokers,
+		Topic:          topic,
+		GroupID:        group,
+		StartOffset:    kafkago.FirstOffset,
+		CommitInterval: replayCommitInterval,
+	}
 }
 
 // uniqueConsumerGroup builds a group id unique to this process instance
@@ -289,7 +305,9 @@ func (c *Consumer) Ids() []string {
 
 // Run consumes Topic until ctx is cancelled or the reader returns a
 // fatal error. A handling error is logged and the loop continues, so one
-// malformed message cannot wedge this consumer.
+// malformed message cannot wedge this consumer. A message that is not a
+// valid CloudEvents 1.0 event (including the retired flat envelope) is
+// logged at WARN and skipped — this replay consumer has no DLQ (ADR-0026).
 func (c *Consumer) Run(ctx context.Context) error {
 	for {
 		msg, err := c.Reader.ReadMessage(ctx)
@@ -299,7 +317,10 @@ func (c *Consumer) Run(ctx context.Context) error {
 			}
 			return err
 		}
-		if err := c.handle(msg); err != nil {
+		if err := c.handle(msg); errors.Is(err, cloudevents.ErrNotCloudEvent) {
+			c.Logger.WarnContext(ctx, "process-path catalogue: skipping message that is not a valid CloudEvents 1.0 event",
+				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
+		} else if err != nil {
 			c.Logger.ErrorContext(ctx, "process-path catalogue message handling failed",
 				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
 		}
@@ -329,23 +350,26 @@ func (c *Consumer) checkReady(msg kafkago.Message) {
 	}
 }
 
+// handle decodes msg as a CloudEvents 1.0 event and dispatches on its FULL
+// `type` string. The catalogue is a latest-value-per-path cache, so a
+// redelivered id is an idempotent overwrite and needs no id-based dedupe.
 func (c *Consumer) handle(msg kafkago.Message) error {
-	var env envelope
-	if err := json.Unmarshal(msg.Value, &env); err != nil {
-		return fmt.Errorf("kafkacatalog: unmarshal envelope: %w", err)
+	e, err := cloudevents.Decode(msg.Value)
+	if err != nil {
+		return fmt.Errorf("kafkacatalog: %w", err)
 	}
 
-	switch env.EventType {
-	case eventTypeCreated, eventTypeUpdated:
+	switch e.Type() {
+	case cloudevents.TypeProcessPathCreated, cloudevents.TypeProcessPathUpdated:
 		var data pathData
-		if err := json.Unmarshal(env.Data, &data); err != nil {
-			return fmt.Errorf("kafkacatalog: unmarshal %s data: %w", env.EventType, err)
+		if err := e.DataAs(&data); err != nil {
+			return fmt.Errorf("kafkacatalog: decode %s data: %w", e.Type(), err)
 		}
 		c.applyUpsert(data)
-	case eventTypeDeactivated:
+	case cloudevents.TypeProcessPathDeactivated:
 		var data pathData
-		if err := json.Unmarshal(env.Data, &data); err != nil {
-			return fmt.Errorf("kafkacatalog: unmarshal %s data: %w", env.EventType, err)
+		if err := e.DataAs(&data); err != nil {
+			return fmt.Errorf("kafkacatalog: decode %s data: %w", e.Type(), err)
 		}
 		c.applyDeactivated(data.PathId)
 	default:

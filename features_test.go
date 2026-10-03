@@ -28,6 +28,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
 
@@ -55,8 +56,32 @@ func (c *fixedClock) Now() time.Time { return c.now }
 // fixtures here.
 type unlimitedInstalledCapacity struct{}
 
-func (unlimitedInstalledCapacity) InstalledCapacity(_ context.Context, _ shared.PathId) (int, error) {
+func (unlimitedInstalledCapacity) InstalledCapacity(_ context.Context, _ shared.Capability) (int, error) {
 	return math.MaxInt32, nil
+}
+
+// fleetCatalogue mirrors the fleet's real process-path catalogue
+// (process-path-management / warehouse-infra sortable-fc.yaml):
+// UPPER-case canonical path ids, each requiring the lower-case capability
+// stations are registered with in fulfillment-execution.
+func fleetCatalogue() *pathcatalog.Catalogue {
+	return pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "PICK", MatchPrefix: "pick", RequiredCapabilities: []string{"pick"}},
+		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
+		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
+		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+	})
+}
+
+// stationRegistry is a BDD-suite fake of fulfillment-execution's
+// GET /capacity/{capability}: it counts registered stations by the EXACT
+// capability string, and an unregistered capability is a real 0 -- the
+// same contract the live endpoint has, so a scenario querying by a path
+// id ("PICK") instead of a capability ("pick") sees 0, as in production.
+type stationRegistry map[shared.Capability]int
+
+func (r stationRegistry) InstalledCapacity(_ context.Context, capability shared.Capability) (int, error) {
+	return r[capability], nil
 }
 
 // newServer builds a fully wired composition of the service backed by
@@ -64,23 +89,31 @@ func (unlimitedInstalledCapacity) InstalledCapacity(_ context.Context, _ shared.
 // so no state leaks between scenarios. idleShare wires
 // usecases.ProposePathPlan's optional idle-share trim signal (nil is the
 // default, permissive configuration every other scenario exercises).
-func newServer(idleShare ports.IdleShareClient) *httptest.Server {
+// installedCapacity is the live fulfillment-execution ceiling (nil means
+// unlimitedInstalledCapacity). The process-path catalogue is always the
+// fleet's real one, exactly as cmd/workforce wires it.
+func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient) *httptest.Server {
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
 	assignments := memory.NewAssignmentRepo()
 	pub := events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
+	catalogue := fleetCatalogue()
+	if installedCapacity == nil {
+		installedCapacity = unlimitedInstalledCapacity{}
+	}
 
 	handler := &inboundhttp.Handler{
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: pub, Clock: clock},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: associates, Events: pub, Clock: clock},
 		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock, IdleShare: idleShare},
-		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: unlimitedInstalledCapacity{}, MaxHoursPerShift: maxHoursPerShift},
+		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: installedCapacity, Catalogue: catalogue, MaxHoursPerShift: maxHoursPerShift},
 		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
 		StartBreak:          &usecases.StartBreak{Associates: associates, Events: pub, Clock: clock},
 		EndBreak:            &usecases.EndBreak{Associates: associates, Events: pub, Clock: clock},
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: pub, Clock: clock, IdleShare: idleShare},
 		EndAssociateShift:   &usecases.EndAssociateShift{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
+		Catalogue:           catalogue,
 	}
 
 	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), ""))
@@ -101,18 +134,35 @@ type world struct {
 	server *httptest.Server
 	client *http.Client
 
+	// idleShare and stations configure the next server rebuild; both
+	// are reset per scenario.
+	idleShare ports.IdleShareClient
+	stations  stationRegistry
+
 	lastStatus      int
 	lastContentType string
 	lastBody        []byte
 }
 
 func (w *world) reset() {
-	w.stop()
-	w.server = newServer(nil)
-	w.client = w.server.Client()
+	w.idleShare = nil
+	w.stations = nil
+	w.rebuild()
 	w.lastStatus = 0
 	w.lastContentType = ""
 	w.lastBody = nil
+}
+
+// rebuild replaces the server under test with one wired to the world's
+// current idleShare/stations configuration.
+func (w *world) rebuild() {
+	w.stop()
+	var capacity ports.InstalledCapacityClient
+	if w.stations != nil {
+		capacity = w.stations
+	}
+	w.server = newServer(w.idleShare, capacity)
+	w.client = w.server.Client()
 }
 
 func (w *world) stop() {
@@ -471,9 +521,19 @@ func (w *world) observedIdleShareForPath(_, shareStr string) error {
 	if _, err := fmt.Sscanf(shareStr, "%g", &share); err != nil {
 		return fmt.Errorf("idle share %q: %w", shareStr, err)
 	}
-	w.stop()
-	w.server = newServer(fixedIdleShareClient{share: share})
-	w.client = w.server.Client()
+	w.idleShare = fixedIdleShareClient{share: share}
+	w.rebuild()
+	return nil
+}
+
+// stationsRegisteredWithCapability models fulfillment-execution's
+// Station registry: count stations registered holding capability.
+func (w *world) stationsRegisteredWithCapability(count int, capability string) error {
+	if w.stations == nil {
+		w.stations = stationRegistry{}
+	}
+	w.stations[shared.Capability(capability)] = count
+	w.rebuild()
 	return nil
 }
 
@@ -588,6 +648,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^associate "([^"]*)" has started a break$`, w.associateHasStartedABreak)
 	sc.Step(`^associate "([^"]*)" has ended their shift$`, w.associateHasEndedTheirShift)
 	sc.Step(`^the observed idle share for path "([^"]*)" is ([\d.]+)$`, w.observedIdleShareForPath)
+	sc.Step(`^fulfillment-execution has (\d+) stations? registered with capability "([^"]*)"$`, w.stationsRegisteredWithCapability)
 
 	// When
 	sc.Step(`^committing a ShiftPlan for building "([^"]*)" shift "([^"]*)" with lines:$`, w.commitShiftPlan)

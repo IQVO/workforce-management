@@ -10,8 +10,13 @@ description: One topic, one event, fanned out per path line — and why the Asyn
 
 ## Status
 
-Accepted. Kafka publishing added in commit `15a0530`; the AsyncAPI CloudEvents
-catalog added later in commit `af2181c`.
+Accepted; **envelope decision superseded by
+[ADR-0026](./0026-cloudevents-mandatory-event-envelope.md)**. Kafka publishing
+added in commit `15a0530`; the AsyncAPI CloudEvents catalog added later in
+commit `af2181c`. The flat envelope described below ("keep the flat envelope on
+the wire for now") is retired: CloudEvents 1.0 is now the only envelope on the
+wire, and the AsyncAPI catalog is no longer "ahead of" it. The topic, the
+one-way publish and the per-line fan-out still stand.
 
 ## Context
 

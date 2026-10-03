@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +17,7 @@ import (
 	tckafka "github.com/testcontainers/testcontainers-go/modules/kafka"
 
 	inboundkafka "github.com/claudioed/workforce-management/internal/adapters/inbound/kafka"
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 )
 
 // alwaysFailingProjection wraps a real report.ProjectionStore so
@@ -169,7 +171,7 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	defer func() { _ = writer.Close() }()
 	if err := writer.WriteMessages(ctx, kafkago.Message{
 		Key:   []byte(poisonEventId),
-		Value: laborAssignedEnvelopeJSON(t, poisonEventId, poisonPathId),
+		Value: laborAssignedEventJSON(t, poisonEventId, poisonPathId),
 	}); err != nil {
 		t.Fatalf("publish poison LaborAssigned: %v", err)
 	}
@@ -189,8 +191,8 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	if err := json.Unmarshal(dlqMsg.Value, &dlqPayload); err != nil {
 		t.Fatalf("DLQ message value is not the raw original JSON payload: %v", err)
 	}
-	if dlqPayload["event_id"] != poisonEventId {
-		t.Errorf("DLQ payload event_id = %v, want %q -- payload must be byte-identical to the original for manual replay", dlqPayload["event_id"], poisonEventId)
+	if dlqPayload["id"] != poisonEventId {
+		t.Errorf("DLQ payload id = %v, want %q -- payload must be byte-identical to the original for manual replay", dlqPayload["id"], poisonEventId)
 	}
 	assertHeader(t, dlqMsg.Headers, "x-dlq-source-topic", topic)
 	if h := headerValue(dlqMsg.Headers, "x-dlq-error"); h == "" {
@@ -205,11 +207,28 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	// not blocked behind the poison message.
 	if err := writer.WriteMessages(ctx, kafkago.Message{
 		Key:   []byte(fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano())),
-		Value: laborAssignedEnvelopeJSON(t, fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano()), healthyPathId),
+		Value: laborAssignedEventJSON(t, fmt.Sprintf("evt-dlq-good-%d", time.Now().UnixNano()), healthyPathId),
 	}); err != nil {
 		t.Fatalf("publish well-formed LaborAssigned: %v", err)
 	}
 	waitForApplied(t, ctx, projection, healthyPathId)
+
+	// A retired flat-envelope message is a deterministic poison message: it
+	// must be dead-lettered byte-identical, never parsed (ADR-0026).
+	legacy := []byte(`{"event_id":"legacy-1","event_type":"LaborAssigned","occurred_at":"2026-05-01T08:00:00Z","source":"workforce-management","schema_version":1,"data":{"associate_id":"a1","path_id":"legacy-path"}}`)
+	if err := writer.WriteMessages(ctx, kafkago.Message{Key: []byte("legacy-1"), Value: legacy}); err != nil {
+		t.Fatalf("publish legacy flat message: %v", err)
+	}
+	legacyDLQ, err := dlqReader.ReadMessage(dlqCtx)
+	if err != nil {
+		t.Fatalf("read legacy DLQ message: %v", err)
+	}
+	if string(legacyDLQ.Value) != string(legacy) {
+		t.Errorf("legacy DLQ value = %s, want the raw original bytes", legacyDLQ.Value)
+	}
+	if h := headerValue(legacyDLQ.Headers, "x-dlq-error"); !strings.Contains(h, "CloudEvents") {
+		t.Errorf("legacy DLQ x-dlq-error = %q, want a CloudEvents validation error", h)
+	}
 
 	consumeCancel()
 	select {
@@ -229,23 +248,20 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	}
 }
 
-func laborAssignedEnvelopeJSON(t *testing.T, eventId, pathId string) []byte {
+func laborAssignedEventJSON(t *testing.T, eventId, pathId string) []byte {
 	t.Helper()
-	data, err := json.Marshal(map[string]any{"associate_id": "a1", "path_id": pathId})
+	b, err := cloudevents.New(cloudevents.Spec{
+		ID:        eventId,
+		Entity:    cloudevents.EntityAssignment,
+		EventName: "LaborAssigned",
+		Subject:   "a1",
+		Time:      time.Now().UTC(),
+		Stream:    cloudevents.StreamAnalytics,
+		Version:   1,
+		Data:      map[string]any{"associate_id": "a1", "path_id": pathId},
+	})
 	if err != nil {
-		t.Fatalf("marshal data: %v", err)
-	}
-	env := map[string]any{
-		"event_id":       eventId,
-		"event_type":     "LaborAssigned",
-		"occurred_at":    time.Now().UTC().Format(time.RFC3339),
-		"source":         "workforce-management",
-		"schema_version": 1,
-		"data":           json.RawMessage(data),
-	}
-	b, err := json.Marshal(env)
-	if err != nil {
-		t.Fatalf("marshal envelope: %v", err)
+		t.Fatalf("build cloudevent: %v", err)
 	}
 	return b
 }

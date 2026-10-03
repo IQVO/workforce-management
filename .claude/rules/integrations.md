@@ -21,10 +21,19 @@
   `GetStaffingGap` surfaces it as `observedIdlePct`; `ProposePathPlan` trims
   the proposal when it exceeds `IDLE_SHARE_TRIM_THRESHOLD` (default 0.30).
   Fail-open via `ErrIdleShareUnavailable` (surface nothing / trim nothing).
-- **`InstalledCapacityClient`** (ADR-0014) — queries `fulfillment-execution`
-  for the real, live count of registered stations holding a path's
-  capability, so `CommitShiftPlan` enforces `plannedHeads` against physical
-  reality, not just a caller-supplied `installedStations` count. **Fail-LOUD**
+- **`InstalledCapacityClient`** (ADR-0014 + its addendum) — queries
+  `fulfillment-execution` (`GET /capacity/{capability}`) for the real, live
+  count of registered stations holding a **capability** (`shared.Capability`,
+  never a `PathId`), so `CommitShiftPlan` enforces `plannedHeads` against
+  physical reality, not just a caller-supplied `installedStations` count.
+  `CommitShiftPlan` resolves each line's path through `PathCatalogue.Lookup`
+  to its `requiredCapabilities` and uses the MIN station count across them
+  (a station must hold all of them to serve the path). fulfillment-execution
+  matches the capability string exactly and stations register lower-case
+  (`pick`), so sending the canonical path id (`PICK`) would count 0 — never
+  cast a `PathId` to a `Capability`. An undeclared path is `400
+  unknown-path-id`; a path declaring no capabilities gets a 0 ceiling
+  (fail-closed). `CommitShiftPlan.Catalogue` is required. **Fail-LOUD**
   (unlike the measured-rate client): any failure collapses to
   `ErrInstalledCapacityUnavailable` and the ENTIRE commit is rejected (503,
   `installed-capacity-unavailable`) with no fallback, since a commit mutates
@@ -87,15 +96,24 @@ the only inbound topics are the two opt-in cache feeds above
   with 3 lines publishes 3 Kafka messages, one per line, each carrying that
   line's `planned_heads`/`planned_rate`/`planned_hours` plus the plan's
   `building_id`/`shift_id`. Consumers must expect N messages per commit.
-- **Envelope** (flat cross-service shape, shared fleet-wide, originally
-  specified in this repo's `INTEGRATION.md`):
+- **Envelope**: CloudEvents 1.0, MANDATORY, structured content mode, for
+  every message produced or consumed (ADR-0026). No flat envelope, no
+  dual-read/write, no envelope toggle. Build/decode only through
+  `internal/adapters/kafka/cloudevents` (`New`/`Decode`/`ContentTypeHeader`,
+  on `github.com/cloudevents/sdk-go/v2/event`); every produced message carries
+  `content-type: application/cloudevents+json; charset=UTF-8` next to the
+  trace headers:
 
 ```json
 {
-  "event_id": "uuid-v4",
-  "event_type": "ShiftPlanCommitted",
-  "occurred_at": "2026-08-21T22:00:00Z",
-  "source": "workforce-management",
+  "specversion": "1.0",
+  "id": "uuid-v4",
+  "source": "/warehouse/workforce-management",
+  "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
+  "subject": "bldg-1/shift-1",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
+  "time": "2026-08-21T22:00:00Z",
   "data": {
     "building_id": "bldg-1",
     "shift_id": "shift-1",
@@ -107,15 +125,22 @@ the only inbound topics are the two opt-in cache feeds above
 }
 ```
 
-`event_id` is a UUID v4 generated at publish time; `source` is always this
-service's own name; `occurred_at` is RFC 3339 UTC.
+`id` is a UUID v4 minted once per message at Encode time (each fanned-out
+line gets its own) and persisted with the outbox row, so a relay retry
+republishes the same id. `subject` is the aggregate id — for
+`ShiftPlanCommitted` the ShiftPlan id `<buildingId>/<shiftId>`, identical to
+the Kafka key. `time` is the domain occurred-at, UTC. `dataschema` is
+`...:events:...` on the integration topic and `...:analytics:...` on the
+analytics topic. Consumers dispatch on the FULL `type`, ignore unknown types,
+dedupe on `id`, and DLQ (analytics projector) or WARN-and-skip (catalogue /
+labor-performance caches) any message that fails CloudEvents validation.
 
 The **full CloudEvents domain-event catalog** (all ten events, reverse-DNS
 `type` naming `com.warehouse.wes.workforce-management.<entity>.<EventName>`)
-lives in `apis/asyncapi.yaml` — deliberately broader than what's published
-today; every event besides `ShiftPlanCommitted` is in-process only. Keep
-`apis/asyncapi.yaml` and `docs/docs/ecosystem/integration.md` (the narrative
-counterpart) in sync when the publication set changes.
+lives in `apis/asyncapi.yaml`. Only `ShiftPlanCommitted` is on the integration
+topic; all ten are on the analytics topic. Keep `apis/asyncapi.yaml` and
+`docs/docs/ecosystem/integration.md` (the narrative counterpart) in sync when
+the publication set changes.
 
 ## CORS
 

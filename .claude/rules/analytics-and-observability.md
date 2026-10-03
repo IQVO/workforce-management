@@ -18,7 +18,8 @@ depend on it.)
 - **Three processes**:
   - `cmd/workforce` — OLTP.
   - `cmd/workforce-projector` — the ONLY writer of the analytical DB;
-    consumes from FirstOffset, idempotent on `event_id`; runs
+    consumes from FirstOffset, CloudEvents 1.0 only (ADR-0026), idempotent
+    on the CloudEvents `id`; invalid events go to the `.dlq` topic; runs
     `migrations/analytics` on start; admin/health on `:8091`.
   - `cmd/workforce-reports` — read-only reader, `GET /reports/...`, serves on
     `:8092`.

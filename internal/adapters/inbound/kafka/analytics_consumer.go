@@ -1,7 +1,10 @@
 // Package kafka provides the inbound Kafka adapter for the workforce analytics
 // data product: a consumer that reads the analytics topic and applies each
 // event to the Labor Utilization & Staffing projection, exactly once per
-// event_id despite Kafka's at-least-once delivery.
+// CloudEvents id despite Kafka's at-least-once delivery. Every message is a
+// CloudEvents 1.0 structured-mode event (ADR-0026); one that fails
+// CloudEvents validation (including the retired flat envelope) is a
+// deterministic poison message and goes straight to the DLQ.
 //
 // ADR-0022 (ported from order-management's ADR-0025) adds bounded
 // in-process retry plus a dead-letter topic to this consumer: a
@@ -12,11 +15,11 @@
 // every other event behind it on this partition.
 //
 // Run's retry loop deliberately does NOT simply call HandleMessage
-// (envelope decode + MarkProcessed + apply, all in one) in a loop:
+// (CloudEvents decode + MarkProcessed + apply, all in one) in a loop:
 // ProcessedEvents.MarkProcessed is a one-shot "insert if absent" gate,
 // not itself transactional with the projection Apply call that
 // follows it, so calling MarkProcessed again on a retry of the SAME
-// event_id would report isNew=false (already seen) and silently skip
+// CloudEvents id would report isNew=false (already seen) and silently skip
 // re-applying — turning a genuine transient projection failure into a
 // falsely-successful no-op that never reaches the DLQ. Run's retry
 // therefore marks-processed AT MOST ONCE per fetched message
@@ -27,7 +30,6 @@ package kafka
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -41,6 +43,7 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/claudioed/workforce-management/internal/adapters/kafka/cloudevents"
 	"github.com/claudioed/workforce-management/internal/analytics/report"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 )
@@ -98,37 +101,34 @@ func (c headerCarrier) Keys() []string {
 	return keys
 }
 
-// analyticsEnvelope is the inbound decode shape of the Envelope v1 wrapper on
-// the analytics topic. The data payload is left as a RawMessage and decoded per
-// event_type. It is declared here (rather than imported from the outbound
-// publisher) so this inbound adapter does not depend on an outbound adapter.
-type analyticsEnvelope struct {
-	EventId       string          `json:"event_id"`
-	EventType     string          `json:"event_type"`
-	OccurredAt    time.Time       `json:"occurred_at"`
-	Source        string          `json:"source"`
-	SchemaVersion int             `json:"schema_version"`
-	Data          json.RawMessage `json:"data"`
+// analyticsEvent is the decoded form of one CloudEvents 1.0 message on the
+// analytics topic: the context attributes this consumer needs (id for
+// dedupe, full type for dispatch, time as the occurred-at instant) plus the
+// payload decoded via DataAs.
+type analyticsEvent struct {
+	ID   string
+	Type string
+	Time time.Time
+	Data analyticsData
 }
 
 // analyticsData is the union of fields the projecting event payloads carry.
-// Each event_type populates the subset it needs.
+// Each event type populates the subset it needs.
 type analyticsData struct {
 	AssociateId string `json:"associate_id"`
 	PathId      string `json:"path_id"`
 	ToPathId    string `json:"to_path_id"`
 }
 
-// isProjectingEventType reports whether eventType is one of the
-// utilization/staffing-moving events this consumer projects. The rest
-// (ShiftPlanProposed, ShiftPlanCommitted, and anything unrecognized)
-// are acknowledged without touching the read model or the processed
-// set.
+// isProjectingEventType reports whether the full CloudEvents type is one of
+// the utilization/staffing-moving events this consumer projects. The rest
+// (ShiftPlanProposed, ShiftPlanCommitted, and anything unrecognized) are
+// acknowledged without touching the read model or the processed set.
 func isProjectingEventType(eventType string) bool {
 	switch eventType {
-	case "AssociateShiftStarted", "AssociateShiftEnded",
-		"AssociateBreakStarted", "AssociateBreakEnded", "AssociateCertified",
-		"LaborAssigned", "LaborReassigned", "PathUnderstaffed":
+	case cloudevents.TypeAssociateShiftStarted, cloudevents.TypeAssociateShiftEnded,
+		cloudevents.TypeAssociateBreakStarted, cloudevents.TypeAssociateBreakEnded, cloudevents.TypeAssociateCertified,
+		cloudevents.TypeLaborAssigned, cloudevents.TypeLaborReassigned, cloudevents.TypePathUnderstaffed:
 		return true
 	default:
 		return false
@@ -136,7 +136,7 @@ func isProjectingEventType(eventType string) bool {
 }
 
 // AnalyticsConsumer reads analytics events off the analytics topic and applies
-// each to the labor ProjectionStore, exactly once per event_id despite Kafka's
+// each to the labor ProjectionStore, exactly once per CloudEvents id despite Kafka's
 // at-least-once delivery.
 type AnalyticsConsumer struct {
 	Reader     *segmentio.Reader
@@ -179,9 +179,16 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 		Projection: projection,
 		Processed:  processed,
 		Logger:     logger,
+		// AllowAutoTopicCreation: the ".dlq" topic is only written on the
+		// rare poison path, so it usually does not exist yet; without the
+		// flag the first dead-letter write fails and stops the projector.
+		// BatchTimeout: kafka-go's 1s default caps a synchronous DLQ write at
+		// ~1 msg/s. Same fix as every other fleet DLQ writer.
 		dlqWriter: &segmentio.Writer{
-			Addr:  segmentio.TCP(brokers...),
-			Topic: topic + analyticsDLQTopicSuffix,
+			Addr:                   segmentio.TCP(brokers...),
+			Topic:                  topic + analyticsDLQTopicSuffix,
+			AllowAutoTopicCreation: true,
+			BatchTimeout:           10 * time.Millisecond,
 		},
 	}
 }
@@ -251,15 +258,15 @@ func (c *AnalyticsConsumer) handleFetchedMessage(ctx context.Context, msg segmen
 	ctx, span := c.startConsumeSpan(ctx, msg)
 	defer span.End()
 
-	env, decodeErr := decodeAnalyticsEnvelope(msg.Value)
+	env, decodeErr := decodeAnalyticsEvent(msg.Value)
 	if decodeErr != nil {
 		return c.deadLetterAndCommit(ctx, span, msg, decodeErr)
 	}
-	if !isProjectingEventType(env.EventType) {
+	if !isProjectingEventType(env.Type) {
 		return c.commit(ctx, msg)
 	}
 
-	isNew, markErr := c.markProcessedWithRetry(ctx, env.EventId)
+	isNew, markErr := c.markProcessedWithRetry(ctx, env.ID)
 	if markErr != nil {
 		return c.deadLetterAndCommit(ctx, span, msg, markErr)
 	}
@@ -306,14 +313,14 @@ func (c *AnalyticsConsumer) markProcessedWithRetry(ctx context.Context, eventId 
 	}, bounded, nil)
 }
 
-// applyWithRetry retries applyEnvelope up to maxAnalyticsHandlerAttempts
+// applyWithRetry retries applyEvent up to maxAnalyticsHandlerAttempts
 // times with jittered backoff, bounded by ctx's own deadline/cancellation —
 // a transient blip in the projection store heals itself without ever
 // reaching the DLQ. This is called EXACTLY ONCE per message by
 // handleFetchedMessage, after MarkProcessed has already succeeded with
 // isNew=true, so retrying it here never risks a duplicate MarkProcessed
 // call.
-func (c *AnalyticsConsumer) applyWithRetry(ctx context.Context, env analyticsEnvelope) error {
+func (c *AnalyticsConsumer) applyWithRetry(ctx context.Context, env analyticsEvent) error {
 	policy := backoff.NewExponentialBackOff(
 		backoff.WithInitialInterval(analyticsRetryInitialInterval),
 		backoff.WithMaxInterval(analyticsRetryMaxInterval),
@@ -321,7 +328,7 @@ func (c *AnalyticsConsumer) applyWithRetry(ctx context.Context, env analyticsEnv
 	bounded := backoff.WithContext(backoff.WithMaxRetries(policy, maxAnalyticsHandlerAttempts-1), ctx)
 
 	return backoff.Retry(func() error {
-		return c.applyEnvelope(ctx, env)
+		return c.applyEvent(ctx, env)
 	}, bounded)
 }
 
@@ -368,57 +375,61 @@ func (c *AnalyticsConsumer) startConsumeSpan(ctx context.Context, msg segmentio.
 	)
 }
 
-// decodeAnalyticsEnvelope unmarshals raw as an analyticsEnvelope. Split out
-// from HandleMessage/applyEnvelope so Run's retry logic can decode ONCE
-// (a malformed envelope is a permanent, not transient, failure — retrying
-// it would never succeed) while still retrying the genuinely transient
-// apply step separately.
-func decodeAnalyticsEnvelope(raw []byte) (analyticsEnvelope, error) {
-	var env analyticsEnvelope
-	if err := json.Unmarshal(raw, &env); err != nil {
-		return analyticsEnvelope{}, fmt.Errorf("analytics: decode envelope: %w", err)
+// decodeAnalyticsEvent decodes raw as a CloudEvents 1.0 event and its data
+// payload. Split out from HandleMessage/applyEvent so Run's retry logic can
+// decode ONCE (an invalid event — legacy flat envelope, bad JSON, failed
+// CloudEvents validation, undecodable data — is a permanent, not transient,
+// failure; retrying it would never succeed) while still retrying the
+// genuinely transient apply step separately.
+func decodeAnalyticsEvent(raw []byte) (analyticsEvent, error) {
+	e, err := cloudevents.Decode(raw)
+	if err != nil {
+		return analyticsEvent{}, fmt.Errorf("analytics: decode event: %w", err)
 	}
-	return env, nil
+	out := analyticsEvent{ID: e.ID(), Type: e.Type(), Time: e.Time()}
+	if !isProjectingEventType(out.Type) {
+		return out, nil
+	}
+	if err := e.DataAs(&out.Data); err != nil {
+		return analyticsEvent{}, fmt.Errorf("analytics: decode %s data: %w", out.Type, err)
+	}
+	return out, nil
 }
 
-// applyEnvelope decodes env.Data and applies the matching projection method
-// for env.EventType. Callers must have already confirmed env.EventType is a
-// projecting type (isProjectingEventType) and that MarkProcessed reported
-// isNew=true for env.EventId — this method does not re-check either.
-func (c *AnalyticsConsumer) applyEnvelope(ctx context.Context, env analyticsEnvelope) error {
-	var data analyticsData
-	if err := json.Unmarshal(env.Data, &data); err != nil {
-		return fmt.Errorf("analytics: decode data: %w", err)
-	}
-
-	switch env.EventType {
-	case "AssociateShiftStarted":
-		return c.Projection.ApplyShiftStarted(ctx, env.EventId, data.AssociateId, env.OccurredAt)
-	case "AssociateShiftEnded":
-		return c.Projection.ApplyShiftEnded(ctx, env.EventId, data.AssociateId, env.OccurredAt)
-	case "AssociateBreakStarted":
-		return c.Projection.ApplyBreakStarted(ctx, env.EventId, data.AssociateId, env.OccurredAt)
-	case "AssociateBreakEnded":
-		return c.Projection.ApplyBreakEnded(ctx, env.EventId, data.AssociateId, env.OccurredAt)
-	case "AssociateCertified":
-		return c.Projection.ApplyCertified(ctx, env.EventId, data.AssociateId, env.OccurredAt)
-	case "LaborAssigned":
-		return c.Projection.ApplyLaborAssigned(ctx, env.EventId, data.PathId, env.OccurredAt)
-	case "LaborReassigned":
-		return c.Projection.ApplyLaborReassigned(ctx, env.EventId, data.ToPathId, env.OccurredAt)
-	case "PathUnderstaffed":
-		return c.Projection.ApplyPathUnderstaffed(ctx, env.EventId, data.PathId, env.OccurredAt)
+// applyEvent applies the matching projection method for env.Type. Callers
+// must have already confirmed env.Type is a projecting type
+// (isProjectingEventType) and that MarkProcessed reported isNew=true for
+// env.ID — this method does not re-check either.
+func (c *AnalyticsConsumer) applyEvent(ctx context.Context, env analyticsEvent) error {
+	data := env.Data
+	switch env.Type {
+	case cloudevents.TypeAssociateShiftStarted:
+		return c.Projection.ApplyShiftStarted(ctx, env.ID, data.AssociateId, env.Time)
+	case cloudevents.TypeAssociateShiftEnded:
+		return c.Projection.ApplyShiftEnded(ctx, env.ID, data.AssociateId, env.Time)
+	case cloudevents.TypeAssociateBreakStarted:
+		return c.Projection.ApplyBreakStarted(ctx, env.ID, data.AssociateId, env.Time)
+	case cloudevents.TypeAssociateBreakEnded:
+		return c.Projection.ApplyBreakEnded(ctx, env.ID, data.AssociateId, env.Time)
+	case cloudevents.TypeAssociateCertified:
+		return c.Projection.ApplyCertified(ctx, env.ID, data.AssociateId, env.Time)
+	case cloudevents.TypeLaborAssigned:
+		return c.Projection.ApplyLaborAssigned(ctx, env.ID, data.PathId, env.Time)
+	case cloudevents.TypeLaborReassigned:
+		return c.Projection.ApplyLaborReassigned(ctx, env.ID, data.ToPathId, env.Time)
+	case cloudevents.TypePathUnderstaffed:
+		return c.Projection.ApplyPathUnderstaffed(ctx, env.ID, data.PathId, env.Time)
 	default:
 		return nil
 	}
 }
 
-// HandleMessage decodes raw as an analyticsEnvelope and applies the matching
-// projection method for its event_type. Event types outside the projection
-// contract are ignored (and not marked processed). For a projecting event it
-// dedupes on event_id via ProcessedEvents before applying, so a redelivery is
-// a no-op. It is exported separately from Run so tests can feed raw envelopes
-// without a live broker.
+// HandleMessage decodes raw as a CloudEvents 1.0 event and applies the
+// matching projection method for its full `type`. Types outside the
+// projection contract are ignored (and not marked processed). For a
+// projecting event it dedupes on the CloudEvents id via ProcessedEvents
+// before applying, so a redelivery is a no-op. It is exported separately from
+// Run so tests can feed raw events without a live broker.
 //
 // This single call does its own one-shot decode + route + MarkProcessed +
 // apply, unchanged from before ADR-0022 — Run's own handleFetchedMessage
@@ -427,16 +438,16 @@ func (c *AnalyticsConsumer) applyEnvelope(ctx context.Context, env analyticsEnve
 // reimplements the same steps with the mark and apply stages retried
 // independently instead.
 func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error {
-	env, err := decodeAnalyticsEnvelope(raw)
+	env, err := decodeAnalyticsEvent(raw)
 	if err != nil {
 		return err
 	}
 
-	if !isProjectingEventType(env.EventType) {
+	if !isProjectingEventType(env.Type) {
 		return nil
 	}
 
-	isNew, err := c.Processed.MarkProcessed(ctx, env.EventId)
+	isNew, err := c.Processed.MarkProcessed(ctx, env.ID)
 	if err != nil {
 		return fmt.Errorf("analytics: mark processed: %w", err)
 	}
@@ -444,5 +455,5 @@ func (c *AnalyticsConsumer) HandleMessage(ctx context.Context, raw []byte) error
 		return nil
 	}
 
-	return c.applyEnvelope(ctx, env)
+	return c.applyEvent(ctx, env)
 }

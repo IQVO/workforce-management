@@ -60,6 +60,7 @@ Build the full bounded context described in CLAUDE.md, in order. Keep
   port, publishing one ShiftPlanCommitted message per PathPlan line to
   warehouse.workforce.events, selected via EVENT_PUBLISHER env (default "log").
 - Unit test the envelope shape + the one-message-per-path-line fan-out.
+  (Envelope since superseded: CloudEvents 1.0 is mandatory, ADR-0026.)
 - README gains an Integration section. REAL smoke test against the shared
   broker (docker-compose.kafka.yml in ~/warehouse-systems, localhost:9092):
   call POST /shift-plans with 2+ path lines and confirm 2+ messages land on
