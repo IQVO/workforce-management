@@ -35,7 +35,7 @@ func reportFailure(t *testing.T, result *archgo.Result) {
 				continue
 			}
 
-			t.Errorf("package %q violates rule %q: %s", v.Package, rule.Description, strings.Join(v.Details, "; "))
+			t.Errorf("%s", archViolation("dependency", "package "+v.Package+" violates "+rule.Description, strings.Join(v.Details, "; ")))
 		}
 	}
 }
@@ -185,7 +185,7 @@ func TestPortsPackageIsInterfacesOnly(t *testing.T) {
 					continue
 				}
 
-				t.Errorf("package %q violates rule %q: %s", v.Package, rule.Description, strings.Join(v.Details, "; "))
+				t.Errorf("%s", archViolation("dependency", "package "+v.Package+" violates "+rule.Description, strings.Join(v.Details, "; ")))
 			}
 		}
 	}
