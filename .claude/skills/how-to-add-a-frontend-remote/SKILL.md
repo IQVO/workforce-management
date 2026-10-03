@@ -1,9 +1,14 @@
+---
+name: how-to-add-a-frontend-remote
+description: Add or change a micro-frontend remote under web/ (vite federation config in object form, /mfes/<context>/ base, remoteEntry, Docker/nginx packaging, console integration). Use when touching web/.
+---
+
 # How to add a frontend remote
 
 Use when adding a new screen/feature to this repo's `web/` Module
 Federation remote (`workforce-mfe`). This is the Vite/React micro-frontend
 layer that `warehouse-console` (the shell) lazy-loads at `/workforce/*` —
-see that repo's `.claude/rules/mfe-remotes.md` for the shell-side half of
+see that repo's `.claude/rules/frontend.md` for the shell-side half of
 this contract. `workforce-mfe` already exists and is deployed (chart
 `frontend.enabled`, its own nginx workload — see
 `docs/docs/adr/0011-adopt-fleet-mfe-console-architecture.md`); this guide

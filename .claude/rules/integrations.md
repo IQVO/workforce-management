@@ -1,3 +1,11 @@
+---
+paths:
+  - "internal/adapters/**/kafka/**"
+  - "internal/adapters/outbound/events/**"
+  - "apis/asyncapi*"
+  - "internal/adapters/outbound/**"
+---
+
 # Integrations — outbound clients, process-path catalogue, events, CORS
 
 ## Outbound HTTP clients (`internal/application/ports/ports.go`)
