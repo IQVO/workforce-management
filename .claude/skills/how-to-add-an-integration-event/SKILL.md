@@ -102,7 +102,7 @@ adding logic to `Publish`:
   narrative counterpart is `docs/docs/ecosystem/integration.md` — update
   both together if an analytics payload changes shape.
 - `docs-api-drift` CI only checks the REST OpenAPI-generated tree
-  (`docs/api-reference/rest`); it does NOT catch AsyncAPI drift in this
+  (`docs/docs/api-reference/rest`); it does NOT catch AsyncAPI drift in this
   repo today — don't rely on CI to catch a stale `asyncapi.yaml`.
 
 ### 5. Test
