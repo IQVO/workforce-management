@@ -179,9 +179,16 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 		Projection: projection,
 		Processed:  processed,
 		Logger:     logger,
+		// AllowAutoTopicCreation: the ".dlq" topic is only written on the
+		// rare poison path, so it usually does not exist yet; without the
+		// flag the first dead-letter write fails and stops the projector.
+		// BatchTimeout: kafka-go's 1s default caps a synchronous DLQ write at
+		// ~1 msg/s. Same fix as every other fleet DLQ writer.
 		dlqWriter: &segmentio.Writer{
-			Addr:  segmentio.TCP(brokers...),
-			Topic: topic + analyticsDLQTopicSuffix,
+			Addr:                   segmentio.TCP(brokers...),
+			Topic:                  topic + analyticsDLQTopicSuffix,
+			AllowAutoTopicCreation: true,
+			BatchTimeout:           10 * time.Millisecond,
 		},
 	}
 }

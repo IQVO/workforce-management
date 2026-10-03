@@ -63,6 +63,8 @@ type Publisher struct {
 // NewPublisher constructs a Publisher writing to brokers on Topic.
 func NewPublisher(brokers []string, shiftPlans ports.ShiftPlanRepo) *Publisher {
 	return NewPublisherWithWriter(&segmentio.Writer{
+		BatchTimeout:           syncWriterBatchTimeout,
+		RequiredAcks:           syncWriterRequiredAcks,
 		Addr:                   segmentio.TCP(brokers...),
 		Topic:                  Topic,
 		Balancer:               &segmentio.Hash{},

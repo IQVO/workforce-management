@@ -26,6 +26,8 @@ type RelaySink struct {
 // NewRelaySink constructs a RelaySink over brokers with a topic-less writer.
 func NewRelaySink(brokers []string) *RelaySink {
 	return NewRelaySinkWithWriter(&segmentio.Writer{
+		BatchTimeout:           syncWriterBatchTimeout,
+		RequiredAcks:           syncWriterRequiredAcks,
 		Addr:                   segmentio.TCP(brokers...),
 		Balancer:               &segmentio.Hash{},
 		AllowAutoTopicCreation: true,
