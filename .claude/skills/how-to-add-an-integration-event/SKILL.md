@@ -1,3 +1,8 @@
+---
+name: how-to-add-an-integration-event
+description: Publish or consume a cross-service Kafka event: CloudEvents 1.0 type naming, AsyncAPI, transactional outbox, consumer-group rules. Use when touching internal/adapters kafka or outbox code, a publisher/consumer, or apis/asyncapi*.yaml.
+---
+
 # How to add an integration event (publish and consume)
 
 Use when asked to publish a new cross-context integration event, or
@@ -97,7 +102,7 @@ adding logic to `Publish`:
   narrative counterpart is `docs/docs/ecosystem/integration.md` — update
   both together if an analytics payload changes shape.
 - `docs-api-drift` CI only checks the REST OpenAPI-generated tree
-  (`docs/api-reference/rest`); it does NOT catch AsyncAPI drift in this
+  (`docs/docs/api-reference/rest`); it does NOT catch AsyncAPI drift in this
   repo today — don't rely on CI to catch a stale `asyncapi.yaml`.
 
 ### 5. Test

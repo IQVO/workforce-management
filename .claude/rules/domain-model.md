@@ -1,3 +1,12 @@
+---
+paths:
+  - "internal/**"
+  - "cmd/**"
+  - "features/**"
+  - "apis/**"
+  - "web/**"
+---
+
 # Domain model — ubiquitous language, aggregates, events, use cases, REST API
 
 ## Ubiquitous Language (use these exact names — do not invent synonyms)
