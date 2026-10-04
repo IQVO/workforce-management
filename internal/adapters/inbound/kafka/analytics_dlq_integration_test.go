@@ -5,6 +5,7 @@ package kafka_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -286,14 +287,8 @@ func waitForApplied(t *testing.T, ctx context.Context, projection *alwaysFailing
 
 func createAnalyticsTopic(t *testing.T, ctx context.Context, brokers []string, topic string) {
 	t.Helper()
-	conn, err := kafkago.DialContext(ctx, "tcp", brokers[0])
-	if err != nil {
-		t.Fatalf("dial Kafka controller: %v", err)
-	}
+	conn := dialAndCreateTopic(t, ctx, brokers[0], kafkago.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1})
 	defer func() { _ = conn.Close() }()
-	if err := conn.CreateTopics(kafkago.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1}); err != nil {
-		t.Fatalf("create topic %q: %v", topic, err)
-	}
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -330,4 +325,29 @@ type testWriter struct{ t *testing.T }
 func (w testWriter) Write(p []byte) (int, error) {
 	w.t.Log(string(p))
 	return len(p), nil
+}
+
+// dialAndCreateTopic dials the Kafka controller and creates the topic, retrying transient broker errors.
+// Right after the testcontainers Kafka reports ready, the first connection can be reset ("connection reset
+// by peer"); a create that succeeded just before such a reset reports TopicAlreadyExists on the retry, which
+// is success. Fails the test only when the broker is still unusable after the deadline.
+func dialAndCreateTopic(t *testing.T, ctx context.Context, broker string, cfg kafkago.TopicConfig) *kafkago.Conn {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		conn, err := kafkago.DialContext(ctx, "tcp", broker)
+		if err == nil {
+			err = conn.CreateTopics(cfg)
+			if err == nil || errors.Is(err, kafkago.TopicAlreadyExists) {
+				return conn
+			}
+			_ = conn.Close()
+		}
+		lastErr = err
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			t.Fatalf("dial/create topic %q on %s after %d attempt(s): %v", cfg.Topic, broker, attempt+1, lastErr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
