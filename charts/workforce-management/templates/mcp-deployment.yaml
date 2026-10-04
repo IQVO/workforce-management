@@ -23,6 +23,10 @@ spec:
       app.kubernetes.io/component: mcp
   template:
     metadata:
+      {{- if .Values.pathCatalogue.enabled }}
+      annotations:
+        checksum/path-catalogue: {{ .Values.pathCatalogue.content | sha256sum }}
+      {{- end }}
       labels:
         {{- include "workforce-management.selectorLabels" . | nindent 8 }}
         app.kubernetes.io/component: mcp
@@ -71,6 +75,23 @@ spec:
               value: {{ .Values.config.migrationsPath | quote }}
             - name: MAX_HOURS_PER_SHIFT
               value: {{ .Values.config.maxHoursPerShift | quote }}
+            # assign_labor publishes LaborAssigned/LaborReassigned through the
+            # SAME composition as cmd/workforce (ADR-0008/0016): with
+            # EVENT_PUBLISHER=kafka the events are INSERTed into outbox_events
+            # in the use case's transaction; only the api Deployment runs the
+            # relay that drains them to Kafka.
+            - name: EVENT_PUBLISHER
+              value: {{ .Values.config.eventPublisher | quote }}
+            {{- if .Values.kafka.enabled }}
+            - name: KAFKA_BROKERS
+              value: {{ .Values.kafka.brokers | quote }}
+            {{- end }}
+            {{- if .Values.pathCatalogue.enabled }}
+            # MCP path ids are validated against the same process-path
+            # catalogue as REST (ADR-0013); boot fails closed without it.
+            - name: PATH_CATALOGUE_FILE
+              value: {{ .Values.pathCatalogue.mountPath }}/process-paths.yaml
+            {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
             {{- if $reportsBaseURL }}
@@ -87,6 +108,15 @@ spec:
             - name: ENVIRONMENT
               value: {{ .Values.environment | quote }}
             {{- end }}
+            {{- range .Values.extraEnv }}
+            - {{ toYaml . | nindent 14 | trim }}
+            {{- end }}
+          {{- if .Values.pathCatalogue.enabled }}
+          volumeMounts:
+            - name: path-catalogue
+              mountPath: {{ .Values.pathCatalogue.mountPath }}
+              readOnly: true
+          {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -105,6 +135,12 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.mcp.resources | nindent 12 }}
+      {{- if .Values.pathCatalogue.enabled }}
+      volumes:
+        - name: path-catalogue
+          configMap:
+            name: {{ .Values.pathCatalogue.existingConfigMap | default (printf "%s-path-catalogue" (include "workforce-management.fullname" .)) }}
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

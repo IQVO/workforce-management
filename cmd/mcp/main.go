@@ -21,12 +21,13 @@ import (
 	inboundmcp "github.com/claudioed/workforce-management/internal/adapters/inbound/mcp"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/composition"
 )
 
 func main() {
@@ -38,9 +39,10 @@ func main() {
 
 // setupTelemetry wires OTel with the same non-blocking discipline as the
 // HTTP service: an unreachable Collector degrades to dropped telemetry,
-// never a server that won't start. The returned func flushes on shutdown
-// (a no-op when setup degraded to nil).
-func setupTelemetry(ctx context.Context, logger *slog.Logger) func() {
+// never a server that won't start. It returns the resolved service name
+// (the router's metrics label) and a func that flushes on shutdown (a no-op
+// when setup degraded to nil).
+func setupTelemetry(ctx context.Context, logger *slog.Logger) (string, func()) {
 	serviceName := envOrDefault("OTEL_SERVICE_NAME", "workforce-management-mcp")
 	otlpEndpoint := envOrDefault("OTEL_EXPORTER_OTLP_ENDPOINT", telemetry.DefaultOTLPEndpoint)
 	shutdownTelemetry, err := telemetry.Setup(ctx, serviceName, serviceVersion(), otlpEndpoint)
@@ -48,7 +50,7 @@ func setupTelemetry(ctx context.Context, logger *slog.Logger) func() {
 		logger.Error("opentelemetry setup degraded", "error", err)
 	}
 	if shutdownTelemetry != nil {
-		return func() {
+		return serviceName, func() {
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if err := shutdownTelemetry(shutdownCtx); err != nil {
@@ -56,14 +58,18 @@ func setupTelemetry(ctx context.Context, logger *slog.Logger) func() {
 			}
 		}
 	}
-	return func() {}
+	return serviceName, func() {}
 }
 
-// repos bundles the persistence ports the MCP tools share.
+// repos bundles the persistence ports the MCP tools share. pool and uow are
+// nil in the in-memory configuration (no DATABASE_URL): the use cases then
+// run Save and Publish back to back (see ports.UnitOfWork).
 type repos struct {
 	associates  ports.AssociateRepo
 	shiftPlans  ports.ShiftPlanRepo
 	assignments ports.AssignmentRepo
+	pool        *pgxpool.Pool
+	uow         ports.UnitOfWork
 }
 
 // newRepos selects in-memory vs Postgres repos the same way the platform
@@ -109,7 +115,45 @@ func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsD
 		associates:  postgres.NewAssociateRepo(pool),
 		shiftPlans:  postgres.NewShiftPlanRepo(pool),
 		assignments: postgres.NewAssignmentRepo(pool),
+		pool:        pool,
+		uow:         postgres.NewUnitOfWork(pool),
 	}, func() { pool.Close() }, nil
+}
+
+// publisherConfigFromEnv resolves EVENT_PUBLISHER, KAFKA_BROKERS and
+// OUTBOX_RELAY_INTERVAL for the shared composition.BuildEventPublisher.
+// RunRelay is false: only cmd/workforce drains outbox_events onto Kafka;
+// this process only inserts.
+func publisherConfigFromEnv() composition.PublisherConfig {
+	return composition.PublisherConfig{
+		Kind:     envOrDefault("EVENT_PUBLISHER", composition.LogPublisher),
+		Brokers:  strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
+		RunRelay: false,
+	}
+}
+
+// catalogueConfigFromEnv resolves the same PATH_CATALOGUE_* settings
+// cmd/workforce uses, so MCP tools validate path ids against the same
+// catalogue (ADR-0013).
+func catalogueConfigFromEnv() composition.CatalogueConfig {
+	return composition.CatalogueConfig{
+		Source:  envOrDefault("PATH_CATALOGUE_SOURCE", composition.CatalogueFromFile),
+		File:    envOrDefault("PATH_CATALOGUE_FILE", "/etc/workforce-management/process-paths.yaml"),
+		Brokers: strings.Split(os.Getenv("KAFKA_BROKERS"), ","),
+	}
+}
+
+// buildDeps wires the MCP adapter's use cases with the SAME publisher, clock,
+// UnitOfWork and catalogue the HTTP service gives them: GetStaffingGap and
+// ProposePathPlan (read) and AssignLabor (write).
+func buildDeps(r repos, publisher ports.EventPublisher, catalogue ports.PathCatalogue, maxHoursPerShift float64) inboundmcp.Deps {
+	sysClock := clock.System{}
+	return inboundmcp.Deps{
+		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
+		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
+		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: r.uow},
+		Catalogue:       catalogue,
+	}
 }
 
 // serveMCP runs srv until it fails or SIGINT/SIGTERM arrives, shutting the
@@ -142,7 +186,8 @@ func run() error {
 	slog.SetDefault(logger)
 
 	ctx := context.Background()
-	defer setupTelemetry(ctx, logger)()
+	serviceName, flushTelemetry := setupTelemetry(ctx, logger)
+	defer flushTelemetry()
 
 	httpAddr := envOrDefault("MCP_ADDR", ":8090")
 	databaseURL := os.Getenv("DATABASE_URL")
@@ -157,25 +202,38 @@ func run() error {
 	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
 	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
 
+	// The process-path catalogue is boot-time-required here exactly as in
+	// cmd/workforce (ADR-0013): MCP path ids are validated against it. Its
+	// kafka-source consumer must outlive this call, so it gets its own
+	// cancellable context.
+	catalogueCtx, cancelCatalogue := context.WithCancel(context.Background())
+	defer cancelCatalogue()
+	catalogue, kafkaCatalogue, err := composition.BuildCatalogue(ctx, catalogueCtx, catalogueConfigFromEnv(), logger)
+	if err != nil {
+		return err
+	}
+	defer closeCatalogue(kafkaCatalogue)
+
 	r, closeRepos, err := newRepos(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
 	if err != nil {
 		return err
 	}
 	defer closeRepos()
 
-	sysClock := clock.System{}
-
-	// The MCP adapter reuses the SAME use cases the HTTP adapter uses:
-	// GetStaffingGap and ProposePathPlan (read) and AssignLabor (write).
-	// AssignLabor needs a publisher and clock; the MCP server is not the
-	// platform's primary event publisher (cmd/workforce is), so it logs the
-	// events it raises rather than publishing to Kafka.
-	publisher := events.NewLogPublisher(logger)
-	deps := inboundmcp.Deps{
-		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock},
-		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock},
-		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift},
+	// assign_labor is a WRITE use case, so it must publish LaborAssigned /
+	// LaborReassigned exactly like the REST path does (ADR-0008, ADR-0016):
+	// through the same composition.BuildEventPublisher wiring cmd/workforce
+	// uses, with the same UnitOfWork. With EVENT_PUBLISHER=kafka and
+	// DATABASE_URL the events go into outbox_events (integration +
+	// analytics topics) in the use case's transaction; the outbox relay keeps
+	// running only in cmd/workforce.
+	built, err := composition.BuildEventPublisher(publisherConfigFromEnv(), r.pool, r.shiftPlans, logger)
+	if err != nil {
+		return err
 	}
+	defer built.Close()
+
+	deps := buildDeps(r, built.Publisher, catalogue, maxHoursPerShift)
 	// Optional curated data-product tool: when REPORTS_BASE_URL is set, the MCP
 	// server exposes get_workforce_labor_report backed by the workforce-reports
 	// REST service (ADR-0010). It never opens the analytical database directly.
@@ -187,11 +245,18 @@ func run() error {
 
 	// The MCP handler is mounted at / and /mcp behind a GET /healthz so
 	// Kubernetes probes can reach the process (see router.go).
-	handler := newRouter(inboundmcp.Handler(server))
+	handler := newRouter(inboundmcp.Handler(server), serviceName)
 
 	srv := &http.Server{Addr: httpAddr, Handler: handler, ReadHeaderTimeout: 5 * time.Second}
 
 	return serveMCP(logger, srv, httpAddr)
+}
+
+// closeCatalogue releases the kafka-sourced catalogue consumer, if any.
+func closeCatalogue(c *kafkacatalog.Consumer) {
+	if c != nil {
+		_ = c.Close()
+	}
 }
 
 // version is the service version reported as the OTel service.version
