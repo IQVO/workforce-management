@@ -14,10 +14,10 @@ const config: Config = {
     faster: true,
   },
 
-  url: 'https://claudioed.github.io',
+  url: 'https://iqvo.github.io',
   baseUrl: '/workforce-management/',
 
-  organizationName: 'claudioed',
+  organizationName: 'IQVO',
   projectName: 'workforce-management',
   deploymentBranch: 'gh-pages',
   trailingSlash: false,
@@ -46,7 +46,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           routeBasePath: 'docs',
           editUrl:
-            'https://github.com/claudioed/workforce-management/tree/main/docs/',
+            'https://github.com/IQVO/workforce-management/tree/main/docs/',
           docItemComponent: '@theme/ApiItem',
         },
         blog: false,
@@ -68,7 +68,7 @@ const config: Config = {
             specPath: '../apis/openapi.yaml',
             outputDir: 'docs/api-reference/rest',
             downloadUrl:
-              'https://raw.githubusercontent.com/claudioed/workforce-management/main/apis/openapi.yaml',
+              'https://raw.githubusercontent.com/IQVO/workforce-management/main/apis/openapi.yaml',
             sidebarOptions: {
               groupPathsBy: 'tag',
               categoryLinkSource: 'tag',
@@ -108,7 +108,7 @@ const config: Config = {
           label: 'ADRs',
         },
         {
-          href: 'https://github.com/claudioed/workforce-management',
+          href: 'https://github.com/IQVO/workforce-management',
           label: 'GitHub',
           position: 'right',
         },
@@ -133,21 +133,21 @@ const config: Config = {
             {label: 'Domain Events', to: '/docs/api-reference/events'},
             {
               label: 'openapi.yaml',
-              href: 'https://github.com/claudioed/workforce-management/blob/main/apis/openapi.yaml',
+              href: 'https://github.com/IQVO/workforce-management/blob/main/apis/openapi.yaml',
             },
             {
               label: 'asyncapi.yaml',
-              href: 'https://github.com/claudioed/workforce-management/blob/main/apis/asyncapi.yaml',
+              href: 'https://github.com/IQVO/workforce-management/blob/main/apis/asyncapi.yaml',
             },
           ],
         },
         {
           title: 'warehouse-systems',
           items: [
-            {label: 'inventory-storage', href: 'https://github.com/claudioed/inventory-storage'},
-            {label: 'wes-work-planning', href: 'https://github.com/claudioed/wes-work-planning'},
-            {label: 'fulfillment-execution', href: 'https://github.com/claudioed/fulfillment-execution'},
-            {label: 'facility-layout', href: 'https://github.com/claudioed/facility-layout'},
+            {label: 'inventory-storage', href: 'https://github.com/IQVO/inventory-storage'},
+            {label: 'wes-work-planning', href: 'https://github.com/IQVO/wes-work-planning'},
+            {label: 'fulfillment-execution', href: 'https://github.com/IQVO/fulfillment-execution'},
+            {label: 'facility-layout', href: 'https://github.com/IQVO/facility-layout'},
           ],
         },
       ],
