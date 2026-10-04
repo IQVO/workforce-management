@@ -90,6 +90,10 @@ Claude Code loads each rule below automatically when you touch the matching path
 | When touching | Read |
 |---|---|
 | `internal/adapters/outbound/analyticsstore/**`, `internal/**/analytics*/**` | `.claude/rules/analytics-and-observability.md` |
+| `cmd/**`, `internal/**`, `migrations/**` ... | `.claude/rules/architecture-and-testing.md` |
+| `internal/adapters/**`, `internal/domain/shared/**`, `apis/asyncapi*` ... | `.claude/rules/cloudevents-envelope.md` |
+| `docs/**`, `apis/**`, `README.md` | `.claude/rules/docs-and-api-drift.md` |
+| `internal/**`, `cmd/**`, `features/**` ... | `.claude/rules/domain-model.md` |
 | `web/**` | `.claude/rules/frontend.md` |
 | `internal/adapters/**/kafka/**`, `internal/adapters/outbound/events/**`, `apis/asyncapi*` ... | `.claude/rules/integrations.md` |
 
