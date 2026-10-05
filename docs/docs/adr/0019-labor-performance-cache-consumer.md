@@ -3,7 +3,7 @@ id: 0019-labor-performance-cache-consumer
 slug: /adr/0019-labor-performance-cache-consumer
 title: 0019. Replace the synchronous labor-performance MeasuredRateClient with an event-fed local cache
 sidebar_label: 0019. Labor-performance cache consumer
-sidebar_position: 19
+sidebar_position: 20
 description: ProposePathPlan's measured-rate enrichment can now be served from a local, in-memory read model fed by labor-performance's new integration topic, instead of a synchronous HTTP call, mirroring this repo's own process-path-management kafkacatalog consumer.
 ---
 

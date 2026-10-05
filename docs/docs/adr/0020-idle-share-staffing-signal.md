@@ -3,7 +3,7 @@ id: 0020-idle-share-staffing-signal
 slug: /adr/0020-idle-share-staffing-signal
 title: 0020. Consume labor-performance's idle-share signal for staffing surfacing and proposal trim
 sidebar_label: 0020. Idle-share staffing signal
-sidebar_position: 20
+sidebar_position: 21
 description: laborperformancecache.Consumer now also tracks a running idle share per TaskType, surfaced on GetStaffingGap and used by ProposePathPlan to trim over-proposed heads when associates are already substantially idle.
 ---
 

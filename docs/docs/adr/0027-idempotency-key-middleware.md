@@ -1,9 +1,9 @@
 ---
 id: 0027-idempotency-key-middleware
 slug: /adr/0027-idempotency-key-middleware
-title: 27. Transactional Idempotency-Key middleware
+title: 0027. Transactional Idempotency-Key middleware
 sidebar_label: 27. Idempotency-Key middleware
-sidebar_position: 27
+sidebar_position: 28
 description: "ADR 0027 — POST /shift-plans and POST /associates/{id}/assignments require an Idempotency-Key header, enforced by a route-scoped, transactional HTTP middleware that shares the request's Postgres transaction with the wrapped use case (and its outbox insert), so a client retry after a dropped response can never double-apply the write or double-publish its events. Ported from order-management ADR 0023 and inventory-storage ADR 0018."
 ---
 

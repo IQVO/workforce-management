@@ -108,3 +108,7 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0026](./0026-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
 | [0027](./0027-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware on the creation POSTs | Accepted |
 | [0028](./0028-housekeeping-sweeper-idempotency-keys-and-outbox.md) | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted |
+| [0029](./0029-all-paths-staffing-gap-endpoint.md) | All-paths staffing-gap list endpoint for a building/shift | Accepted |
+| [0030](./0030-kafka-sourced-process-path-catalogue.md) | Kafka-sourced process-path catalogue (PATH_CATALOGUE_SOURCE=kafka) | Accepted |
+| [0031](./0031-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks and a 10ms batch timeout | Accepted |
+| [0032](./0032-bootretry-first-outbound-dial.md) | Boot-time retry for the first outbound dial (Istio sidecar warm-up) | Accepted |

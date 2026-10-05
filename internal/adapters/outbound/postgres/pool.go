@@ -13,7 +13,7 @@ import (
 
 // MaxConns is the OLTP pool's per-process connection ceiling, shared by
 // both cmd/workforce (the api Deployment, HPA-scalable up to
-// charts/workforce-management values.yaml's autoscaling.maxReplicas, 4)
+// charts/workforce-management values.yaml's autoscaling.api.maxReplicas, 4)
 // and cmd/mcp (the mcp Deployment, fixed at 1 replica -- see that chart
 // value's own doc comment for why it does not get an HPA).
 //

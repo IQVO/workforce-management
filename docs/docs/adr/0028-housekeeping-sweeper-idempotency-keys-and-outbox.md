@@ -1,9 +1,9 @@
 ---
 id: 0028-housekeeping-sweeper-idempotency-keys-and-outbox
 slug: /adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox
-title: 28. Housekeeping sweeper for idempotency keys and published outbox rows
+title: 0028. Housekeeping sweeper for idempotency keys and published outbox rows
 sidebar_label: 28. Housekeeping sweeper
-sidebar_position: 28
+sidebar_position: 29
 description: "ADR 0028 — a small background sweeper in cmd/workforce that deletes idempotency_keys older than a TTL (default 24h) and PUBLISHED outbox_events older than a retention (default 7d), closing the unbounded-growth gap left open by ADR 0016 and ADR 0027. Mirrors inventory-storage ADR 0026."
 ---
 

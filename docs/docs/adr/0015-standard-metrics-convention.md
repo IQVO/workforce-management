@@ -3,6 +3,7 @@ id: 0015-standard-metrics-convention
 slug: /adr/0015-standard-metrics-convention
 title: 0015. Standard metrics convention across the fleet
 sidebar_label: 0015. Standard metrics convention (fleet-wide)
+sidebar_position: 16
 description: ADR 0015 — a fleet-wide, two-tier metrics convention (mandatory telemetry.Setup + otelchi RED instrumentation, plus a shared naming/attribute shape for business counters) so metrics are predictable across services without reading each service's source first. workforce-management is already fully compliant.
 ---
 

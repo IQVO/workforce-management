@@ -2,7 +2,7 @@
 id: 0011-adopt-fleet-mfe-console-architecture
 title: 0011. Adopt the fleet-wide micro-frontend console architecture (workforce-mfe)
 sidebar_label: 0011. Adopt fleet MFE console
-sidebar_position: 11
+sidebar_position: 12
 description: An adoption record — this context conforms to warehouse-ops-agent's fleet-wide ADR-0002 by shipping its own Module Federation remote, scoped to what its REST API can actually support today.
 ---
 
@@ -10,7 +10,9 @@ description: An adoption record — this context conforms to warehouse-ops-agent
 
 ## Status
 
-Accepted.
+Accepted — the deferred all-paths read endpoint and the screen's adoption
+of it are recorded in [ADR-0029](./0029-all-paths-staffing-gap-endpoint.md)
+and the amended Decision bullet below.
 
 ## Context
 

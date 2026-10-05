@@ -2,7 +2,7 @@
 id: 0009-hazmat-certification-via-existing-path-gating
 title: 0009. Hazmat handling via the existing path-name-equals-certification-name gate
 sidebar_label: 0009. Hazmat via existing cert gating
-sidebar_position: 9
+sidebar_position: 10
 description: A cross-repo effort added a Hazmat product classification upstream; this context needs no new code to gate it — the existing certification convention already covers it.
 ---
 
@@ -10,7 +10,7 @@ description: A cross-repo effort added a Hazmat product classification upstream;
 
 ## Status
 
-Accepted — superseded in part by [ADR 0013](./0013-process-path-catalogue.md):
+Accepted — superseded in part by [ADR 0013](./0013-process-path-catalogue-validation):
 two clarifications from the 2026-10 ADR-conformance pass. First, `hazmat`
 is a station **capability** a declared path can require (e.g. the
 `HAZMAT-PICK` family, `RequiredCapabilities: [pick, hazmat]`), not itself a

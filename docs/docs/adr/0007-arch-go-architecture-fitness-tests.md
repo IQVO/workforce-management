@@ -104,6 +104,9 @@ makes the rules worth locking in.
 **Now true**
 
 - CI has a blocking `arch-test` job, alongside `lint`, `test`, `integration`,
-  `openapi-lint`, `helm-lint` and `bdd`.
+  `bdd`, `api-lint` (Spectral over apis/*.yaml) and `docs-api-drift`;
+  `helm-lint` runs only on pull requests targeting `main`. (_Job names
+  amended 2026-10 to match .github/workflows/ci.yml: the OpenAPI/AsyncAPI
+  Spectral job is `api-lint`, and helm-lint is PRs-to-main only._)
 - [ADR 0001](./0001-hexagonal-ports-and-adapters.md) is no longer merely
   aspirational; it is enforced.

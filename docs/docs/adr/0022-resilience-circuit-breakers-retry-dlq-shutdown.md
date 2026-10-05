@@ -1,8 +1,9 @@
 ---
 id: 0022-resilience-circuit-breakers-retry-dlq-shutdown
 slug: /adr/0022-resilience-circuit-breakers-retry-dlq-shutdown
-title: 22. Per-dependency circuit breakers, read-only retry, Kafka DLQ, and graceful shutdown hardening
+title: 0022. Per-dependency circuit breakers, read-only retry, Kafka DLQ, and graceful shutdown hardening
 sidebar_label: 22. Circuit breakers, retry, DLQ, shutdown
+sidebar_position: 23
 description: "ADR 0022 — Phase 2 resilience for workforce-management, ported verbatim from order-management's ADR-0025 (PR #107): sony/gobreaker/v2 circuit breakers per outbound dependency (never one global breaker) that reuse each client's EXISTING permissive fail-open/fail-loud behaviour as the OPEN-state fallback rather than inventing a new one; cenkalti/backoff/v4 jittered retry on labor-performance's read-only GET only, never on fulfillment-execution's commit-gating GET; a dead-letter topic for the analytics consumer so one poison message cannot block its partition; and a readiness-flip-first graceful shutdown sequence."
 ---
 
