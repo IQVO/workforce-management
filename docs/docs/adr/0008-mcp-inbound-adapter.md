@@ -1,31 +1,40 @@
 ---
 id: 0008-mcp-inbound-adapter
-title: 8. Model Context Protocol as an inbound adapter, not a new service
+title: 0008. Model Context Protocol as an inbound adapter, not a new service
 sidebar_label: 8. MCP inbound adapter
-sidebar_position: 8
-description: "Expose this bounded context to the AI ecosystem via an MCP server built as a second driving adapter over the existing use cases — Streamable HTTP, official Go SDK, static bearer-key auth, curated intent-level tools."
+sidebar_position: 9
+description: "Expose this bounded context to the AI ecosystem via an MCP server built as a second driving adapter over the existing use cases — Streamable HTTP, official Go SDK, unauthenticated by decision (auth superseded by ADR-0018), curated intent-level tools."
 ---
 
-# 8. Model Context Protocol as an inbound adapter, not a new service
+# 0008. Model Context Protocol as an inbound adapter, not a new service
 
 ## Status
 
-**Accepted.** The reference implementation is
-[`fulfillment-execution`](../ecosystem/siblings.md); this record adopts that
-same decision for `workforce-management`, Phase 5 of the estate-wide MCP
-rollout. The estate-wide rules it follows live in the
+**Accepted — auth/static-bearer sections superseded by
+[ADR-0018](./0018-remove-fleet-rest-identity.md).** REST and MCP surfaces in
+this repo are unauthenticated by decision; the `auth.go` bearer-key
+middleware, the two key classes and the chart's key Secret described below
+were removed with ADR-0018 and no longer exist. The reference implementation
+is [`fulfillment-execution`](../ecosystem/siblings.md); this record adopts
+that same decision for `workforce-management`, Phase 5 of the estate-wide
+MCP rollout. The estate-wide rules it follows live in the
 [MCP Governance Charter](../mcp/governance-charter.md).
 
 **Addendum (2026-09-07) — deployable to the cluster.** Until now `cmd/mcp`
 existed only as code: the image did not build it and the chart had no
 Deployment for it. This addendum makes it a real deployable without changing
-the decision above: the Dockerfile now builds `/app/mcp`; the Helm chart gains
-an `mcp.*` block (`enabled: false` by default) rendering a Deployment, a
-ClusterIP Service (`<release>-mcp`, port 8090) and a Secret for the static
-bearer keys; and `cmd/mcp` serves an **unauthenticated** `GET /healthz` for
-probes while mounting the authenticated Streamable HTTP handler at both `/`
-and `/mcp`. `warehouse-infra` flips `mcp.enabled` and wires the keys into
-`warehouse-ops-agent`'s `WORKFORCE_MANAGEMENT_MCP_ENDPOINT`/`_READ_KEY`.
+the decision above: the Dockerfile now builds `/app/mcp`; the Helm chart
+gains an `mcp.*` block (`enabled: false` by default) rendering a Deployment
+and a ClusterIP Service (`<release>-mcp`, port 8090); and `cmd/mcp` serves
+an **unauthenticated** `GET /healthz` for probes while mounting the
+Streamable HTTP handler at both `/` and `/mcp`. `warehouse-infra` flips
+`mcp.enabled` and wires the endpoint into `warehouse-ops-agent`'s
+`WORKFORCE_MANAGEMENT_MCP_ENDPOINT`.
+(_Amended 2026-10: the bearer-key Secret this addendum originally rendered
+went away with ADR-0018; the 2026-10 ADR-conformance pass additionally
+wired `EVENT_PUBLISHER`/`KAFKA_BROKERS`/`PATH_CATALOGUE_*` into the mcp
+Deployment so MCP-triggered assignments reach the outbox (ADR-0016) and get
+path-id validation (ADR-0013)._)
 
 ## Context
 
@@ -63,9 +72,9 @@ The forces:
   that moving people is a human call.
 - **This is an internal, non-user-facing deployment.** The servers run inside
   the `warehouse` kind cluster for agent and developer use, not on the public
-  internet for end users. The MCP authorization spec permits a static bearer
-  token for exactly this case; full OAuth 2.1 is required only when a server
-  faces real end users.
+  internet for end users. (_Superseded by ADR-0018: the fleet ultimately
+  removed the static bearer tokens this bullet originally justified, keeping
+  both surfaces unauthenticated for in-cluster use._)
 
 ## Decision
 
@@ -83,9 +92,11 @@ internal/adapters/inbound/mcp/
   tools.go       intent-level tool handlers -> call use cases
   resources.go   read-model resources (scoped, not bulk)
   prompts.go     workflow prompts (operational SOPs)
-  auth.go        bearer-key auth middleware (interface; OAuth-ready seam)
   mapping.go     tool I/O <-> DTOs; domain errors -> structured tool errors
 ```
+
+(_The `auth.go` bearer-key middleware this list originally included was
+removed by ADR-0018; REST and MCP are unauthenticated by decision._)
 
 It depends inward on `application` exactly as the HTTP adapter does. No MCP type
 appears in `internal/domain/**` or `internal/application/**`. The tool handlers
@@ -130,22 +141,25 @@ Resources expose existing read models as **scoped** context contracts
 Prompts encode operational SOPs (`cover_staffing_gaps`: how to read the gap,
 when a safe assignment is warranted, when to escalate, what "done" means).
 
-### Static bearer-key auth, behind an OAuth-ready seam
+### Static bearer-key auth, behind an OAuth-ready seam — REMOVED
 
-`auth.go` validates a per-client API key (from a Kubernetes Secret) on every
-request; missing or invalid key returns `401`; the key is never logged. Two key
-classes — read-only and read-write — gate the write tool without an IdP. The
-middleware is an **interface**, so an OAuth 2.1 resource-server implementation
-(short-lived tokens, `.well-known` discovery, no token passthrough) can drop in
-later without touching any tool handler. See ADR-0009 if/when that upgrade is
-taken.
+_This section is superseded by [ADR-0018](./0018-remove-fleet-rest-identity.md)._
+The `auth.go` middleware, the per-client API keys from a Kubernetes Secret,
+the 401 path and the two key classes described here were removed across all
+fleet services in the ADR-0017/0018 adopt/revert cycle; both surfaces are
+unauthenticated by decision, and no OAuth seam exists in the code today.
+(Jump straight to ADR-0018 for the current state.)
 
 ### Reuse the existing observability
 
-The adapter is instrumented with the same OpenTelemetry setup as the HTTP and
-Kafka boundaries: a span per tool call (tool name, scope, outcome). MCP calls
-appear in Jaeger and Grafana next to HTTP requests, continuing the same
-distributed traces.
+The adapter is instrumented with the same OpenTelemetry setup as the HTTP
+boundary: the MCP router wraps the handler in `otelchi.Middleware` plus
+`otelchimetric` request-duration metrics (ADR-0015 Tier 1), so MCP calls
+appear in Jaeger and Grafana next to HTTP requests. (_Amended 2026-10: the
+original "a span per tool call with tool name, scope and outcome
+attributes" overstated what shipped — spans and duration metrics come from
+the router-level otelchi middleware; there is no per-tool span-attribute
+convention in the code, and no rate limiter._)
 
 ## Consequences
 
@@ -185,8 +199,8 @@ distributed traces.
   its inputs defensively — the caller is a model, not our own code — which is
   stricter than what the HTTP DTO layer assumes.
 - **`assign_labor` is a state change an autonomous agent can trigger.** It is
-  annotated destructive, scope-gated, and rate-limited, and the spec expects
-  host-side consent, but the residual risk of an agent moving the wrong
-  associate is higher than for a human-driven HTTP call. The domain invariants
-  bound the damage; they do not eliminate the judgement risk — which is exactly
-  why this context surfaces the gap and leaves the decision to a human.
+  annotated destructive and the spec expects host-side consent, but the
+  residual risk of an agent moving the wrong associate is higher than for a
+  human-driven HTTP call. The domain invariants bound the damage; they do
+  not eliminate the judgement risk — which is exactly why this context
+  surfaces the gap and leaves the decision to a human.

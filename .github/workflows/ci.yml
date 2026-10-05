@@ -190,43 +190,21 @@ jobs:
   # ============================================================
   # CLASSIFICATION: INTEGRATION TESTING
   # ============================================================
+  # Every -tags=integration test in this repo boots its own dependencies
+  # via testcontainers (Postgres per package — a shared TestMain container
+  # where tests are table-isolated, throwaway containers where they need
+  # isolation — and testcontainers Kafka modules for broker tests). No
+  # service containers, no DATABASE_URL/ANALYTICS_DATABASE_URL env gates:
+  # a skip-gated test silently proves nothing on a runner.
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: workforce
-          POSTGRES_PASSWORD: workforce
-          POSTGRES_DB: workforce
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
-      analytics-postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: workforce
-          POSTGRES_PASSWORD: workforce
-          POSTGRES_DB: analytics
-        ports: ["5434:5432"]
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
           go-version-file: go.mod
       - name: Integration tests
-        env:
-          DATABASE_URL: "postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
-          ANALYTICS_DATABASE_URL: "postgres://workforce:workforce@localhost:5434/analytics?sslmode=disable"
         run: go test -tags=integration ./... -race -count=1
 
   # Fast, BLOCKING mutation subset: runs on every push/PR so a drop in test

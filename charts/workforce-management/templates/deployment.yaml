@@ -60,6 +60,19 @@ spec:
               value: {{ .Values.config.migrationsPath | quote }}
             - name: MAX_HOURS_PER_SHIFT
               value: {{ .Values.config.maxHoursPerShift | quote }}
+            # Housekeeping sweeper (ADR-0028): idempotency_keys TTL, published
+            # outbox retention and sweep period. "0" disables.
+            - name: HOUSEKEEPING_INTERVAL
+              value: {{ .Values.config.housekeepingInterval | quote }}
+            - name: IDEMPOTENCY_KEY_TTL
+              value: {{ .Values.config.idempotencyKeyTtl | quote }}
+            - name: OUTBOX_RETENTION
+              value: {{ .Values.config.outboxRetention | quote }}
+            # Graceful shutdown (ADR-0022 section 8): how long the pod keeps
+            # serving after /readyz flips to 503 so the readinessProbe can
+            # observe it before the listener closes.
+            - name: SHUTDOWN_DRAIN_DELAY
+              value: {{ .Values.config.shutdownDrainDelay | quote }}
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:

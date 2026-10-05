@@ -1,8 +1,9 @@
 ---
 id: 0026-cloudevents-mandatory-event-envelope
 slug: /adr/0026-cloudevents-mandatory-event-envelope
-title: 26. CloudEvents 1.0 as the mandatory event envelope
+title: 0026. CloudEvents 1.0 as the mandatory event envelope
 sidebar_label: 26. CloudEvents mandatory envelope
+sidebar_position: 27
 description: "ADR 0026 — every Kafka message workforce-management produces or consumes (integration warehouse.workforce.events AND analytics warehouse.workforce.analytics) is a CloudEvents 1.0 event in structured content mode, built and validated with github.com/cloudevents/sdk-go/v2/event. The flat envelope and the analytics Envelope v1 (schema_version) are removed with no coexistence. Supersedes the envelope half of ADR 0004 and ADR 0010."
 ---
 

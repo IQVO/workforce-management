@@ -3,6 +3,7 @@ id: 0016-transactional-outbox
 slug: /adr/0016-transactional-outbox
 title: 0016. Transactional outbox feeding both Kafka topics from one table
 sidebar_label: 0016. Transactional outbox
+sidebar_position: 17
 description: ADR 0016 — why this service stopped publishing to Kafka from inside its use cases and now commits every event's wire form (for the integration AND the analytics topic) to one outbox table in the same transaction as the aggregate, with an in-process relay draining it to both topics.
 ---
 
@@ -188,7 +189,11 @@ Adopt the **transactional outbox**, in a fan-out variant:
 - One more table, one more goroutine, one more failure mode (the relay)
   to observe. The relay logs every failed pass at ERROR with the row id,
   topic and broker error; `outbox_events.attempts`/`last_error` are
-  queryable. An outbox-lag metric is a follow-up.
+  queryable. (_The "outbox-lag metric is a follow-up" note below shipped:
+  `workforce.outbox.lag_seconds` (RegisterOutboxLagGauge,
+  internal/adapters/outbound/postgres/outbox_metrics.go) reports the age of
+  the oldest unpublished row, 0 when drained. Published rows are bounded by
+  the ADR-0028 sweeper's 7-day retention._)
 - Events are no longer synchronous with the HTTP response (documented
   above; acceptable for this domain).
 - `ShiftPlanCommitted` now costs N+1 outbox rows and N+1 relay sends where

@@ -3,6 +3,7 @@ id: 0017-adopt-fleet-rest-identity
 slug: /adr/0017-adopt-fleet-rest-identity
 title: 0017. Adopt the fleet REST identity — static bearer keys with read/read-write scopes
 sidebar_label: 0017. Fleet REST identity
+sidebar_position: 18
 description: "ADR 0017 — workforce-management adopts the fleet-wide REST identity decision (warehouse-ops-agent ADR 0005): static bearer keys mapped to read / read-write scopes, AUTH_MODE=enforce|log|off, one auth package per repository shared by the REST and MCP surfaces."
 ---
 

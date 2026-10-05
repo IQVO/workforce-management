@@ -3,6 +3,7 @@ id: 0014-installed-capacity-ceiling
 slug: /adr/0014-installed-capacity-ceiling
 title: 0014. Live installed-capacity ceiling on CommitShiftPlan, sourced from fulfillment-execution
 sidebar_label: 0014. Installed-capacity ceiling (fulfillment-execution)
+sidebar_position: 15
 description: ADR 0014 — CommitShiftPlan enforces plannedHeads against a LIVE, fulfillment-execution-sourced installed-capacity ceiling, as a second independent check alongside the existing caller-supplied installedStations invariant, and fails the entire commit loud on any fetch failure.
 ---
 

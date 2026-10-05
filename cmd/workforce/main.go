@@ -5,15 +5,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,10 +18,7 @@ import (
 	inbound "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/filecatalog"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/fulfillmentexecution"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/laborperformance"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/laborperformancecache"
@@ -32,6 +26,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/composition"
 	"github.com/claudioed/workforce-management/internal/resilience"
 )
 
@@ -104,28 +99,7 @@ func run() error {
 
 	breakerMetrics := newBreakerMetrics(logger)
 
-	databaseURL := requireEnv("DATABASE_URL")
-	// MIGRATIONS_DATABASE_URL, when set, is a DIRECT (non-pooled,
-	// session-mode) Postgres connection string used ONLY for the
-	// golang-migrate startup step below — everything else (the pgxpool
-	// this process serves requests through) keeps using databaseURL
-	// unchanged. See openPostgresPool's doc comment for the full "why":
-	// golang-migrate's postgres driver takes a session-scoped
-	// `SELECT pg_advisory_lock($1)` to serialize concurrent migration
-	// runs, which PgBouncer's transaction-pooling mode does not support
-	// (warehouse-infra's PgBouncer rollout, PR #43; this fallback closes
-	// the fleet-wide bug that rollout introduced — see ADR
-	// 0025-migrations-direct-postgres-connection.md and
-	// order-management's ADR-0029, the reference implementation this PR
-	// ports). Falls back to databaseURL when unset, which is every
-	// environment that doesn't provision the split (local dev, CI
-	// integration tests, and any cluster whose Terraform predates this
-	// fix) — byte-identical to this service's behavior before this
-	// change in that case.
-	migrationsDatabaseURL := envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL)
-	httpAddr := envOrDefault("HTTP_ADDR", ":8080")
-	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
-	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
+	settings := envSettingsFromEnv(databaseURLFromEnv())
 
 	// catalogueConsumerCtx/cancelCatalogueConsumer are declared here
 	// (rather than deferred to later in run()) because the Kafka
@@ -136,12 +110,12 @@ func run() error {
 	catalogueConsumerCtx, cancelCatalogueConsumer := context.WithCancel(context.Background())
 	defer cancelCatalogueConsumer()
 
-	catalogue, kafkaCatalogue, err := wireCatalogue(ctx, catalogueConsumerCtx, logger)
+	catalogue, kafkaCatalogue, err := composition.BuildCatalogue(ctx, catalogueConsumerCtx, catalogueConfigFromEnv(), logger)
 	if err != nil {
 		return err
 	}
 
-	pool, err := openPostgresPool(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
+	pool, err := openPostgresPool(ctx, logger, settings.databaseURL, settings.migrationsDatabaseURL, settings.migrationsPath)
 	if err != nil {
 		return err
 	}
@@ -170,21 +144,73 @@ func run() error {
 		measuredRate:     measuredRate,
 		idleShare:        idleShare,
 		breakerMetrics:   breakerMetrics,
-		maxHoursPerShift: maxHoursPerShift,
+		maxHoursPerShift: settings.maxHoursPerShift,
 		catalogue:        catalogue,
 		readiness:        readiness,
+		idempotencyPool:  pool,
 		logger:           logger,
 	})
 
 	server := &http.Server{
-		Addr:              httpAddr,
+		Addr:              settings.httpAddr,
 		Handler:           inbound.NewRouter(handler, logger, serviceName),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	return serveWorkforce(logger, httpAddr, server, readiness, repos.relay,
-		cancelCatalogueConsumer, kafkaCatalogue,
-		cancelRateConsumer, kafkaMeasuredRate)
+	// The housekeeping sweeper (ADR-0028) bounds idempotency_keys and the
+	// published tail of outbox_events. It is stopped in the shutdown
+	// sequence BEFORE the pool closes; the deferred call covers the
+	// listener-failure path (stop is idempotent).
+	stopSweeper := startSweeper(pool, housekeepingSettingsFromEnv(logger), logger)
+	defer stopSweeper()
+
+	// Stopping the Kafka consumers is step 4 of the ADR-0022 §8 shutdown
+	// sequence, after the HTTP drain.
+	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate)
+
+	return serveWorkforce(logger, settings.httpAddr, server, readiness, repos.relay, stopConsumers, stopSweeper)
+}
+
+// envSettings groups run()'s plain environment reads so the function itself
+// stays inside the linter's length budget.
+type envSettings struct {
+	databaseURL           string
+	migrationsDatabaseURL string
+	httpAddr              string
+	migrationsPath        string
+	maxHoursPerShift      float64
+}
+
+// databaseURLFromEnv crashes (requireEnv) when DATABASE_URL — the one
+// mandatory variable — is missing.
+func databaseURLFromEnv() string { return requireEnv("DATABASE_URL") }
+
+// envSettingsFromEnv reads the optional configuration; see openPostgresPool
+// and ADR-0025 for MIGRATIONS_DATABASE_URL.
+func envSettingsFromEnv(databaseURL string) envSettings {
+	return envSettings{
+		databaseURL:           databaseURL,
+		migrationsDatabaseURL: envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL),
+		httpAddr:              envOrDefault("HTTP_ADDR", ":8080"),
+		migrationsPath:        envOrDefault("MIGRATIONS_PATH", "migrations"),
+		maxHoursPerShift:      envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0),
+	}
+}
+
+// consumerStopper returns the step-4 shutdown action of ADR-0022 §8: cancel
+// each Kafka consumer's Run context, then release its reader. The consumers
+// are nil when their mode is not kafka.
+func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer) func() {
+	return func() {
+		cancelCatalogue()
+		if catalogue != nil {
+			_ = catalogue.Close()
+		}
+		cancelRate()
+		if rate != nil {
+			_ = rate.Close()
+		}
+	}
 }
 
 // workforceRepos groups the Postgres repositories, the event publisher,
@@ -208,7 +234,7 @@ type workforceRepos struct {
 // still correct, so the UnitOfWork is wired unconditionally.
 func wireRepos(pool *pgxpool.Pool, logger *slog.Logger) (*workforceRepos, func(), error) {
 	shiftPlans := postgres.NewShiftPlanRepo(pool)
-	publisher, relay, closePublisher, err := newEventPublisher(pool, shiftPlans, logger)
+	built, err := composition.BuildEventPublisher(publisherConfigFromEnv(), pool, shiftPlans, logger)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -216,10 +242,22 @@ func wireRepos(pool *pgxpool.Pool, logger *slog.Logger) (*workforceRepos, func()
 		associates:  postgres.NewAssociateRepo(pool),
 		shiftPlans:  shiftPlans,
 		assignments: postgres.NewAssignmentRepo(pool),
-		publisher:   publisher,
-		relay:       relay,
+		publisher:   built.Publisher,
+		relay:       built.Relay,
 		uow:         postgres.NewUnitOfWork(pool),
-	}, closePublisher, nil
+	}, built.Close, nil
+}
+
+// publisherConfigFromEnv resolves EVENT_PUBLISHER, KAFKA_BROKERS and
+// OUTBOX_RELAY_INTERVAL for the shared composition.BuildEventPublisher.
+// This process owns the outbox relay (RunRelay): cmd/mcp only inserts.
+func publisherConfigFromEnv() composition.PublisherConfig {
+	return composition.PublisherConfig{
+		Kind:          envOrDefault("EVENT_PUBLISHER", composition.LogPublisher),
+		Brokers:       strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
+		RunRelay:      true,
+		RelayInterval: envDurationOrDefault("OUTBOX_RELAY_INTERVAL", time.Second),
+	}
 }
 
 // setupServiceTelemetry wires OTel before any adapter is built and
@@ -258,67 +296,26 @@ func newBreakerMetrics(logger *slog.Logger) resilience.StateRecorder {
 	return circuitBreakerMetrics
 }
 
-// wireCatalogue resolves the process-path catalogue from its selectable
-// SOURCE, defaulting to the existing boot-time file read ("file") --
-// zero behavior change for any existing deployment unless
-// PATH_CATALOGUE_SOURCE=kafka is explicitly set, matching this fleet's
-// EVENT_PUBLISHER convention. See internal/adapters/outbound/kafkacatalog's
-// package doc comment for the full rationale and the readiness-gate
-// design, mirrored byte-for-byte from fulfillment-execution's and
-// wes-work-planning's identical wiring. catalogueConsumerCtx must
-// already be live for the kafka mode's consumer goroutine.
-func wireCatalogue(ctx, catalogueConsumerCtx context.Context, logger *slog.Logger) (ports.PathCatalogue, *kafkacatalog.Consumer, error) {
-	switch envOrDefault("PATH_CATALOGUE_SOURCE", "file") {
-	case "kafka":
-		kafkaBrokersCSV := os.Getenv("KAFKA_BROKERS")
-		if kafkaBrokersCSV == "" {
-			return nil, nil, fmt.Errorf("PATH_CATALOGUE_SOURCE=kafka requires KAFKA_BROKERS to be set")
-		}
-		// Retried: this consumer's construction dials Kafka directly to
-		// determine its readiness watermark (newTargetOffsets), and in
-		// this fleet EVERY injected pod's first outbound dial is reset
-		// ~10s after start (Istio native sidecars). One attempt here
-		// turns that transient into the same CrashLoopBackOff the
-		// Postgres boot dial below is guarded against.
-		var kafkaCatalogue *kafkacatalog.Consumer
-		if err := bootretry.Retry(ctx, logger, "connect process-path catalogue kafka consumer", func() error {
-			var newErr error
-			kafkaCatalogue, newErr = kafkacatalog.NewConsumer(ctx, strings.Split(kafkaBrokersCSV, ","), logger)
-			return newErr
-		}); err != nil {
-			return nil, nil, fmt.Errorf("failed to start the Kafka-sourced process-path catalogue: %w", err)
-		}
-		logger.Info("process-path catalogue source configured", "source", "kafka", "topic", kafkacatalog.Topic)
-		go func() {
-			logger.Info("process-path catalogue consumer running", "topic", kafkacatalog.Topic)
-			if err := kafkaCatalogue.Run(catalogueConsumerCtx); err != nil {
-				logger.Error("process-path catalogue consumer stopped", "error", err)
-			}
-		}()
+// newLaborMetrics wires the workforce.labor_assignments Tier-2 business
+// counter (ADR-0015) behind ports.LaborMetrics. Errors are non-fatal: nil
+// means this process runs without the counter, never without assignments.
+func newLaborMetrics(logger *slog.Logger) ports.LaborMetrics {
+	laborMetrics, err := telemetry.NewLaborMetrics()
+	if err != nil {
+		logger.Warn("labor assignment metrics unavailable; assignments will run without the workforce.labor_assignments counter", "error", err)
+	}
+	return laborMetrics
+}
 
-		logger.Info("waiting for the process-path catalogue to replay its initial history before accepting traffic")
-		waitCtx, waitCancel := context.WithTimeout(context.Background(), kafkacatalog.WaitReadyTimeout)
-		err := kafkaCatalogue.WaitReady(waitCtx)
-		waitCancel()
-		if err != nil {
-			return nil, nil, fmt.Errorf("process-path catalogue did not become ready within %s: %w", kafkacatalog.WaitReadyTimeout, err)
-		}
-		logger.Info("process-path catalogue is ready", "paths", kafkaCatalogue.Ids())
-		return kafkaCatalogue, kafkaCatalogue, nil
-	default:
-		// The process-path catalogue is loaded and validated once at
-		// boot, before anything else stands up — a missing or
-		// malformed catalogue file must stop this service from
-		// starting at all, never fall back to a partial/empty
-		// catalogue (mirrors fulfillment-execution's and
-		// wes-work-planning's identical boot-time contract; see
-		// ADR-0013).
-		fileCatalogue, err := filecatalog.Load(envOrDefault("PATH_CATALOGUE_FILE", "/etc/workforce-management/process-paths.yaml"))
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to load the process-path catalogue: %w", err)
-		}
-		logger.Info("process-path catalogue loaded", "paths", fileCatalogue.Ids())
-		return fileCatalogue, nil, nil
+// catalogueConfigFromEnv resolves PATH_CATALOGUE_SOURCE (file|kafka,
+// default file), PATH_CATALOGUE_FILE and KAFKA_BROKERS for the shared
+// composition.BuildCatalogue, which cmd/mcp also uses so both surfaces
+// validate path ids against the same catalogue (ADR-0013).
+func catalogueConfigFromEnv() composition.CatalogueConfig {
+	return composition.CatalogueConfig{
+		Source:  envOrDefault("PATH_CATALOGUE_SOURCE", composition.CatalogueFromFile),
+		File:    envOrDefault("PATH_CATALOGUE_FILE", "/etc/workforce-management/process-paths.yaml"),
+		Brokers: strings.Split(os.Getenv("KAFKA_BROKERS"), ","),
 	}
 }
 
@@ -445,6 +442,7 @@ type oltpHandlerDeps struct {
 	maxHoursPerShift float64
 	catalogue        ports.PathCatalogue
 	readiness        *inbound.Readiness
+	idempotencyPool  *pgxpool.Pool
 	logger           *slog.Logger
 }
 
@@ -457,7 +455,7 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow},
 		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, Catalogue: d.catalogue, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
-		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, Catalogue: d.catalogue, Metrics: newLaborMetrics(d.logger), UnitOfWork: d.uow},
 		StartBreak:          &usecases.StartBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		EndBreak:            &usecases.EndBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: d.shiftPlans, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, IdleShare: d.idleShare, UnitOfWork: d.uow},
@@ -467,155 +465,9 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 		// flipped to not-ready as the FIRST step of shutdown, below,
 		// before anything else stops.
 		Readiness: d.readiness,
+		// IdempotencyPool wires RequireIdempotencyKey onto the creation POSTs (ADR-0027).
+		IdempotencyPool: d.idempotencyPool,
 	}
-}
-
-// serveWorkforce runs the HTTP server until a signal arrives or the
-// listener fails, with the outbox relay draining alongside, then drains
-// everything under the ADR-0022 §graceful shutdown sequence.
-func serveWorkforce(logger *slog.Logger, httpAddr string, server *http.Server, readiness *inbound.Readiness, relay *postgres.OutboxRelay,
-	cancelCatalogueConsumer context.CancelFunc, kafkaCatalogue *kafkacatalog.Consumer,
-	cancelRateConsumer context.CancelFunc, kafkaMeasuredRate *laborperformancecache.Consumer) error {
-	serverErr := make(chan error, 1)
-	go func() {
-		logger.Info("http server listening", "addr", httpAddr)
-		serverErr <- server.ListenAndServe()
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
-	// The outbox relay (ADR 0016) runs alongside the HTTP server in the
-	// same process, draining outbox_events onto both Kafka topics. It is
-	// only wired in kafka mode (see newEventPublisher).
-	relayDone := make(chan struct{})
-	relayCtx, stopRelay := context.WithCancel(context.Background())
-	defer stopRelay()
-	if relay != nil {
-		go func() {
-			defer close(relayDone)
-			logger.Info("outbox relay running", "topics", []string{kafka.Topic, kafka.AnalyticsTopic})
-			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
-				serverErr <- err
-			}
-		}()
-	} else {
-		close(relayDone)
-	}
-
-	select {
-	case err := <-serverErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-	case <-stop:
-		// Graceful shutdown (ADR-0022 §graceful shutdown, ported from
-		// order-management's ADR-0025): flip readiness to not-ready
-		// FIRST, before anything else stops -- a Kubernetes
-		// readinessProbe polling /readyz needs a window to observe
-		// this and stop routing NEW traffic to this pod before the
-		// HTTP listener itself closes below.
-		readiness.SetNotReady()
-
-		cancelCatalogueConsumer()
-		if kafkaCatalogue != nil {
-			_ = kafkaCatalogue.Close()
-		}
-		cancelRateConsumer()
-		if kafkaMeasuredRate != nil {
-			_ = kafkaMeasuredRate.Close()
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := server.Shutdown(shutdownCtx)
-		// Let the relay finish its in-flight pass so an event committed by
-		// a request that completed just before shutdown is not stranded
-		// until the next pod boots.
-		stopRelay()
-		select {
-		case <-relayDone:
-		case <-shutdownCtx.Done():
-			logger.Warn("outbox relay did not stop before the shutdown deadline")
-		}
-		return err
-	}
-	return nil
-}
-
-// newEventPublisher selects an EventPublisher via EVENT_PUBLISHER
-// (kafka|log, default log) so existing behavior — and existing tests — are
-// unaffected unless kafka is explicitly opted into. It returns the
-// publisher, the outbox relay to run alongside the HTTP server (nil when
-// there is none), and a close func to release adapter resources on
-// shutdown.
-//
-// In kafka mode the use cases publish into the transactional outbox
-// (ADR 0016): both Kafka publishers act as Encoders feeding one
-// OutboxPublisher, and the relay forwards each row to the topic it names.
-// The direct MultiPublisher path is kept only for a nil pool, which this
-// binary never has (DATABASE_URL is required) — it is what an in-memory
-// composition would use, and it documents the matrix in the ADR.
-func newEventPublisher(pool *pgxpool.Pool, shiftPlans ports.ShiftPlanRepo, logger *slog.Logger) (ports.EventPublisher, *postgres.OutboxRelay, func(), error) {
-	switch envOrDefault("EVENT_PUBLISHER", "log") {
-	case "kafka":
-		brokers := strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ",")
-		integration := kafka.NewPublisher(brokers, shiftPlans)
-		// Fan-out: the same domain events also feed the analytics data product
-		// on a SEPARATE topic (ADR-0010). The integration publisher/topic is
-		// untouched; the analytics publisher is an additive second sink.
-		analytics := kafka.NewAnalyticsPublisher(brokers, kafka.NewEventID)
-		closeDirect := func() {
-			if err := integration.Close(); err != nil {
-				logger.Error("kafka publisher close failed", "error", err)
-			}
-			if err := analytics.Close(); err != nil {
-				logger.Error("kafka analytics publisher close failed", "error", err)
-			}
-		}
-
-		if pool == nil {
-			logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-				"brokers", brokers, "topic", kafka.Topic, "analytics_topic", kafka.AnalyticsTopic)
-			return events.NewMultiPublisher(integration, analytics), nil, closeDirect, nil
-		}
-
-		return newOutboxPublisher(pool, logger, brokers, integration, analytics, closeDirect)
-	case "log":
-		logger.Info("event publisher configured", "publisher", "log")
-		return events.NewLogPublisher(logger), nil, func() {}, nil
-	default:
-		return nil, nil, nil, fmt.Errorf("unknown EVENT_PUBLISHER %q (want kafka or log)", os.Getenv("EVENT_PUBLISHER"))
-	}
-}
-
-// newOutboxPublisher wires the transactional-outbox publish path
-// (ADR 0016): both Kafka publishers act as Encoders feeding one
-// OutboxPublisher, and the returned relay forwards each stored row to
-// the topic it names. The returned close func releases the direct
-// writers, the relay sink, and the outbox lag gauge registered
-// alongside the relay (workforce.outbox.lag_seconds, ADR 0016's flagged
-// follow-up -- only meaningful when the outbox is the publish path).
-func newOutboxPublisher(pool *pgxpool.Pool, logger *slog.Logger, brokers []string, integration *kafka.Publisher, analytics *kafka.AnalyticsPublisher, closeDirect func()) (ports.EventPublisher, *postgres.OutboxRelay, func(), error) {
-	sink := kafka.NewRelaySink(brokers)
-	relay := postgres.NewOutboxRelay(pool, sink, logger,
-		postgres.WithInterval(envDurationOrDefault("OUTBOX_RELAY_INTERVAL", time.Second)))
-	lagGaugeReg, err := postgres.RegisterOutboxLagGauge(pool)
-	if err != nil {
-		logger.Error("failed to register outbox lag gauge", "error", err)
-	}
-	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"brokers", brokers, "topic", kafka.Topic, "analytics_topic", kafka.AnalyticsTopic)
-	return postgres.NewOutboxPublisher(pool, integration, analytics), relay, func() {
-		closeDirect()
-		if err := sink.Close(); err != nil {
-			logger.Error("kafka relay sink close failed", "error", err)
-		}
-		if lagGaugeReg != nil {
-			if err := lagGaugeReg.Unregister(); err != nil {
-				logger.Warn("outbox lag gauge unregister failed", "error", err)
-			}
-		}
-	}, nil
 }
 
 func requireEnv(key string) string {

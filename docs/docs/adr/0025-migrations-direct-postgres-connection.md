@@ -1,8 +1,9 @@
 ---
 id: 0025-migrations-direct-postgres-connection
 slug: /adr/0025-migrations-direct-postgres-connection
-title: 25. Run golang-migrate against a direct Postgres connection, not PgBouncer
+title: 0025. Run golang-migrate against a direct Postgres connection, not PgBouncer
 sidebar_label: 25. Migrations bypass PgBouncer
+sidebar_position: 26
 description: "ADR 0025 — fleet-wide Phase 4 finding, ported from order-management's reference implementation (ADR-0029, PR #115): golang-migrate's postgres driver takes a session-scoped pg_advisory_lock to serialize concurrent migration runs, which is incompatible with PgBouncer's transaction-pooling mode (warehouse-infra PR #43). Two or more workforce-management replicas starting concurrently (HPA scale-out, or an ordinary rolling deploy) would crash-loop until one won the advisory-lock race. Fix: a second env var, MIGRATIONS_DATABASE_URL, carries a direct (non-pooled) connection string used ONLY for the migration step; DATABASE_URL/the runtime pgxpool is untouched and keeps going through PgBouncer. warehouse-infra PR #44 already provisions the secret key for this and all 9 OLTP services."
 ---
 
@@ -37,11 +38,13 @@ traffic:
 - `cmd/workforce/main.go`'s `openPostgresPool`
 - `cmd/mcp/main.go`'s `newRepos`
 
-(`cmd/workforce-projector` and `cmd/workforce-reports` run migrations
-against `ANALYTICS_DATABASE_URL` / `ANALYTICS_READER_DATABASE_URL`
-respectively — the fleet's analytics DSNs, which PR #43 already pointed
-directly at Postgres, not PgBouncer, so they are unaffected by this bug
-and out of scope for this ADR.)
+(`cmd/workforce-projector` and `cmd/workforce-reports` run against the
+analytics database — the projector migrates it via its own DSN; the reports
+binary is a pure READER (it runs no migrations) and its `ANALYTICS_DATABASE_URL`
+env var is fed from the secret key `ANALYTICS_READER_DATABASE_URL` so it
+holds the read-only DSN. Those DSNs were already pointed directly at
+Postgres, not PgBouncer, by PR #43, so both are unaffected by this bug and
+out of scope for this ADR.)
 
 golang-migrate's postgres driver calls `SELECT pg_advisory_lock($1)` to
 serialize concurrent migration runs — by design: if two processes start

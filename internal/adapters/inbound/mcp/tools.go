@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
+	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
@@ -36,6 +37,25 @@ type Deps struct {
 	// curated get_workforce_labor_report tool. When nil, that tool is not
 	// registered (an MCP deployment without the reports service).
 	Reports ReportsClient
+	// Catalogue validates every caller-supplied pathId against the fleet's
+	// declared process-path catalogue (ADR-0013) before it reaches a use
+	// case — exactly as the REST adapter does. ports.PathCatalogue (not the
+	// concrete type) so a Kafka-fed catalogue can be wired in. A nil
+	// Catalogue skips validation: that is a unit-test seam only; both
+	// composition roots fail at boot when no catalogue can be loaded.
+	Catalogue ports.PathCatalogue
+}
+
+// validatePathId checks pathId against the catalogue when one is wired in,
+// mirroring the HTTP adapter's Handler.validatePathId.
+func (d Deps) validatePathId(pathId string) error {
+	if d.Catalogue == nil {
+		return nil
+	}
+	if _, err := d.Catalogue.Lookup(pathId); err != nil {
+		return fmt.Errorf("pathId %q: %w", pathId, err)
+	}
+	return nil
 }
 
 // --- get_staffing_gap ---------------------------------------------------------
@@ -49,6 +69,9 @@ type staffingGapInput struct {
 func (d Deps) getStaffingGap(ctx context.Context, in staffingGapInput) (staffingGap, error) {
 	if in.BuildingId == "" || in.ShiftId == "" || in.PathId == "" {
 		return staffingGap{}, fmt.Errorf("buildingId, shiftId and pathId are required")
+	}
+	if err := d.validatePathId(in.PathId); err != nil {
+		return staffingGap{}, err
 	}
 	gap, err := d.GetStaffingGap.Execute(ctx, in.BuildingId, in.ShiftId, shared.PathId(in.PathId))
 	if err != nil {
@@ -77,6 +100,9 @@ type proposeHeadsOutput struct {
 func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (proposeHeadsOutput, error) {
 	if in.BuildingId == "" || in.PathId == "" {
 		return proposeHeadsOutput{}, fmt.Errorf("buildingId and pathId are required")
+	}
+	if err := d.validatePathId(in.PathId); err != nil {
+		return proposeHeadsOutput{}, err
 	}
 	if in.Charge < 0 {
 		return proposeHeadsOutput{}, fmt.Errorf("charge must not be negative")
@@ -110,6 +136,9 @@ type assignLaborInput struct {
 func (d Deps) assignLabor(ctx context.Context, in assignLaborInput) (laborAssignmentView, error) {
 	if in.AssociateId == "" || in.PathId == "" {
 		return laborAssignmentView{}, fmt.Errorf("associateId and pathId are required")
+	}
+	if err := d.validatePathId(in.PathId); err != nil {
+		return laborAssignmentView{}, err
 	}
 	la, err := d.AssignLabor.Execute(ctx, shared.AssociateId(in.AssociateId), shared.PathId(in.PathId))
 	if err != nil {
