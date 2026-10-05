@@ -40,7 +40,7 @@ func TestBuildDeps_SharesPublisherUnitOfWorkAndCatalogue(t *testing.T) {
 		uow:         uow,
 	}
 
-	deps := buildDeps(r, pub, catalogue, 8)
+	deps := buildDeps(r, pub, catalogue, 8, quietLogger())
 
 	if deps.AssignLabor == nil || deps.GetStaffingGap == nil || deps.ProposePathPlan == nil {
 		t.Fatal("a use case is not wired")

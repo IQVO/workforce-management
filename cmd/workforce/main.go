@@ -296,6 +296,17 @@ func newBreakerMetrics(logger *slog.Logger) resilience.StateRecorder {
 	return circuitBreakerMetrics
 }
 
+// newLaborMetrics wires the workforce.labor_assignments Tier-2 business
+// counter (ADR-0015) behind ports.LaborMetrics. Errors are non-fatal: nil
+// means this process runs without the counter, never without assignments.
+func newLaborMetrics(logger *slog.Logger) ports.LaborMetrics {
+	laborMetrics, err := telemetry.NewLaborMetrics()
+	if err != nil {
+		logger.Warn("labor assignment metrics unavailable; assignments will run without the workforce.labor_assignments counter", "error", err)
+	}
+	return laborMetrics
+}
+
 // catalogueConfigFromEnv resolves PATH_CATALOGUE_SOURCE (file|kafka,
 // default file), PATH_CATALOGUE_FILE and KAFKA_BROKERS for the shared
 // composition.BuildCatalogue, which cmd/mcp also uses so both surfaces
@@ -444,7 +455,7 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow},
 		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, Catalogue: d.catalogue, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
-		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, Metrics: newLaborMetrics(d.logger), UnitOfWork: d.uow},
 		StartBreak:          &usecases.StartBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		EndBreak:            &usecases.EndBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: d.shiftPlans, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, IdleShare: d.idleShare, UnitOfWork: d.uow},

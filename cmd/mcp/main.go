@@ -143,15 +143,29 @@ func catalogueConfigFromEnv() composition.CatalogueConfig {
 	}
 }
 
+// newLaborMetrics wires the SAME workforce.labor_assignments Tier-2 counter
+// (ADR-0015) cmd/workforce gives its HTTP-triggered AssignLabor, so
+// MCP-triggered assignments are counted on the identical instrument.
+// Errors are non-fatal: nil means "not instrumented".
+func newLaborMetrics(logger *slog.Logger) ports.LaborMetrics {
+	laborMetrics, err := telemetry.NewLaborMetrics()
+	if err != nil {
+		logger.Warn("labor assignment metrics unavailable; MCP assignments will run without the workforce.labor_assignments counter", "error", err)
+	}
+	return laborMetrics
+}
+
 // buildDeps wires the MCP adapter's use cases with the SAME publisher, clock,
 // UnitOfWork and catalogue the HTTP service gives them: GetStaffingGap and
-// ProposePathPlan (read) and AssignLabor (write).
-func buildDeps(r repos, publisher ports.EventPublisher, catalogue ports.PathCatalogue, maxHoursPerShift float64) inboundmcp.Deps {
+// ProposePathPlan (read) and AssignLabor (write). AssignLabor also gets the
+// SAME Tier-2 metrics port (ADR-0015): MCP-triggered assignments count on
+// workforce.labor_assignments exactly like HTTP-triggered ones.
+func buildDeps(r repos, publisher ports.EventPublisher, catalogue ports.PathCatalogue, maxHoursPerShift float64, logger *slog.Logger) inboundmcp.Deps {
 	sysClock := clock.System{}
 	return inboundmcp.Deps{
 		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
 		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
-		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, UnitOfWork: r.uow},
+		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, Metrics: newLaborMetrics(logger), UnitOfWork: r.uow},
 		Catalogue:       catalogue,
 	}
 }
@@ -233,7 +247,7 @@ func run() error {
 	}
 	defer built.Close()
 
-	deps := buildDeps(r, built.Publisher, catalogue, maxHoursPerShift)
+	deps := buildDeps(r, built.Publisher, catalogue, maxHoursPerShift, logger)
 	// Optional curated data-product tool: when REPORTS_BASE_URL is set, the MCP
 	// server exposes get_workforce_labor_report backed by the workforce-reports
 	// REST service (ADR-0010). It never opens the analytical database directly.

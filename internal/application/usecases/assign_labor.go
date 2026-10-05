@@ -27,6 +27,9 @@ type AssignLabor struct {
 	Events           ports.EventPublisher
 	Clock            ports.Clock
 	MaxHoursPerShift float64
+	// Metrics records every attempt on the workforce.labor_assignments
+	// counter (ADR-0015 Tier 2). Optional: nil means "not instrumented".
+	Metrics ports.LaborMetrics
 	// UnitOfWork brackets every Save and the Publish atomically (ADR 0016).
 	// Optional: nil means "no transactional backing" and the calls run back
 	// to back, which is the in-memory / log-publisher configuration.
@@ -39,7 +42,7 @@ type AssignLabor struct {
 // workforce.labor_assignments metric. That is observation only: it does not
 // change what this use case decides or returns.
 func (uc *AssignLabor) Execute(ctx context.Context, associateId shared.AssociateId, pathId shared.PathId) (result *assignment.LaborAssignment, err error) {
-	defer func() { recordLaborAssignment(ctx, pathId, err) }()
+	defer func() { recordLaborAssignment(ctx, uc.Metrics, pathId, err) }()
 
 	shift, err := uc.Associates.FindByID(ctx, associateId)
 	if err != nil {

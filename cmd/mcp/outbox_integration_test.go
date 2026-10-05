@@ -109,7 +109,7 @@ func TestMCPAssignLabor_WritesOutboxRows(t *testing.T) {
 		t.Fatalf("seed associate: %v", err)
 	}
 
-	srv := httptest.NewServer(newRouter(inboundmcp.Handler(inboundmcp.NewServer(buildDeps(r, built.Publisher, catalogue, 8))), "workforce-management-mcp-itest"))
+	srv := httptest.NewServer(newRouter(inboundmcp.Handler(inboundmcp.NewServer(buildDeps(r, built.Publisher, catalogue, 8, logger))), "workforce-management-mcp-itest"))
 	t.Cleanup(srv.Close)
 
 	client := sdk.NewClient(&sdk.Implementation{Name: "itest-client", Version: "0.0.1"}, nil)

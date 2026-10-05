@@ -189,3 +189,19 @@ type Clock interface {
 type PathCatalogue interface {
 	Lookup(id string) (pathcatalog.PathDefinition, error)
 }
+
+// LaborMetrics records labor-assignment outcomes so the business signal
+// (are we staffing paths, and why are assignments being rejected) is
+// observable independently of HTTP traffic. Tier-2 business metric per
+// ADR-0015: the instrument lives behind this port, implemented by the
+// outbound telemetry adapter — the application layer never touches
+// otel.Meter directly. Use cases treat a nil value as "not instrumented",
+// so wiring it is optional.
+type LaborMetrics interface {
+	// AssignmentAccepted records one accepted AssignLabor attempt on pathId.
+	AssignmentAccepted(ctx context.Context, pathId shared.PathId)
+	// AssignmentRejected records one rejected AssignLabor attempt on pathId;
+	// reason is a closed-set, low-cardinality slug (uncertified, on_break,
+	// shift_ended, max_hours_exceeded, associate_not_found, internal_error).
+	AssignmentRejected(ctx context.Context, pathId shared.PathId, reason string)
+}

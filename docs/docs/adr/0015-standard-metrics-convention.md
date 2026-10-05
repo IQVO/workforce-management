@@ -10,7 +10,13 @@ description: ADR 0015 — a fleet-wide, two-tier metrics convention (mandatory t
 
 ## Status
 
-Accepted.
+Accepted — workforce-management's own counter placement and attribute keys
+were brought to this decision's Tier-2 shape by the 2026-10 ADR-conformance
+pass (instrument moved from the application layer's global `otel.Meter` to
+`ports.LaborMetrics` + the outbound telemetry adapter; attribute keys
+renamed `workforce.assignment.outcome`/`workforce.assignment.reason` →
+`outcome`/`reason`; instrument name `workforce.labor_assignments`
+unchanged).
 
 ## Context
 
@@ -53,11 +59,13 @@ being the fleet's only dashboard, eleven weeks into having Prometheus
 running, is the visible symptom.
 
 `workforce-management` is one of the fleet's reference implementations for
-this ADR: it already calls `telemetry.Setup`, wires the three-line
-`otelchi` RED middleware chain on its HTTP adapter, and emits the
-`workforce.labor_assignments` business counter with the `outcome`, `reason`,
-and `workforce.path.id` attributes described above — no code changes are
-required in this repo as a result of this decision.
+this ADR: it calls `telemetry.Setup`, wires the three-line `otelchi` RED
+middleware chain on its HTTP adapter, and emits the
+`workforce.labor_assignments` business counter. (A 2026-10 conformance pass
+moved that counter behind a `ports.LaborMetrics` port implemented by the
+outbound telemetry adapter and renamed its attribute keys to the fleet's
+`outcome`/`reason` shape — see the status note; before that pass this record
+over-claimed that the repo "needed no change".)
 
 ## Decision
 
@@ -164,3 +172,11 @@ This ADR does NOT require renaming metrics that already fit the shape
   counter (attrs `workforce.assignment.outcome`, `workforce.assignment.reason`,
   `workforce.path.id`) already conform and now serve as one of the fleet's
   reference implementations of this convention.
+  _Amended 2026-10: the claim above was wrong on two counts — the counter
+  lived on the application layer's global `otel.Meter` (Tier-2 placement
+  says behind a port) and its outcome/reason keys carried a service-specific
+  prefix. The conformance pass moved the instrument into
+  `internal/adapters/outbound/telemetry` behind `ports.LaborMetrics` and
+  renamed the keys to `outcome`/`reason`; the instrument name
+  `workforce.labor_assignments` (and `workforce.path.id`) is unchanged, so
+  dashboards keyed on the series name keep working._
