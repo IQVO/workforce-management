@@ -4,11 +4,11 @@
 // applied to every pool connection — against a real Postgres 16
 // (testcontainers), not a mock or a pg_settings assumption. Gated behind
 // the `integration` build tag, mirroring every other Postgres
-// integration test in this package. Unlike testPool (integration_test.go),
-// these boot their OWN throwaway container rather than reading
-// DATABASE_URL, so they can drive test-only MaxConns/statementTimeout
-// values without touching the CI-provisioned shared database or waiting
-// out the production timeout.
+// integration test in this package. Unlike the shared TestMain container
+// behind testPool (integration_test.go), these boot their OWN throwaway
+// container, so they can drive test-only MaxConns/statementTimeout values
+// without disturbing the shared instance or waiting out the production
+// timeout.
 package postgres_test
 
 import (
