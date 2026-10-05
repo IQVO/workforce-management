@@ -17,16 +17,25 @@ import (
 // second call.
 //
 // Path -> required certification is a naming convention in this context: a
-// path's required certification is the Certification with the same name as
-// its PathId (e.g. path "pack" requires certification "pack"). This context
-// owns no separate path-requirements concept, so the convention avoids
-// inventing one.
+// path's required certification is, by default, the Certification with the
+// same name as the PathId (e.g. path "pack" requires certification
+// "pack"). When a Catalogue is wired, that name is the RESOLVED path
+// family's canonical prefix rather than the raw caller-supplied id: the
+// catalogue (ADR-0013) recognizes "PICK", "pick" and "pick-zone-a" as one
+// family, so all three require certification "pick" — an exact raw-id
+// match here would reject a certified associate over a case variant or
+// zone suffix (the 2026-10 ADR-conformance fix; see ADR-0009's amendment).
 type AssignLabor struct {
 	Associates       ports.AssociateRepo
 	Assignments      ports.AssignmentRepo
 	Events           ports.EventPublisher
 	Clock            ports.Clock
 	MaxHoursPerShift float64
+	// Catalogue normalises the required-certification name through the
+	// path's canonical family (ADR-0013). Optional: nil keeps the raw
+	// pathId-as-certification convention, which is the in-memory test
+	// configuration's behaviour.
+	Catalogue ports.PathCatalogue
 	// Metrics records every attempt on the workforce.labor_assignments
 	// counter (ADR-0015 Tier 2). Optional: nil means "not instrumented".
 	Metrics ports.LaborMetrics
@@ -34,6 +43,20 @@ type AssignLabor struct {
 	// Optional: nil means "no transactional backing" and the calls run back
 	// to back, which is the in-memory / log-publisher configuration.
 	UnitOfWork ports.UnitOfWork
+}
+
+// requiredCertification resolves the certification a path requires. A
+// successful catalogue lookup yields the family's canonical prefix (the
+// lower-case form certifications are documented in: "pack", "hazmat",
+// "pick"); anything else falls back to the raw pathId, preserving the
+// historical convention for catalogue-less configurations.
+func requiredCertification(catalogue ports.PathCatalogue, pathId shared.PathId) shared.Certification {
+	if catalogue != nil {
+		if def, err := catalogue.Lookup(string(pathId)); err == nil && def.MatchPrefix != "" {
+			return shared.Certification(def.MatchPrefix)
+		}
+	}
+	return shared.Certification(pathId)
 }
 
 // Execute assigns associateId to pathId.
@@ -52,7 +75,7 @@ func (uc *AssignLabor) Execute(ctx context.Context, associateId shared.Associate
 		return nil, err
 	}
 
-	requiredCert := shared.Certification(pathId)
+	requiredCert := requiredCertification(uc.Catalogue, pathId)
 	hasCert := shift.HasCertification(requiredCert)
 
 	la, err := uc.Assignments.FindByAssociateID(ctx, associateId)

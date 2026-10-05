@@ -10,7 +10,16 @@ description: A cross-repo effort added a Hazmat product classification upstream;
 
 ## Status
 
-Accepted.
+Accepted — superseded in part by [ADR 0013](./0013-process-path-catalogue.md):
+two clarifications from the 2026-10 ADR-conformance pass. First, `hazmat`
+is a station **capability** a declared path can require (e.g. the
+`HAZMAT-PICK` family, `RequiredCapabilities: [pick, hazmat]`), not itself a
+catalogue-declared path id — a bare `pathId: "hazmat"` is rejected `400
+unknown-path-id` by the REST route's catalogue validation. Second, the
+required-certification name is now resolved through the catalogue's
+canonical path family (see the Decision amendment below), fixing a real
+mismatch between the catalogue's case-insensitive prefix ids and the exact
+raw-id certification match.
 
 ## Context
 
@@ -59,6 +68,22 @@ remains the same open string type it always was (see
 `internal/domain/shared/ids.go`); it is not converted into a closed enum,
 consistent with this context's existing convention of documenting known
 values rather than closing the type.
+
+_Amended 2026-10 (ADR-0013 interaction):_ when a catalogue is wired (every
+real deployment; it has been mandatory for REST/MCP writes since
+ADR-0013), the required certification is the RESOLVED path family's
+canonical prefix rather than the raw caller-supplied id:
+`AssignLabor.requiredCertification` resolves `PICK`, `pick` and
+`pick-zone-a` all to certification `pick`, and a `hazmat-pick`-family id to
+`hazmat-pick`. The earlier exact raw-id match was a genuine bug against
+ADR-0013's matching semantics: an associate holding the documented
+lower-case certification was rejected over a case variant or zone suffix.
+Bare `hazmat` as a path id is unreachable via REST/MCP (400
+unknown-path-id, above); a path FAMILY whose work requires hazmat
+capability — `hazmat-pick` — is the real shape, gated by the `hazmat-pick`
+certification. `TestAssignLabor_CatalogueNormalisesRequiredCertification`
+(use cases) and `TestAssignLabor_HazmatPath_ThroughHTTP` (router) cover
+both.
 
 `internal/application/usecases/usecases_test.go` gains one illustrative test,
 `TestAssignLabor_HazmatPath`, applying the same certified/uncertified

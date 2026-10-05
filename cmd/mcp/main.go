@@ -165,7 +165,7 @@ func buildDeps(r repos, publisher ports.EventPublisher, catalogue ports.PathCata
 	return inboundmcp.Deps{
 		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
 		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
-		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, Metrics: newLaborMetrics(logger), UnitOfWork: r.uow},
+		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, Catalogue: catalogue, Metrics: newLaborMetrics(logger), UnitOfWork: r.uow},
 		Catalogue:       catalogue,
 	}
 }
