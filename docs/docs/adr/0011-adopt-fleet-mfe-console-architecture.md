@@ -68,17 +68,21 @@ choices specific to this context's implementation of it.**
   was added beyond the CORS middleware already shipped in
   `feature/console-cors`.
 - **Scope is deliberately narrower than a fleet-standard list-first
-  dashboard.** The shipped screen is a staffing-gap-**by-path** lookup: an
-  operator supplies `pathId` + `buildingId` + `shiftId` and sees planned vs.
-  active headcount for that one path, because that is the one read model
-  `GET /paths/{pathId}/staffing-gap` actually supports today. This is
-  documented in the remote's own screen comment, not left implicit.
-- **A fleet-wide "all paths, one building/shift" list endpoint is an
+  dashboard.** The shipped screen was originally a staffing-gap-**by-path**
+  lookup: an operator supplies `pathId` + `buildingId` + `shiftId` and sees
+  planned vs. active headcount for that one path, because that was the one
+  read model `GET /paths/{pathId}/staffing-gap` supported when this record
+  was written. _Amended 2026-10: the deferred all-paths endpoint shipped
+  (`GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap`,
+  operationId `listStaffingGapsForShift`), and the screen now defaults to
+  that all-paths list view for a building/shift while keeping the
+  single-path lookup as an explicit "By path" mode. The two endpoints
+  compute a path's gap identically, so the views cannot disagree._
+- **A fleet-wide "all paths, one building/shift" list endpoint was an
   explicit, deferred fast-follow**, not an oversight — the same category of
-  gap ADR-0002 itself flagged for `order-management`. It requires a new
-  read-model projection or repository query; it is out of scope for this
-  record, which adopts the fleet architecture against the API surface that
-  exists today rather than growing the domain to fit the UI.
+  gap ADR-0002 itself flagged for `order-management`. _Amended 2026-10: it
+  has since shipped (see above); the deferral note is retained for the
+  record of what was true at decision time._
 
 ## Consequences
 
