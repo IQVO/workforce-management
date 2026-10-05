@@ -106,3 +106,5 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0024](./0024-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
 | [0025](./0025-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 | [0026](./0026-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
+| [0027](./0027-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware on the creation POSTs | Accepted |
+| [0028](./0028-housekeeping-sweeper-idempotency-keys-and-outbox.md) | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted |

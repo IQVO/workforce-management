@@ -113,6 +113,8 @@ const sidebars: SidebarsConfig = {
         'adr/0024-horizontal-autoscaling-and-pgxpool-tuning',
         'adr/0025-migrations-direct-postgres-connection',
         'adr/0026-cloudevents-mandatory-event-envelope',
+        'adr/0027-idempotency-key-middleware',
+        'adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox',
       ],
     },
   ],

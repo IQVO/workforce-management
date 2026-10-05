@@ -5,15 +5,12 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
-	"os/signal"
 	"strconv"
 	"strings"
-	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -22,7 +19,6 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/fulfillmentexecution"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/laborperformance"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/laborperformancecache"
@@ -103,28 +99,7 @@ func run() error {
 
 	breakerMetrics := newBreakerMetrics(logger)
 
-	databaseURL := requireEnv("DATABASE_URL")
-	// MIGRATIONS_DATABASE_URL, when set, is a DIRECT (non-pooled,
-	// session-mode) Postgres connection string used ONLY for the
-	// golang-migrate startup step below — everything else (the pgxpool
-	// this process serves requests through) keeps using databaseURL
-	// unchanged. See openPostgresPool's doc comment for the full "why":
-	// golang-migrate's postgres driver takes a session-scoped
-	// `SELECT pg_advisory_lock($1)` to serialize concurrent migration
-	// runs, which PgBouncer's transaction-pooling mode does not support
-	// (warehouse-infra's PgBouncer rollout, PR #43; this fallback closes
-	// the fleet-wide bug that rollout introduced — see ADR
-	// 0025-migrations-direct-postgres-connection.md and
-	// order-management's ADR-0029, the reference implementation this PR
-	// ports). Falls back to databaseURL when unset, which is every
-	// environment that doesn't provision the split (local dev, CI
-	// integration tests, and any cluster whose Terraform predates this
-	// fix) — byte-identical to this service's behavior before this
-	// change in that case.
-	migrationsDatabaseURL := envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL)
-	httpAddr := envOrDefault("HTTP_ADDR", ":8080")
-	migrationsPath := envOrDefault("MIGRATIONS_PATH", "migrations")
-	maxHoursPerShift := envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0)
+	settings := envSettingsFromEnv(databaseURLFromEnv())
 
 	// catalogueConsumerCtx/cancelCatalogueConsumer are declared here
 	// (rather than deferred to later in run()) because the Kafka
@@ -140,7 +115,7 @@ func run() error {
 		return err
 	}
 
-	pool, err := openPostgresPool(ctx, logger, databaseURL, migrationsDatabaseURL, migrationsPath)
+	pool, err := openPostgresPool(ctx, logger, settings.databaseURL, settings.migrationsDatabaseURL, settings.migrationsPath)
 	if err != nil {
 		return err
 	}
@@ -169,21 +144,73 @@ func run() error {
 		measuredRate:     measuredRate,
 		idleShare:        idleShare,
 		breakerMetrics:   breakerMetrics,
-		maxHoursPerShift: maxHoursPerShift,
+		maxHoursPerShift: settings.maxHoursPerShift,
 		catalogue:        catalogue,
 		readiness:        readiness,
+		idempotencyPool:  pool,
 		logger:           logger,
 	})
 
 	server := &http.Server{
-		Addr:              httpAddr,
+		Addr:              settings.httpAddr,
 		Handler:           inbound.NewRouter(handler, logger, serviceName),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	return serveWorkforce(logger, httpAddr, server, readiness, repos.relay,
-		cancelCatalogueConsumer, kafkaCatalogue,
-		cancelRateConsumer, kafkaMeasuredRate)
+	// The housekeeping sweeper (ADR-0028) bounds idempotency_keys and the
+	// published tail of outbox_events. It is stopped in the shutdown
+	// sequence BEFORE the pool closes; the deferred call covers the
+	// listener-failure path (stop is idempotent).
+	stopSweeper := startSweeper(pool, housekeepingSettingsFromEnv(logger), logger)
+	defer stopSweeper()
+
+	// Stopping the Kafka consumers is step 4 of the ADR-0022 §8 shutdown
+	// sequence, after the HTTP drain.
+	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate)
+
+	return serveWorkforce(logger, settings.httpAddr, server, readiness, repos.relay, stopConsumers, stopSweeper)
+}
+
+// envSettings groups run()'s plain environment reads so the function itself
+// stays inside the linter's length budget.
+type envSettings struct {
+	databaseURL           string
+	migrationsDatabaseURL string
+	httpAddr              string
+	migrationsPath        string
+	maxHoursPerShift      float64
+}
+
+// databaseURLFromEnv crashes (requireEnv) when DATABASE_URL — the one
+// mandatory variable — is missing.
+func databaseURLFromEnv() string { return requireEnv("DATABASE_URL") }
+
+// envSettingsFromEnv reads the optional configuration; see openPostgresPool
+// and ADR-0025 for MIGRATIONS_DATABASE_URL.
+func envSettingsFromEnv(databaseURL string) envSettings {
+	return envSettings{
+		databaseURL:           databaseURL,
+		migrationsDatabaseURL: envOrDefault("MIGRATIONS_DATABASE_URL", databaseURL),
+		httpAddr:              envOrDefault("HTTP_ADDR", ":8080"),
+		migrationsPath:        envOrDefault("MIGRATIONS_PATH", "migrations"),
+		maxHoursPerShift:      envFloatOrDefault("MAX_HOURS_PER_SHIFT", 8.0),
+	}
+}
+
+// consumerStopper returns the step-4 shutdown action of ADR-0022 §8: cancel
+// each Kafka consumer's Run context, then release its reader. The consumers
+// are nil when their mode is not kafka.
+func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer) func() {
+	return func() {
+		cancelCatalogue()
+		if catalogue != nil {
+			_ = catalogue.Close()
+		}
+		cancelRate()
+		if rate != nil {
+			_ = rate.Close()
+		}
+	}
 }
 
 // workforceRepos groups the Postgres repositories, the event publisher,
@@ -404,6 +431,7 @@ type oltpHandlerDeps struct {
 	maxHoursPerShift float64
 	catalogue        ports.PathCatalogue
 	readiness        *inbound.Readiness
+	idempotencyPool  *pgxpool.Pool
 	logger           *slog.Logger
 }
 
@@ -426,79 +454,9 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 		// flipped to not-ready as the FIRST step of shutdown, below,
 		// before anything else stops.
 		Readiness: d.readiness,
+		// IdempotencyPool wires RequireIdempotencyKey onto the creation POSTs (ADR-0027).
+		IdempotencyPool: d.idempotencyPool,
 	}
-}
-
-// serveWorkforce runs the HTTP server until a signal arrives or the
-// listener fails, with the outbox relay draining alongside, then drains
-// everything under the ADR-0022 §graceful shutdown sequence.
-func serveWorkforce(logger *slog.Logger, httpAddr string, server *http.Server, readiness *inbound.Readiness, relay *postgres.OutboxRelay,
-	cancelCatalogueConsumer context.CancelFunc, kafkaCatalogue *kafkacatalog.Consumer,
-	cancelRateConsumer context.CancelFunc, kafkaMeasuredRate *laborperformancecache.Consumer) error {
-	serverErr := make(chan error, 1)
-	go func() {
-		logger.Info("http server listening", "addr", httpAddr)
-		serverErr <- server.ListenAndServe()
-	}()
-
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-
-	// The outbox relay (ADR 0016) runs alongside the HTTP server in the
-	// same process, draining outbox_events onto both Kafka topics. It is
-	// only wired in kafka mode (see newEventPublisher).
-	relayDone := make(chan struct{})
-	relayCtx, stopRelay := context.WithCancel(context.Background())
-	defer stopRelay()
-	if relay != nil {
-		go func() {
-			defer close(relayDone)
-			logger.Info("outbox relay running", "topics", []string{kafka.Topic, kafka.AnalyticsTopic})
-			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
-				serverErr <- err
-			}
-		}()
-	} else {
-		close(relayDone)
-	}
-
-	select {
-	case err := <-serverErr:
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
-		}
-	case <-stop:
-		// Graceful shutdown (ADR-0022 §graceful shutdown, ported from
-		// order-management's ADR-0025): flip readiness to not-ready
-		// FIRST, before anything else stops -- a Kubernetes
-		// readinessProbe polling /readyz needs a window to observe
-		// this and stop routing NEW traffic to this pod before the
-		// HTTP listener itself closes below.
-		readiness.SetNotReady()
-
-		cancelCatalogueConsumer()
-		if kafkaCatalogue != nil {
-			_ = kafkaCatalogue.Close()
-		}
-		cancelRateConsumer()
-		if kafkaMeasuredRate != nil {
-			_ = kafkaMeasuredRate.Close()
-		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		err := server.Shutdown(shutdownCtx)
-		// Let the relay finish its in-flight pass so an event committed by
-		// a request that completed just before shutdown is not stranded
-		// until the next pod boots.
-		stopRelay()
-		select {
-		case <-relayDone:
-		case <-shutdownCtx.Done():
-			logger.Warn("outbox relay did not stop before the shutdown deadline")
-		}
-		return err
-	}
-	return nil
 }
 
 func requireEnv(key string) string {

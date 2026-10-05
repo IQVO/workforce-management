@@ -131,8 +131,17 @@ fallback.
 Both `BreakerClient.MeanActualSeconds` and
 `BreakerClient.InstalledCapacity` derive their per-call timeout from
 the inbound request's own remaining `ctx.Deadline()` via
-`resilience.CallTimeout`, capped at `DefaultTimeout` (30s) — never a
-fresh, hardcoded timeout that could outlast the caller's own patience.
+`resilience.CallTimeout`, capped at the CLIENT package's own
+`DefaultTimeout` — **3s per attempt** in both `laborperformance` and
+`fulfillmentexecution` (the same value as each client's `http.Client.Timeout`,
+so the context cap and the transport cap agree) — never a fresh, hardcoded
+timeout that could outlast the caller's own patience. The 3s per-attempt cap is
+intentional: both calls sit on a synchronous request path (a staffing-gap or
+proposal read; a shift-plan commit) where waiting 30s is worse than failing
+over to the fallback. The unrelated 30s `resilience.DefaultTimeout` shown in §1
+is the breaker's **open-state cooldown**, not a per-call timeout. (An earlier
+revision of this record said the per-call cap was `DefaultTimeout` (30s); that
+conflated the two constants and never matched the code.)
 
 ### 4. Bulkhead: confirmed, not newly built
 
@@ -219,20 +228,35 @@ not care about the metric never needs to construct one.
 
 ### 8. Graceful shutdown hardening
 
-`cmd/workforce/main.go`'s pre-existing `signal.Notify` +
-`server.Shutdown(shutdownCtx)` sequence gains a new first step:
+`cmd/workforce`'s `signal.Notify` + `server.Shutdown(shutdownCtx)` sequence
+(`cmd/workforce/serve.go`, `shutdownSequence`) runs in this order:
 
 1. **Flip readiness to not-ready FIRST**
    (`inbound.Readiness.SetNotReady`, backing a new `GET /readyz`,
    distinct from the pre-existing `GET /healthz` which stays a pure
    liveness signal and is never flipped by shutdown) — before anything
-   else stops, so a Kubernetes `readinessProbe` polling `/readyz` has a
-   window to observe the flip and stop routing NEW traffic to this pod
-   before the HTTP listener itself closes.
-2. Stop accepting new HTTP connections and drain in-flight requests —
-   `server.Shutdown(shutdownCtx)`, unchanged from before.
-3. Stop the process-path catalogue/labor-performance-cache Kafka
-   consumers and the outbox relay — unchanged from before this ADR.
+   else stops.
+2. **Wait the drain delay** (`SHUTDOWN_DRAIN_DELAY`, default `10s` = two
+   `readinessProbe` periods of 5s; `0` disables it, which is what tests use).
+   While the pod keeps serving, a Kubernetes `readinessProbe` polling
+   `/readyz` observes the 503 and endpoint removal begins, so NEW traffic
+   stops being routed here *before* the listener closes. (An earlier
+   revision flipped readiness and called `server.Shutdown` in the same
+   instant, so with a 5s probe period the flip was never observable and the
+   step was cosmetic.)
+3. Stop accepting new HTTP connections and drain in-flight requests —
+   `server.Shutdown(shutdownCtx)`, with a 10s budget shared by steps 3–6.
+4. Stop the process-path catalogue/labor-performance-cache Kafka consumers.
+5. Stop the housekeeping sweeper
+   ([ADR 0028](./0028-housekeeping-sweeper-idempotency-keys-and-outbox.md)).
+6. Stop the outbox relay and wait for its in-flight pass.
+7. The deferred closes then release the publisher's adapters and the
+   Postgres pool **last**, after nothing can touch it any more.
+
+Worst case this is 10s drain + 10s budget + 5s telemetry flush = 25s inside
+the chart's `terminationGracePeriodSeconds: 30`. The order is unit-tested
+(`cmd/workforce/shutdown_test.go`), including that `/readyz` answers 503 while
+the listener is still serving during the drain window.
 
 `Readiness`'s zero value (and a `nil *Readiness`) is always ready —
 every existing test and any caller that predates this type behaves
