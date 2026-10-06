@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -11,6 +12,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/domain/assignment"
@@ -19,37 +22,76 @@ import (
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
 
-// testPool sets up a migrated pool against DATABASE_URL, or skips the test
-// if it is unset. Build with -tags=integration and DATABASE_URL set to run.
-func testPool(t *testing.T) *pgxpool.Pool {
-	t.Helper()
-	databaseURL := os.Getenv("DATABASE_URL")
-	if databaseURL == "" {
-		t.Skip("DATABASE_URL not set; skipping postgres integration test")
+// One Postgres per test binary, not per test: TestMain boots a single
+// testcontainers Postgres, applies the OLTP migrations once, and shares it
+// across every test in the package (the fleet rule — a test owns its own
+// database; no external DATABASE_URL, no env-gated skips). Tests that need
+// an isolated schema still boot their own container (outboxDB,
+// poolLimitsDB); the repo-level tests here are independent once the tables
+// are cleaned between runs, so one shared instance keeps the package fast.
+var mainPool *pgxpool.Pool
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+	container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+		tcpostgres.WithDatabase("workforce"),
+		tcpostgres.WithUsername("workforce"),
+		tcpostgres.WithPassword("workforce"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start postgres container: %v\n", err)
+		os.Exit(1)
+	}
+
+	url, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connection string: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
 	}
 
 	_, thisFile, _, _ := runtime.Caller(0)
 	migrationsPath := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "migrations")
-
-	if err := Migrate(databaseURL, migrationsPath); err != nil {
-		t.Fatalf("migrate: %v", err)
+	if err := Migrate(url, migrationsPath); err != nil {
+		fmt.Fprintf(os.Stderr, "migrate: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
 	}
 
-	ctx := context.Background()
-	pool, err := NewPool(ctx, databaseURL)
+	mainPool, err = NewPool(ctx, url)
 	if err != nil {
-		t.Fatalf("new pool: %v", err)
+		fmt.Fprintf(os.Stderr, "new pool: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
 	}
-	t.Cleanup(pool.Close)
+
+	code := m.Run()
+
+	mainPool.Close()
+	if err := testcontainers.TerminateContainer(container); err != nil {
+		fmt.Fprintf(os.Stderr, "terminate postgres container: %v\n", err)
+	}
+	os.Exit(code)
+}
+
+// testPool returns the shared migrated pool from TestMain, with the OLTP
+// tables cleaned so each test starts from an empty store.
+func testPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	if mainPool == nil {
+		t.Fatal("shared pool not initialised — TestMain did not run")
+	}
+	ctx := context.Background()
 
 	// clean tables between tests
 	for _, table := range []string{"labor_assignment_history", "labor_assignment", "path_plan", "shift_plan", "associate_shift", "domain_event"} {
-		if _, err := pool.Exec(ctx, "DELETE FROM "+table); err != nil {
+		if _, err := mainPool.Exec(ctx, "DELETE FROM "+table); err != nil {
 			t.Fatalf("clean %s: %v", table, err)
 		}
 	}
 
-	return pool
+	return mainPool
 }
 
 func TestAssociateRepo_SaveAndFindByID(t *testing.T) {

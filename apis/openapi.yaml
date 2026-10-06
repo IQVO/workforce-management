@@ -266,8 +266,14 @@ paths:
         with 400 unknown-path-id. It also validates that plannedHours does not exceed
         plannedHeads * the configured max hours per shift. Naturally
         idempotent by the client-supplied (buildingId, shiftId) key: the
-        underlying repository upserts on that key.
+        underlying repository upserts on that key. A blind retry would
+        nevertheless re-publish ShiftPlanCommitted, so this route is also
+        protected by the Idempotency-Key header (ADR-0027): a retried
+        request with the same key and body replays the first response
+        without committing or publishing again.
       tags: [Shift Plans]
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -315,8 +321,9 @@ paths:
             a line's pathId), no path plan lines supplied
             (shift-plan-no-path-plans), a line references a path with no
             installedStations entry (shift-plan-missing-installed-stations),
-            or a line's pathId is not declared by the process-path catalogue
-            (unknown-path-id).
+            a line's pathId is not declared by the process-path catalogue
+            (unknown-path-id), or the Idempotency-Key header is missing on
+            a deployment with Postgres (idempotency-key-required, ADR-0027).
           content:
             application/problem+json:
               schema:
@@ -348,6 +355,8 @@ paths:
                 status: 409
                 detail: planned heads exceed installed stations for path
                 instance: /shift-plans
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "503":
           description: >-
             Service unavailable — fulfillment-execution could not be
@@ -386,10 +395,14 @@ paths:
         certification (by convention, the Certification with the same name
         as the PathId — e.g. path "pack" requires certification "pack"), and
         is rejected if the associate is currently on a logged break or their
-        shift has ended.
+        shift has ended. Because each call closes the prior interval and
+        raises an event, a blind retry would double-apply it, so this route
+        is protected by the Idempotency-Key header (ADR-0027): a retried
+        request with the same key and body replays the first response.
       tags: [Assignments]
       parameters:
         - $ref: "#/components/parameters/AssociateId"
+        - $ref: "#/components/parameters/IdempotencyKey"
       requestBody:
         required: true
         content:
@@ -444,6 +457,8 @@ paths:
                 status: 409
                 detail: associate lacks the certification required for this path
                 instance: /associates/assoc-1/assignments
+        "422":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -733,13 +748,36 @@ components:
         minLength: 1
       example: shift-1
 
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: >-
+        Caller-generated key (e.g. a UUID v4) that makes a retried request
+        safe (ADR-0027). Clients MUST always send a non-empty value on the
+        routes that declare it: a deployment backed by Postgres (every real
+        deployment) rejects a request without it with 400
+        idempotency-key-required. It is declared optional here only because
+        the in-memory development mode (which the contract test boots) does
+        not enforce it. Reuse the SAME key for retries of one logical
+        request (same body) — the first response, success or business
+        error, is stored and replayed byte-for-byte for the key's TTL
+        (24h by default) — and a NEW key for each new logical request.
+        Reusing a key with a different body is rejected with 422
+        idempotency-key-reused.
+      schema:
+        type: string
+      example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
+
   responses:
     BadRequest:
       description: >-
         Malformed JSON body, or a required field was missing/empty
         (empty-associate-id, empty-path-id, empty-certification,
         missing-building-id, missing-shift-id, missing-charge, or
-        malformed-request-body).
+        malformed-request-body). On the two Idempotency-Key-protected routes
+        (POST /shift-plans, POST /associates/{id}/assignments) a missing
+        Idempotency-Key header is also a 400 (idempotency-key-required).
       content:
         application/problem+json:
           schema:
@@ -762,6 +800,21 @@ components:
             status: 404
             detail: not found
             instance: /associates/ghost/certifications
+    IdempotencyKeyReused:
+      description: >-
+        The Idempotency-Key was already used with a request that had a
+        different body (idempotency-key-reused, ADR-0027). Use a new key for
+        a genuinely different request.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://errors.workforce-management.warehouse-systems.dev/idempotency-key-reused
+            title: Idempotency-Key was already used with a different request
+            status: 422
+            detail: The Idempotency-Key header on this request was already used with a request that had a different body. Use a new Idempotency-Key for a genuinely different request.
+            instance: /shift-plans
     InternalError:
       description: >-
         Unclassified failure (e.g. a persistence or event-publish error) —

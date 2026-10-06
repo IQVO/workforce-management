@@ -3,6 +3,7 @@ id: 0021-optimistic-concurrency-version-column
 slug: /adr/0021-optimistic-concurrency-version-column
 title: 0021. Optimistic concurrency (version column) on AssociateShift and LaborAssignment
 sidebar_label: 0021. Optimistic concurrency (version column)
+sidebar_position: 22
 description: ADR 0021 — a version column closes a blind-overwrite lost-update race on AssociateRepo.Save and AssignmentRepo.Save; ShiftPlanRepo.Save is deliberately NOT protected because CommitShiftPlan is a full-replace write with no stale-field hazard.
 ---
 

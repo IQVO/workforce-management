@@ -2,7 +2,7 @@
 id: 0012-measured-rate-feed-for-propose-path-plan
 title: 0012. Close-the-loop measured rate feed from labor-performance into ProposePathPlan
 sidebar_label: 0012. Measured rate feed for ProposePathPlan
-sidebar_position: 12
+sidebar_position: 13
 description: ProposePathPlan can now propose headcount against a real measured task duration from labor-performance instead of always requiring a caller-supplied plannedRate guess.
 ---
 

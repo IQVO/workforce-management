@@ -40,7 +40,7 @@ help:
 	@echo "  test           go test ./... -race — unit + httptest + bdd, no DB needed"
 	@echo "  coverage       CI coverage command + the $(COVERAGE_THRESHOLD)% gate"
 	@echo "  integration    go test -tags=integration ./... -race -count=1"
-	@echo "                 (needs a running Postgres and DATABASE_URL set; not in check)"
+	@echo "                 (self-sufficient: testcontainers, needs Docker; not in check)"
 	@echo "  bdd            go test ./... -run TestFeatures -v — godog/Gherkin acceptance"
 	@echo "  contract       scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
 	@echo "                 (needs DATABASE_URL and the st binary; not in check)"
@@ -92,10 +92,10 @@ coverage:
 		exit 1; \
 	fi
 
-# Needs a running Postgres and DATABASE_URL, e.g.
-#   docker compose up -d postgres
-#   DATABASE_URL='postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable' make integration
-# Deliberately NOT part of `check` / `check-all`.
+# Every integration test boots its own Postgres (and Kafka, where needed)
+# via testcontainers — no running database or DATABASE_URL required:
+#   make integration
+# Deliberately NOT part of `check` / `check-all` (needs Docker).
 integration:
 	$(GO) test -tags=integration ./... -race -count=1
 
@@ -145,3 +145,17 @@ check: fmt-check vet build lint test
 # The fuller gate a human runs before pushing. Still excludes `integration`
 # (needs a DB) and `mutation` (slow).
 check-all: check coverage arch-test bdd
+
+# --- agent harness (harness-template v3) -----------------------------------
+.PHONY: check-fast guide-lint harness-test
+# Fast local gate used by the agent Stop hook: format, vet, fitness tests, and the tests of
+# the packages changed vs HEAD. The full gate stays `make check` / `make check-all`.
+check-fast: fmt-check vet arch-test
+	@pkgs="$$(python3 scripts/harness/hook.py changed-pkgs)"; \
+	if [ -n "$$pkgs" ]; then go test $$pkgs; else echo "check-fast: no changed Go packages"; fi
+
+guide-lint: ## lint agent guides: skills load, references resolve, context budget
+	python3 scripts/harness/guide_lint.py
+
+harness-test: ## unit-test the agent hooks (pre/post/stop)
+	python3 scripts/harness/test_hook.py

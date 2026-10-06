@@ -19,6 +19,7 @@ picture.
 | [Invariants](./invariants.md) | Every rule enforced in the domain layer, with the test that pins it down |
 | [Domain events](./domain-events.md) | All ten events, what raises them, and which ones leave the process |
 | [Context relationships](./context-relationships.md) | Upstream, downstream, and the deliberate non-relationships |
+| [DDD artifacts (ddd-crew)](./ddd-artifacts.md) | The ddd-crew artifact pack — core domain chart, bounded context and aggregate design canvases, message flows, EventStorming — plus UML class, ER and sequence diagrams |
 
 The two reference documents behind this model are the platform-level
 `warehouse-systems-ddd.md` (WMS/WES/WCS layering, worker-assignment ownership,

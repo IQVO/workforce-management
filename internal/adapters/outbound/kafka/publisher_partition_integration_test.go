@@ -4,6 +4,7 @@ package kafka
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -110,14 +111,8 @@ func TestPublish_RealKafka_SameShiftPlanLandsOnSamePartition(t *testing.T) {
 // every partition to have an elected leader before returning.
 func createTopicWithPartitions(t *testing.T, ctx context.Context, brokers []string, topic string, numPartitions int) {
 	t.Helper()
-	conn, err := kafkago.DialContext(ctx, "tcp", brokers[0])
-	if err != nil {
-		t.Fatalf("dial Kafka controller: %v", err)
-	}
+	conn := dialAndCreateTopic(t, ctx, brokers[0], kafkago.TopicConfig{Topic: topic, NumPartitions: numPartitions, ReplicationFactor: 1})
 	defer func() { _ = conn.Close() }()
-	if err := conn.CreateTopics(kafkago.TopicConfig{Topic: topic, NumPartitions: numPartitions, ReplicationFactor: 1}); err != nil {
-		t.Fatalf("create topic %q: %v", topic, err)
-	}
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
@@ -186,4 +181,29 @@ func readAllPartitions(t *testing.T, ctx context.Context, brokers []string, topi
 		got = append(got, m.Partition)
 	}
 	return got
+}
+
+// dialAndCreateTopic dials the Kafka controller and creates the topic, retrying transient broker errors.
+// Right after the testcontainers Kafka reports ready, the first connection can be reset ("connection reset
+// by peer"); a create that succeeded just before such a reset reports TopicAlreadyExists on the retry, which
+// is success. Fails the test only when the broker is still unusable after the deadline.
+func dialAndCreateTopic(t *testing.T, ctx context.Context, broker string, cfg kafkago.TopicConfig) *kafkago.Conn {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for attempt := 0; ; attempt++ {
+		conn, err := kafkago.DialContext(ctx, "tcp", broker)
+		if err == nil {
+			err = conn.CreateTopics(cfg)
+			if err == nil || errors.Is(err, kafkago.TopicAlreadyExists) {
+				return conn
+			}
+			_ = conn.Close()
+		}
+		lastErr = err
+		if time.Now().After(deadline) || ctx.Err() != nil {
+			t.Fatalf("dial/create topic %q on %s after %d attempt(s): %v", cfg.Topic, broker, attempt+1, lastErr)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }

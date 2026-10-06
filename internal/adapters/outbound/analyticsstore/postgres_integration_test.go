@@ -4,49 +4,112 @@ package analyticsstore_test
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/analyticsstore"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/analytics/report"
 )
 
-func requireAnalyticsURL(t *testing.T) string {
-	t.Helper()
-	url := os.Getenv("ANALYTICS_DATABASE_URL")
-	if url == "" {
-		t.Skip("ANALYTICS_DATABASE_URL not set, skipping analytics postgres integration test")
+// One analytics Postgres per test binary, not per test: TestMain boots a
+// single testcontainers Postgres, applies the analytics migrations once and
+// shares it across the package. The fleet rule: a test owns its own
+// database — never an external ANALYTICS_DATABASE_URL, never an env-gated
+// t.Skip that silently proves nothing on a CI runner.
+var (
+	mainAnalyticsURL  string
+	mainAnalyticsPool *pgxpool.Pool
+)
+
+func TestMain(m *testing.M) {
+	ctx := context.Background()
+	container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+		tcpostgres.WithDatabase("analytics"),
+		tcpostgres.WithUsername("workforce"),
+		tcpostgres.WithPassword("workforce"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "start analytics postgres container: %v\n", err)
+		os.Exit(1)
 	}
-	return url
+
+	url, err := container.ConnectionString(ctx, "sslmode=disable")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "connection string: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
+	}
+
+	_, thisFile, _, _ := runtime.Caller(0)
+	migrations := filepath.Join(filepath.Dir(thisFile), "..", "..", "..", "..", "migrations", "analytics")
+	if err := postgres.Migrate(url, migrations); err != nil {
+		fmt.Fprintf(os.Stderr, "migrate analytics: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
+	}
+
+	pool, err := analyticsstore.NewPool(ctx, url)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "NewPool: %v\n", err)
+		_ = testcontainers.TerminateContainer(container)
+		os.Exit(1)
+	}
+
+	mainAnalyticsURL = url
+	mainAnalyticsPool = pool
+
+	code := m.Run()
+
+	pool.Close()
+	if err := testcontainers.TerminateContainer(container); err != nil {
+		fmt.Fprintf(os.Stderr, "terminate analytics postgres container: %v\n", err)
+	}
+	os.Exit(code)
 }
 
-func migrateAnalytics(t *testing.T, url string) {
+// analyticsURL returns the shared container's connection string (fresh
+// read-only/writer pools are what the tests exercise, so they build their
+// own pools per test over the one shared URL).
+func analyticsURL(t *testing.T) string {
 	t.Helper()
-	if err := postgres.Migrate(url, "../../../../migrations/analytics"); err != nil {
-		t.Fatalf("migrate analytics: %v", err)
+	if mainAnalyticsURL == "" {
+		t.Fatal("shared analytics URL not initialised — TestMain did not run")
 	}
+	return mainAnalyticsURL
+}
+
+// analyticsDB returns the shared migrated writer pool, with the analytics
+// tables truncated so each test starts from a clean read model.
+func analyticsDB(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	if mainAnalyticsPool == nil {
+		t.Fatal("shared analytics pool not initialised — TestMain did not run")
+	}
+	ctx := context.Background()
+	for _, table := range []string{"labor_rollup", "analytics_pending_breaks", "analytics_processed_events", "analytics_consumed_events"} {
+		if _, err := mainAnalyticsPool.Exec(ctx, "TRUNCATE "+table); err != nil {
+			t.Fatalf("truncate %s: %v", table, err)
+		}
+	}
+	return mainAnalyticsPool
 }
 
 func TestPostgresProjectionAndReport_RoundTrip(t *testing.T) {
-	url := requireAnalyticsURL(t)
-	migrateAnalytics(t, url)
-
-	pool, err := analyticsstore.NewPool(context.Background(), url)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := analyticsDB(t)
 
 	ctx := context.Background()
 	base := time.Now().UTC().Truncate(time.Hour)
 	pathId := "pack-int-" + time.Now().Format("150405.000000000")
-	associate := "a-int-" + time.Now().Format("150405.000000000")
-	t.Cleanup(func() {
-		_, _ = pool.Exec(ctx, `DELETE FROM labor_rollup WHERE path_id = $1`, pathId)
-		_, _ = pool.Exec(ctx, `DELETE FROM analytics_pending_breaks WHERE associate_id = $1`, associate)
-	})
 
 	proj := analyticsstore.NewPostgresProjection(pool)
 	must := func(err error) {
@@ -92,8 +155,7 @@ func TestPostgresProjectionAndReport_RoundTrip(t *testing.T) {
 // TestReadOnlyPool_RejectsWrites asserts the reader pool is genuinely
 // read-only: an attempt to write through it must be rejected by Postgres.
 func TestReadOnlyPool_RejectsWrites(t *testing.T) {
-	url := requireAnalyticsURL(t)
-	migrateAnalytics(t, url)
+	url := analyticsURL(t)
 
 	roPool, err := analyticsstore.NewReadOnlyPool(context.Background(), url)
 	if err != nil {
@@ -120,14 +182,7 @@ func TestReadOnlyPool_RejectsWrites(t *testing.T) {
 // empty table returns a single NULL row (not zero rows), which must be read as
 // a zero lag rather than a scan error.
 func TestFreshnessLag_EmptyStore(t *testing.T) {
-	url := requireAnalyticsURL(t)
-	migrateAnalytics(t, url)
-
-	pool, err := analyticsstore.NewPool(context.Background(), url)
-	if err != nil {
-		t.Fatalf("NewPool: %v", err)
-	}
-	t.Cleanup(pool.Close)
+	pool := analyticsDB(t)
 
 	ctx := context.Background()
 	// Ensure the processed-events table is empty so max() yields NULL.

@@ -4,7 +4,7 @@ description: Workforce Management — shift planning and labor assignment, stops
 type: application
 version: 0.1.0
 appVersion: "0.1.0"
-home: https://github.com/claudioed/workforce-management
+home: https://github.com/IQVO/workforce-management
 keywords:
   - ddd
   - hexagonal-architecture

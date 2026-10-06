@@ -87,10 +87,10 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0005](./0005-rfc-7807-problem-details.md) | RFC 7807 Problem Details for every error response | Accepted |
 | [0006](./0006-godog-bdd-acceptance-tests.md) | godog acceptance specs driven through the real HTTP surface | Accepted |
 | [0007](./0007-arch-go-architecture-fitness-tests.md) | arch-go fitness tests to make the layering rule executable | Accepted |
-| [0008](./0008-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted |
-| [0009](./0009-hazmat-certification-via-existing-path-gating.md) | Hazmat handling via the existing path-name-equals-certification-name gate | Accepted |
+| [0008](./0008-mcp-inbound-adapter.md) | Model Context Protocol as an inbound adapter, not a new service | Accepted; auth/static-bearer sections superseded by [0018](./0018-remove-fleet-rest-identity.md) |
+| [0009](./0009-hazmat-certification-via-existing-path-gating.md) | Hazmat handling via the existing path-name-equals-certification-name gate | Accepted; superseded in part by [0013](./0013-process-path-catalogue-validation.md) |
 | [0010](./0010-analytical-data-product.md) | Per-service analytical data product (report) via a separate analytics topic | Accepted; Envelope v1 superseded by [0026](./0026-cloudevents-mandatory-event-envelope.md) |
-| [0011](./0011-adopt-fleet-mfe-console-architecture.md) | Adopt the fleet-wide micro-frontend console architecture (workforce-mfe) | Accepted |
+| [0011](./0011-adopt-fleet-mfe-console-architecture.md) | Adopt the fleet-wide micro-frontend console architecture (workforce-mfe) | Accepted; deferred all-paths endpoint recorded in [0029](./0029-all-paths-staffing-gap-endpoint.md) |
 | [0012](./0012-measured-rate-feed-for-propose-path-plan.md) | Close-the-loop measured rate feed from labor-performance into ProposePathPlan | Accepted |
 | [0013](./0013-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
 | [0014](./0014-installed-capacity-ceiling.md) | Live installed-capacity ceiling on CommitShiftPlan, sourced from fulfillment-execution | Accepted |
@@ -106,3 +106,9 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0024](./0024-horizontal-autoscaling-and-pgxpool-tuning.md) | Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning | Accepted |
 | [0025](./0025-migrations-direct-postgres-connection.md) | Run golang-migrate against a direct Postgres connection, not PgBouncer | Accepted |
 | [0026](./0026-cloudevents-mandatory-event-envelope.md) | CloudEvents 1.0 as the mandatory event envelope | Accepted |
+| [0027](./0027-idempotency-key-middleware.md) | Transactional Idempotency-Key middleware on the creation POSTs | Accepted |
+| [0028](./0028-housekeeping-sweeper-idempotency-keys-and-outbox.md) | Housekeeping sweeper for idempotency keys and published outbox rows | Accepted |
+| [0029](./0029-all-paths-staffing-gap-endpoint.md) | All-paths staffing-gap list endpoint for a building/shift | Accepted |
+| [0030](./0030-kafka-sourced-process-path-catalogue.md) | Kafka-sourced process-path catalogue (PATH_CATALOGUE_SOURCE=kafka) | Accepted |
+| [0031](./0031-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks and a 10ms batch timeout | Accepted |
+| [0032](./0032-bootretry-first-outbound-dial.md) | Boot-time retry for the first outbound dial (Istio sidecar warm-up) | Accepted |

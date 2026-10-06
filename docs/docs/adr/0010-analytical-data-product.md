@@ -1,8 +1,8 @@
 ---
 id: 0010-analytical-data-product
-title: 10. Per-service analytical data product (report) via a separate analytics topic
+title: 0010. Per-service analytical data product (report) via a separate analytics topic
 sidebar_label: 10. Analytical data product
-sidebar_position: 10
+sidebar_position: 11
 description: An analytical read model (the "report") built from this service's own domain events on a dedicated warehouse.workforce.analytics topic, projected into a separate analytical database and served by a read-only reports binary over REST and MCP — a lightweight data mesh with no central data platform.
 ---
 

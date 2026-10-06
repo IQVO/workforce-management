@@ -3,7 +3,7 @@ id: 0004-kafka-integration-events-and-cloudevents-catalog
 title: 0004. Kafka for integration events, with a CloudEvents catalog ahead of the wire format
 sidebar_label: 0004. Kafka + CloudEvents catalog
 sidebar_position: 5
-description: One topic, one event, fanned out per path line — and why the AsyncAPI catalog documents an envelope the adapter does not yet write.
+description: "One topic, one event, fanned out per path line — and why the AsyncAPI catalog originally documented an envelope the adapter did not yet write (envelope superseded by ADR-0026: CloudEvents 1.0 is now the only wire envelope)."
 ---
 
 # 0004. Kafka for integration events, with a CloudEvents catalog ahead of the wire format
@@ -54,8 +54,17 @@ shape, and `wes-work-planning`'s consumer already parses it.
 ## Decision
 
 **Publish `ShiftPlanCommitted` to Kafka topic `warehouse.workforce.events`,
-asynchronously and one-way.** This service publishes and forgets. It has no
-consumer group, no inbound adapter, and no synchronous call to any sibling.
+asynchronously and one-way.** This service publishes and forgets: it makes
+no synchronous call to any sibling on the publish path, and its own writes
+never depend on a consumer being up. (_Amended 2026-10: the "zero in / no
+consumer group" claim below described the original state; this service now
+runs three inbound Kafka consumers — the process-path catalogue
+(`PATH_CATALOGUE_SOURCE=kafka`, ADR-0013), the labor-performance measured
+rate cache (ADR-0019) and its idle-share feed (ADR-0020) — plus two
+synchronous outbound clients (labor-performance, fulfillment-execution).
+None of those consume THIS service's own integration topic, which is still
+one topic out; the consumers and sync clients are each recorded by their
+own ADRs._)
 
 **Fan the event out into one message per `PathPlan` line.** A plan committed
 with three path lines produces three messages, each carrying that line's
@@ -118,7 +127,10 @@ context attributes differ.
 
 **Now true**
 
-- One topic out, zero in. That asymmetry is the shape of a Supporting context.
+- One topic out, zero in. That asymmetry is the shape of a Supporting
+  context. (_Superseded in part by ADR-0019/0020 and the
+  `PATH_CATALOGUE_SOURCE=kafka` mode of ADR-0013: this service now consumes
+  three feed topics, though still none of its own integration topic._)
 - The migration path is: emit CloudEvents alongside the flat envelope, move
   `wes-work-planning`'s consumer onto `type`-based routing, then drop the flat
   shape. Whoever does it should supersede this ADR.

@@ -3,6 +3,7 @@ id: 0013-process-path-catalogue-validation
 slug: /adr/0013-process-path-catalogue-validation
 title: 0013. Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017
 sidebar_label: 0013. Path catalogue validation
+sidebar_position: 14
 description: ADR 0013 — validate every caller-supplied path_id (ProposePathPlan, CommitShiftPlan, AssignLabor, staffing-gap) against the fleet's declared process-path catalogue, loaded from warehouse-infra's published-language YAML file at boot.
 ---
 
@@ -79,13 +80,30 @@ func (c *Catalogue) Lookup(id string) (PathDefinition, error) // ErrUnknownPath
 func Load(path string) (*pathcatalog.Catalogue, error)
 ```
 
-Wiring: `Handler` gains a `Catalogue *pathcatalog.Catalogue` field and a
+Wiring: `Handler` gains a `Catalogue ports.PathCatalogue` field and a
 `validatePathId` helper, called from `proposePathPlan`,
 `commitShiftPlan` (per line), `assignLabor`, and `staffingGap` — every
 handler that accepts a caller-supplied `path_id`, including the
 read-only staffing-gap lookup, since an unrecognized `path_id` there is
 a genuinely different failure than "no plan exists yet for this valid
 path" (`ports.ErrNotFound`).
+
+_Amended 2026-10 (ADR-conformance): on the nil-catalogue question._ The
+`Handler` type's zero value (nil `Catalogue`) makes `validatePathId` a
+no-op, which looks like validation being optional. It is not: both
+deployables that accept caller-supplied path ids construct the catalogue
+through `composition.BuildCatalogue`
+(`internal/composition/catalogue.go`), which **fails closed at boot** —
+a missing/malformed file, unset `KAFKA_BROKERS`, or a kafka catalogue
+that never replays within `WaitReadyTimeout` returns an error that stops
+the process before it serves anything. A nil catalogue therefore only
+ever exists as a unit-test seam (the Handler zero value used by tests
+that predate the field), never as a runtime state; the handler-level nil
+branch is defensive, not an operating mode. Making the HTTP constructor
+panic on nil instead was considered and rejected: it would break every
+existing test fixture for a state production cannot reach, and the
+composition root is the layer that already owns the fail-closed
+contract.
 
 `cmd/workforce/main.go` loads the catalogue once, before any adapter
 stands up, from `PATH_CATALOGUE_FILE` (default

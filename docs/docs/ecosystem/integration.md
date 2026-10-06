@@ -15,7 +15,7 @@ and off by default. The table below lists every edge in
 
 | Direction | Counterpart | Mechanism | Selected by | Default |
 | --- | --- | --- | --- | --- |
-| Out | `wes-work-planning` | Kafka `warehouse.workforce.events` (`ShiftPlanCommitted`) | `EVENT_PUBLISHER=kafka` | `log` (no broker) |
+| Out | `wes-work-planning`, `warehouse-planning` | Kafka `warehouse.workforce.events` (`ShiftPlanCommitted`) | `EVENT_PUBLISHER=kafka` | `log` (no broker) |
 | Out | own analytics projector | Kafka `warehouse.workforce.analytics` (every domain event) | `EVENT_PUBLISHER=kafka` | `log` |
 | In (sync) | `fulfillment-execution` | `GET /capacity/{capability}` on every `CommitShiftPlan` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) | `INSTALLED_CAPACITY_MODE=http` + `FULFILLMENT_EXECUTION_BASE_URL` | `permissive` = **every commit fails with 503** |
 | In (sync) | `labor-performance` | `GET /task-types/{taskType}/performance` when `ProposePathPlan` has no caller rate ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)) | `LABOR_PERFORMANCE_MODE=http` + `LABOR_PERFORMANCE_BASE_URL` | `permissive` = no measured rate (fail-open) |
@@ -37,7 +37,7 @@ therefore live there.
 | **Fan-out** | **one message per `PathPlan` line** |
 | **Client** | `github.com/segmentio/kafka-go` |
 | **Adapter** | `internal/adapters/outbound/kafka/publisher.go` |
-| **Consumer** | `wes-work-planning`, into its `LaborPlanObserved` read model, keyed by `path_id` |
+| **Consumers** | `wes-work-planning`, into its `LaborPlanObserved` read model, keyed by `path_id`; `warehouse-planning`, whose labor-capacity consumer (group `warehouse-planning-labor-capacity`) registers it as a LABOR capacity constraint |
 
 ## Selecting the publisher
 

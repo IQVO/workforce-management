@@ -1,9 +1,14 @@
+---
+name: how-to-add-a-frontend-remote
+description: Add or change a micro-frontend remote under web/ (vite federation config in object form, /mfes/<context>/ base, remoteEntry, Docker/nginx packaging, console integration). Use when touching web/.
+---
+
 # How to add a frontend remote
 
 Use when adding a new screen/feature to this repo's `web/` Module
 Federation remote (`workforce-mfe`). This is the Vite/React micro-frontend
 layer that `warehouse-console` (the shell) lazy-loads at `/workforce/*` —
-see that repo's `.claude/rules/mfe-remotes.md` for the shell-side half of
+see that repo's `.claude/rules/frontend.md` for the shell-side half of
 this contract. `workforce-mfe` already exists and is deployed (chart
 `frontend.enabled`, its own nginx workload — see
 `docs/docs/adr/0011-adopt-fleet-mfe-console-architecture.md`); this guide
@@ -132,7 +137,7 @@ npm run build         # tsc -b && vite build -> dist/
 
 CI's `web` job (`.github/workflows/ci.yml`) runs this exact sequence
 against a dual checkout — it checks out this repo into
-`workforce-management/`, checks out `claudioed/warehouse-ui-kit@develop`
+`workforce-management/`, checks out `IQVO/warehouse-ui-kit@develop`
 into a sibling `warehouse-ui-kit/` directory, builds the ui-kit first
 (`npm ci && npm run build`), then runs this repo's `web/` steps.
 Reproduce that locally by checking out `warehouse-ui-kit` as a real

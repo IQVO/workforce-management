@@ -519,6 +519,56 @@ func TestAssignLabor_RejectsUnknownPathId(t *testing.T) {
 	assertProblemDetails(t, rec, http.StatusBadRequest, "unknown-path-id", "/associates/assoc-1/assignments")
 }
 
+// TestAssignLabor_HazmatPath_ThroughHTTP is ADR-0009's illustrative hazmat
+// scenario driven through the catalogue-validating HTTP route, as the
+// 2026-10 ADR-conformance pass requires: a bare "hazmat" path id is NOT a
+// catalogue-declared path (hazmat is a station CAPABILITY a path can
+// require — see usecases_test.go's HAZMAT-PICK family), so the REST gate
+// for ADR-0009 is a real declared family that requires the hazmat
+// capability. The certification requirement is the family's canonical
+// prefix ("hazmat-pick"), not the raw caller id — a certified associate
+// must pass regardless of case or zone suffix.
+func TestAssignLabor_HazmatPath_ThroughHTTP(t *testing.T) {
+	hazmatCatalogue := pathcatalog.New([]pathcatalog.PathDefinition{
+		{Id: "HAZMAT-PICK", MatchPrefix: "hazmat-pick", RequiredCapabilities: []string{"pick", "hazmat"}},
+	})
+	associates := memory.NewAssociateRepo()
+	assignments := memory.NewAssignmentRepo()
+	pub := events.NewLogPublisher(nil)
+	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
+	h := &Handler{
+		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: pub, Clock: clock},
+		AssignLabor: &usecases.AssignLabor{
+			Associates: associates, Assignments: assignments, Events: pub, Clock: clock,
+			MaxHoursPerShift: 8, Catalogue: hazmatCatalogue,
+		},
+		Catalogue: hazmatCatalogue,
+	}
+	router := NewRouter(h, testLogger, "")
+
+	t.Run("catalogue-valid hazmat family id rejects an uncertified associate", func(t *testing.T) {
+		doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pick"}})
+		rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "hazmat-pick"})
+		assertProblemDetails(t, rec, http.StatusConflict, "certification-required", "/associates/assoc-1/assignments")
+	})
+
+	t.Run("canonical and suffixed family ids accept the canonical-prefix certification", func(t *testing.T) {
+		doRequest(t, router, http.MethodPost, "/associates/assoc-2/start-shift", startShiftRequest{Certifications: []string{"hazmat-pick"}})
+		for _, pathId := range []string{"HAZMAT-PICK", "hazmat-pick", "hazmat-pick-zone-a"} {
+			rec := doRequest(t, router, http.MethodPost, "/associates/assoc-2/assignments", assignLaborRequest{PathId: pathId})
+			if rec.Code != http.StatusCreated {
+				t.Errorf("pathId %q: expected 201, got %d: %s", pathId, rec.Code, rec.Body.String())
+			}
+		}
+	})
+
+	t.Run("a bare hazmat id is not a declared path and is rejected as unknown-path-id", func(t *testing.T) {
+		doRequest(t, router, http.MethodPost, "/associates/assoc-3/start-shift", startShiftRequest{Certifications: []string{"hazmat"}})
+		rec := doRequest(t, router, http.MethodPost, "/associates/assoc-3/assignments", assignLaborRequest{PathId: "hazmat"})
+		assertProblemDetails(t, rec, http.StatusBadRequest, "unknown-path-id", "/associates/assoc-3/assignments")
+	})
+}
+
 func TestStartAndEndBreak(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
 	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})

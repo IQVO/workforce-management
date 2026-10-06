@@ -54,9 +54,10 @@ reads *into* it: `fulfillment-execution`'s live installed capacity on commit
 idle share from `labor-performance`. When the capacity read fails, only this
 service's own commit fails.
 
-**Keep the surface small.** Ten endpoints, three aggregates, eight use cases.
-Every addition would have to earn its place against the fact that this is not
-where the business differentiates.
+**Keep the surface small.** Ten business endpoints (plus the `/healthz` and
+`/readyz` probes), three aggregates, nine use-case structs. Every addition
+would have to earn its place against the fact that this is not where the
+business differentiates.
 
 ## Where it sits in the WMS / WES / WCS layering
 
@@ -93,7 +94,11 @@ path/task line is a deliberate departure from it, for cadence reasons argued in
 [The path boundary](../business-context/path-boundary.md) and recorded in
 [ADR 0002](../adr/0002-stop-at-the-path-boundary.md).
 
-## The other four contexts, for comparison
+## The original five contexts, for comparison
+
+The fleet has since grown to eleven backend contexts (see
+[Sibling services](../ecosystem/siblings.md)); this table keeps the original
+five, whose classifications this page's reasoning is argued against.
 
 | Service | Tier | Classification |
 | --- | --- | --- |

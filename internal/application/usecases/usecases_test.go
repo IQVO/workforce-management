@@ -906,6 +906,56 @@ func TestAssignLabor_RejectsMissingCertification(t *testing.T) {
 	}
 }
 
+// TestAssignLabor_CatalogueNormalisesRequiredCertification is the 2026-10
+// ADR-conformance regression test (ADR-0009 amendment): with a catalogue
+// wired, the required certification is the path FAMILY's canonical prefix,
+// so a catalogue-valid "PICK" or "pick-zone-a" must satisfy a "pick"
+// certification — the pre-fix exact raw-id match rejected both.
+func TestAssignLabor_CatalogueNormalisesRequiredCertification(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		pathId shared.PathId
+	}{
+		{name: "canonical upper-case id", pathId: "PICK"},
+		{name: "bare lower-case prefix", pathId: "pick"},
+		{name: "zone-suffixed real-fleet id", pathId: "pick-zone-a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			setupCertifiedAssociate(t, f, "assoc-1", "pick")
+
+			uc := &AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: f.pub, Clock: f.clock, MaxHoursPerShift: 8, Catalogue: testCatalogue()}
+			la, err := uc.Execute(context.Background(), "assoc-1", tc.pathId)
+			if err != nil {
+				t.Fatalf("catalogue-valid %q with certification \"pick\": unexpected error: %v", tc.pathId, err)
+			}
+			if got, active := la.ActivePathId(); !active || got != tc.pathId {
+				t.Fatalf("expected active assignment to %v, got %v active=%v", tc.pathId, got, active)
+			}
+		})
+	}
+
+	t.Run("an associate certified for a different family is still rejected", func(t *testing.T) {
+		f := newFixtures()
+		setupCertifiedAssociate(t, f, "assoc-2", "pack")
+
+		uc := &AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: f.pub, Clock: f.clock, MaxHoursPerShift: 8, Catalogue: testCatalogue()}
+		if _, err := uc.Execute(context.Background(), "assoc-2", "pick-zone-a"); !errors.Is(err, assignment.ErrCertificationRequired) {
+			t.Fatalf("expected ErrCertificationRequired, got %v", err)
+		}
+	})
+
+	t.Run("without a catalogue the raw pathId remains the certification name", func(t *testing.T) {
+		f := newFixtures()
+		setupCertifiedAssociate(t, f, "assoc-3", "pick")
+
+		uc := &AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: f.pub, Clock: f.clock, MaxHoursPerShift: 8}
+		if _, err := uc.Execute(context.Background(), "assoc-3", "PICK"); !errors.Is(err, assignment.ErrCertificationRequired) {
+			t.Fatalf("catalogue-less configuration must keep the exact raw-id convention, got %v", err)
+		}
+	})
+}
+
 // TestAssignLabor_HazmatPath is an illustrative test, not a new behaviour.
 // It applies the ALREADY-EXISTING path-name-equals-certification-name gate
 // (documented in ADR 0003 and internal/application/usecases/assign_labor.go)

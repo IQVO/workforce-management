@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riandyrn/otelchi"
 	otelchimetric "github.com/riandyrn/otelchi/metric"
 
@@ -54,6 +55,15 @@ type Handler struct {
 	// before anything else stops. A nil Readiness (the Handler zero
 	// value — every existing test) always reports ready.
 	Readiness *Readiness
+
+	// IdempotencyPool, when non-nil, wires RequireIdempotencyKey onto the
+	// resource-creation POSTs (/shift-plans and
+	// /associates/{id}/assignments, ADR-0027). It must be a real
+	// *pgxpool.Pool because the middleware begins its own transaction that
+	// the use case's UnitOfWork then joins. A nil pool means "no
+	// transactional Postgres backing wired" (in-memory dev/test), and the
+	// middleware is simply not applied.
+	IdempotencyPool *pgxpool.Pool
 }
 
 // validatePathId checks pathId against h.Catalogue when one is wired
@@ -114,8 +124,20 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	r.Post("/associates/{id}/start-shift", h.startShift)
 	r.Post("/associates/{id}/certifications", h.certify)
 	r.Post("/paths/{pathId}/plan/propose", h.proposePathPlan)
-	r.Post("/shift-plans", h.commitShiftPlan)
-	r.Post("/associates/{id}/assignments", h.assignLabor)
+	// POST /shift-plans and POST /associates/{id}/assignments are the two
+	// mutating endpoints whose blind retry after a lost response would
+	// re-apply real state and re-publish events (ADR-0027). They are
+	// route-scoped (r.With, not r.Use) behind RequireIdempotencyKey when an
+	// IdempotencyPool is wired; a nil pool (in-memory dev/test) leaves them
+	// unprotected, matching every other optional Postgres-backed capability.
+	// start-shift is idempotent by associate id, certify/break/end-shift act
+	// on a caller-supplied id, and propose is a pure computation.
+	idempotent := r.With()
+	if h.IdempotencyPool != nil {
+		idempotent = r.With(RequireIdempotencyKey(h.IdempotencyPool))
+	}
+	idempotent.Post("/shift-plans", h.commitShiftPlan)
+	idempotent.Post("/associates/{id}/assignments", h.assignLabor)
 	r.Post("/associates/{id}/break/start", h.startBreak)
 	r.Post("/associates/{id}/break/end", h.endBreak)
 	r.Get("/paths/{pathId}/staffing-gap", h.staffingGap)
@@ -444,7 +466,7 @@ func corsMiddleware() func(http.Handler) http.Handler {
 	return cors.Handler(cors.Options{
 		AllowedOrigins:   origins,
 		AllowedMethods:   []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete},
-		AllowedHeaders:   []string{"Content-Type", "Authorization"},
+		AllowedHeaders:   []string{"Content-Type", "Authorization", IdempotencyKeyHeader},
 		AllowCredentials: false,
 		MaxAge:           300,
 	})

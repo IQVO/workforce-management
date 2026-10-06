@@ -3,6 +3,7 @@ id: 0018-remove-fleet-rest-identity
 slug: /adr/0018-remove-fleet-rest-identity
 title: 0018. Remove the fleet REST identity layer (revert ADR-0017)
 sidebar_label: 0018. Remove REST identity
+sidebar_position: 19
 description: ADR 0018 — the static-bearer-key auth layer adopted in ADR-0017 is removed from the REST and MCP surfaces across all three binaries (cmd/workforce, cmd/workforce-reports, cmd/mcp); the fleet rollout is reverted for this service.
 ---
 

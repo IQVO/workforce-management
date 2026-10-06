@@ -154,6 +154,19 @@ config:
   eventPublisher: "log"   # "log" or "kafka"
   migrationsPath: "migrations"
   maxHoursPerShift: "8.0"
+  # Housekeeping sweeper (ADR-0028). Go durations; "0" disables that part.
+  # idempotencyKeyTtl is also the REPLAY WINDOW of the Idempotency-Key
+  # contract (ADR-0027): a retry older than this is a brand-new request.
+  housekeepingInterval: "1h"
+  idempotencyKeyTtl: "24h"
+  outboxRetention: "168h"
+  # Graceful shutdown (ADR-0022 section 8): after SIGTERM /readyz flips to
+  # 503 and the pod keeps serving for this long BEFORE the listener closes,
+  # so the readinessProbe (periodSeconds below) observes the flip and stops
+  # routing new traffic. Default = 2 x readinessProbe.periodSeconds (5s).
+  # Must stay below terminationGracePeriodSeconds minus the ~10s HTTP/relay
+  # drain budget and ~5s telemetry flush.
+  shutdownDrainDelay: "10s"
 
 # UNLIKE THE OTHER THREE SERVICES: this binary calls requireEnv("DATABASE_URL")
 # and log.Fatalf's (crash-loops) if it's unset — there is no in-memory
@@ -262,12 +275,14 @@ readinessProbe:
   initialDelaySeconds: 3
   periodSeconds: 5
 
-# Gives cmd/workforce/main.go's graceful shutdown sequence (readiness
-# flip -> HTTP drain -> catalogue/rate-cache Kafka consumer clean stop
-# -> outbox relay stop -> pg pool close last) room to actually finish
-# before Kubernetes SIGKILLs the container. 10s (the HTTP Shutdown
-# budget) + margin for the readinessProbe's periodSeconds=5 to have
-# observed the not-ready flip before traffic fully stops arriving.
+# Gives cmd/workforce/main.go's graceful shutdown sequence (ADR-0022
+# section 8: readiness flip -> SHUTDOWN_DRAIN_DELAY wait -> HTTP drain ->
+# catalogue/rate-cache Kafka consumers stop -> housekeeping sweeper stop ->
+# outbox relay stop -> pg pool close last) room to actually finish before
+# Kubernetes SIGKILLs the container. Budget: config.shutdownDrainDelay (10s,
+# two readinessProbe periods so the not-ready flip is observed BEFORE the
+# listener closes) + the 10s HTTP/relay drain + the 5s telemetry flush = 25s,
+# leaving 5s of margin inside 30s.
 terminationGracePeriodSeconds: 30
 
 nodeSelector: {}

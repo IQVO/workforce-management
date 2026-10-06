@@ -1,3 +1,9 @@
+---
+paths:
+  - "internal/adapters/outbound/analyticsstore/**"
+  - "internal/**/analytics*/**"
+---
+
 # Analytics data product, MCP adapter, observability
 
 ## Analytics data product — Labor Utilization & Staffing (ADR-0010)

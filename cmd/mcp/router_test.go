@@ -15,7 +15,7 @@ import (
 func newTestRouter(t *testing.T) http.Handler {
 	t.Helper()
 	server := inboundmcp.NewServer(inboundmcp.Deps{})
-	return newRouter(inboundmcp.Handler(server))
+	return newRouter(inboundmcp.Handler(server), "workforce-management-mcp")
 }
 
 func TestRouter_HealthzServesOK(t *testing.T) {

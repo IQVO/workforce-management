@@ -1,44 +1,69 @@
 import { useState, type FormEvent } from "react";
 import { WORKFORCE_API_BASE } from "../config";
+import {
+  allPathsStaffingGapUrl,
+  singlePathStaffingGapUrl,
+} from "../apiUrls";
 import type { StaffingGap } from "../types";
 import { Card, StatusPill, useFetch } from "@warehouse/ui-kit";
 
 /**
- * Staffing-gap-by-path dashboard. workforce-management's REST API only
- * exposes GET /paths/{pathId}/staffing-gap?buildingId=&shiftId= (ShiftPlan
- * is keyed by building+shift, so both query params are required alongside
- * the path) -- see router.go's staffingGap handler. This screen is scoped
- * to what actually exists today: look up one path's gap for one
- * building/shift. A fleet-wide "all paths at once" view needs a new
- * list-style endpoint on workforce-management first -- same category of
- * gap as order-mgmt-mfe's missing GET /orders?status= (a fast-follow, not
- * blocking this pilot).
+ * Staffing-gap dashboard. Two views over the same committed shift plan:
+ *
+ * 1. ALL PATHS (the default): GET /buildings/{buildingId}/shifts/{shiftId}/
+ *    staffing-gap lists every path planned in the plan in one call — the
+ *    "fleet-wide all-paths" endpoint ADR-0011 originally deferred and later
+ *    shipped (operationId listStaffingGapsForShift). One building/shift
+ *    pair, one request, every path's gap.
+ * 2. BY PATH (kept): GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=
+ *    narrows to one caller-supplied path. ShiftPlan is keyed by
+ *    building+shift, so both query params are required alongside the path.
+ *
+ * Both endpoints compute a path's gap identically, so the two views can
+ * never disagree for a given path.
  */
 export function WorkforceScreen() {
+  const [mode, setMode] = useState<"all" | "path">("all");
   const [pathIdInput, setPathIdInput] = useState("");
   const [buildingIdInput, setBuildingIdInput] = useState("wh1");
   const [shiftIdInput, setShiftIdInput] = useState("shift-1");
-  const [query, setQuery] = useState<{ pathId: string; buildingId: string; shiftId: string } | null>(null);
+  const [query, setQuery] = useState<{
+    mode: "all" | "path";
+    pathId: string;
+    buildingId: string;
+    shiftId: string;
+  } | null>(null);
 
   const url = query
-    ? `${WORKFORCE_API_BASE}/paths/${encodeURIComponent(query.pathId)}/staffing-gap?buildingId=${encodeURIComponent(
-        query.buildingId,
-      )}&shiftId=${encodeURIComponent(query.shiftId)}`
+    ? query.mode === "all"
+      ? allPathsStaffingGapUrl(WORKFORCE_API_BASE, query.buildingId, query.shiftId)
+      : singlePathStaffingGapUrl(WORKFORCE_API_BASE, query.pathId, query.buildingId, query.shiftId)
     : null;
-  const { data, loading, error } = useFetch<StaffingGap>(url);
+  // The all-paths endpoint answers with an array; the single-path lookup
+  // with one object. Normalise both to a list for rendering.
+  const { data, loading, error } = useFetch<StaffingGap[] | StaffingGap>(url);
+  const gaps: StaffingGap[] = !data
+    ? []
+    : Array.isArray(data)
+      ? data
+      : [data];
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     const pathId = pathIdInput.trim();
     const buildingId = buildingIdInput.trim();
     const shiftId = shiftIdInput.trim();
-    if (pathId && buildingId && shiftId) {
-      setQuery({ pathId, buildingId, shiftId });
+    if (!buildingId || !shiftId) {
+      return;
     }
+    if (mode === "path" && !pathId) {
+      return;
+    }
+    setQuery({ mode, pathId, buildingId, shiftId });
   }
 
-  const gapStatus = data ? (data.understaffed ? "Understaffed" : "Staffed") : null;
-  const maxHeads = data ? Math.max(data.plannedHeads, data.activeHeads, 1) : 1;
+  const maxHeads = gaps.reduce((m, g) => Math.max(m, g.plannedHeads, g.activeHeads), 1);
+  const understaffedCount = gaps.filter((g) => g.understaffed).length;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-5)" }}>
@@ -50,12 +75,23 @@ export function WorkforceScreen() {
       </div>
 
       <form onSubmit={onSubmit} style={{ display: "flex", gap: "var(--wh-space-2)", flexWrap: "wrap" }}>
-        <input
-          value={pathIdInput}
-          onChange={(e) => setPathIdInput(e.target.value)}
-          placeholder="Path ID"
-          style={inputStyle({ flex: 1, minWidth: 160 })}
-        />
+        <select
+          value={mode}
+          onChange={(e) => setMode(e.target.value as "all" | "path")}
+          style={inputStyle({ width: 130 })}
+          aria-label="View mode"
+        >
+          <option value="all">All paths</option>
+          <option value="path">By path</option>
+        </select>
+        {mode === "path" && (
+          <input
+            value={pathIdInput}
+            onChange={(e) => setPathIdInput(e.target.value)}
+            placeholder="Path ID"
+            style={inputStyle({ flex: 1, minWidth: 160 })}
+          />
+        )}
         <input
           value={buildingIdInput}
           onChange={(e) => setBuildingIdInput(e.target.value)}
@@ -76,7 +112,8 @@ export function WorkforceScreen() {
       {!query && (
         <Card>
           <div style={{ color: "var(--wh-color-text-muted)" }}>
-            Enter a path, building, and shift to see planned vs active headcount.
+            Enter a building and shift to see planned vs active headcount for every
+            path in the committed plan, or switch to “By path” for one path.
           </div>
         </Card>
       )}
@@ -88,41 +125,66 @@ export function WorkforceScreen() {
       )}
 
       {loading && query && (
-        <Card title={query.pathId}>
+        <Card title={query.mode === "path" ? query.pathId : "All paths"}>
           <div style={{ color: "var(--wh-color-text-muted)" }}>Loading staffing gap…</div>
         </Card>
       )}
 
-      {data && !loading && gapStatus && (
-        <Card
-          title={data.pathId}
-          actions={<StatusPill status={gapStatus} tone={data.understaffed ? "warning" : "success"} />}
-        >
+      {!loading && query && gaps.length === 0 && !error && (
+        <Card>
+          <div style={{ color: "var(--wh-color-text-muted)" }}>
+            No committed shift plan found for this building/shift with paths to show.
+          </div>
+        </Card>
+      )}
+
+      {!loading && gaps.length > 0 && (
+        <>
           <div
             style={{
               display: "flex",
               gap: "var(--wh-space-6)",
-              marginBottom: "var(--wh-space-5)",
               fontSize: "var(--wh-font-size-sm)",
               color: "var(--wh-color-text-muted)",
             }}
           >
             <span>Building: {query?.buildingId}</span>
             <span>Shift: {query?.shiftId}</span>
+            <span>
+              {gaps.length} path{gaps.length === 1 ? "" : "s"} ·{" "}
+              {understaffedCount === 0
+                ? "all staffed"
+                : `${understaffedCount} understaffed`}
+            </span>
           </div>
-
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-4)" }}>
-            <HeadcountBar label="Planned heads" value={data.plannedHeads} max={maxHeads} tone="neutral" />
-            <HeadcountBar
-              label="Active heads"
-              value={data.activeHeads}
-              max={maxHeads}
-              tone={data.understaffed ? "warning" : "success"}
-            />
-          </div>
-        </Card>
+          {gaps.map((gap) => (
+            <PathGapCard key={gap.pathId} gap={gap} maxHeads={maxHeads} />
+          ))}
+        </>
       )}
     </div>
+  );
+}
+
+function PathGapCard({ gap, maxHeads }: { gap: StaffingGap; maxHeads: number }) {
+  const status = gap.understaffed ? "Understaffed" : "Staffed";
+  return (
+    <Card
+      title={gap.pathId}
+      actions={
+        <StatusPill status={status} tone={gap.understaffed ? "warning" : "success"} />
+      }
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-4)" }}>
+        <HeadcountBar label="Planned heads" value={gap.plannedHeads} max={maxHeads} tone="neutral" />
+        <HeadcountBar
+          label="Active heads"
+          value={gap.activeHeads}
+          max={maxHeads}
+          tone={gap.understaffed ? "warning" : "success"}
+        />
+      </div>
+    </Card>
   );
 }
 

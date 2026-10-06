@@ -1,8 +1,9 @@
 ---
 id: 0023-kafka-integration-producer-partition-key
 slug: /adr/0023-kafka-integration-producer-partition-key
-title: "23. Key the integration Kafka publisher by ShiftPlan aggregate id"
+title: "0023. Key the integration Kafka publisher by ShiftPlan aggregate id"
 sidebar_label: "23. Integration publisher partition key"
+sidebar_position: 24
 description: "ADR 0023 — why the integration publisher (warehouse.workforce.events) now keys every message with the ShiftPlan aggregate id (buildingId/shiftId), closing a per-aggregate ordering gap the 1->8 partition scaleup exposed."
 ---
 

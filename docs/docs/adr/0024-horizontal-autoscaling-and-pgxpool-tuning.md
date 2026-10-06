@@ -1,8 +1,9 @@
 ---
 id: 0024-horizontal-autoscaling-and-pgxpool-tuning
 slug: /adr/0024-horizontal-autoscaling-and-pgxpool-tuning
-title: 24. Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning
+title: 0024. Per-workload HorizontalPodAutoscaler and pgxpool MaxConns/statement_timeout tuning
 sidebar_label: 24. HPA + pgxpool tuning
+sidebar_position: 25
 description: "ADR 0024 — Phase 3 (scalability) for workforce-management, ported from order-management's ADR-0026 (PR #110): an autoscaling/v2 HorizontalPodAutoscaler per independently-assessed workload (api max 4, analytics-projector max 2, analytics-reports max 3, frontend max 3; mcp explicitly excluded for a real in-memory-session reason), all default-disabled via values.yaml so this PR changes nothing on merge; plus explicit pgxpool.Config MaxConns caps and per-pool statement_timeout values, sized against the shared Postgres instance's real max_connections=100 ceiling, with PgBouncer (warehouse-infra PR #43) already in front of every service's OLTP DATABASE_URL."
 ---
 

@@ -1,7 +1,7 @@
 # Workforce Management — documentation site
 
 The Docusaurus source for
-<https://claudioed.github.io/workforce-management/>.
+<https://iqvo.github.io/workforce-management/>.
 
 Content lives in `docs/` (Markdown), the homepage in `src/pages/index.tsx`, and
 the sidebar shape in `sidebars.ts`. The **API Reference → REST API** pages are
