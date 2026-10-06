@@ -223,7 +223,15 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 		}
 	}()
 
-	txCtx := pgtx.WithTx(ctx, tx)
+	// The savepoint scopes the wrapped handler's writes (see below).
+	sp, err := tx.Begin(ctx)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
+		return
+	}
+
+	txCtx := pgtx.WithTx(ctx, sp)
 	rec := httptest.NewRecorder()
 	next.ServeHTTP(rec, r.WithContext(txCtx))
 
@@ -232,6 +240,28 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 	// deliberate v1 simplification (ADR-0027): a client retrying the exact
 	// same key+body deterministically gets the exact same answer. A caller
 	// wanting a different outcome must use a new Idempotency-Key.
+	//
+	// But the DOMAIN writes of a non-2xx request must never be committed
+	// with it: a use case can fail late (e.g. a 409 optimistic-concurrency
+	// conflict on its second Save) after an earlier write in the same
+	// request already ran, and because the wrapped handler joined THIS
+	// transaction nothing else would undo that write. So the handler runs
+	// inside a SAVEPOINT: a 2xx releases it (domain writes stay in the
+	// transaction and commit together with the idempotency row), anything
+	// else rolls back to it (domain writes and outbox rows vanish) while the
+	// idempotency row itself — inserted BEFORE the savepoint — survives and
+	// still records the failed outcome for replay.
+	if rec.Code >= 200 && rec.Code < 300 {
+		err = sp.Commit(ctx) // RELEASE SAVEPOINT
+	} else {
+		err = sp.Rollback(ctx) // ROLLBACK TO SAVEPOINT
+	}
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
+		return
+	}
+
 	headersJSON, err := json.Marshal(rec.Header())
 	if err != nil {
 		_ = tx.Rollback(ctx)

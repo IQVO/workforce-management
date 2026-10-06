@@ -30,6 +30,10 @@ const (
 // trim on any nonzero idle share.
 const DefaultIdleShareTrimThreshold = 0.30
 
+// secondsPerHour converts labor-performance's mean seconds-per-task into the
+// per-head hourly rate (units per head per hour) the proposal arithmetic uses.
+const secondsPerHour = 3600.0
+
 // ProposePathPlan is a pure computation: heads needed to cover a path's
 // charge at a planned rate. It persists nothing — a human must still
 // commit the plan via CommitShiftPlan.
@@ -84,8 +88,16 @@ func (uc *ProposePathPlan) Execute(ctx context.Context, buildingId string, pathI
 	if resolvedRate <= 0 && uc.MeasuredRate != nil {
 		measured, mErr := uc.MeasuredRate.MeanActualSeconds(ctx, pathId)
 		if mErr == nil {
-			resolvedRate = measured
-			rateSource = RateSourceMeasured
+			// meanActualSeconds is a DURATION per task, but the heads
+			// arithmetic expects a per-head HOURLY rate (units per head
+			// per hour, the same unit as a caller's plannedRate):
+			// 3600 / seconds-per-task. A non-positive or non-finite
+			// duration cannot be converted -- treat it exactly like
+			// ErrMeasuredRateUnavailable (fail-open, zero rate).
+			if measured > 0 && !math.IsInf(measured, 0) && !math.IsNaN(measured) {
+				resolvedRate = secondsPerHour / measured
+				rateSource = RateSourceMeasured
+			}
 		} else if !errors.Is(mErr, ports.ErrMeasuredRateUnavailable) {
 			// A MeasuredRateClient must only ever return
 			// ErrMeasuredRateUnavailable; anything else is a

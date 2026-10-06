@@ -20,6 +20,9 @@ Shared facts every diagram relies on:
   `atomically(ctx, UnitOfWork, fn)`. With Postgres wired, that is one
   transaction (`postgres.UnitOfWork`); if a transaction is already bound to
   the context — by the idempotency middleware — it joins that one instead.
+  The middleware binds a savepoint inside its transaction and rolls back to
+  it on any non-2xx response, so a late failure (a `409` on the second
+  `Save`) cannot leave an earlier `Save` of the same request committed.
 - **Outbox.** With `EVENT_PUBLISHER=kafka` and Postgres, `Publish` is
   `postgres.OutboxPublisher`: it encodes every event into CloudEvents rows for
   `warehouse.workforce.events` and `warehouse.workforce.analytics` and
@@ -56,7 +59,7 @@ sequenceDiagram
     alt key already stored
         IK-->>Client: replay stored response, or 422 if body hash differs
     end
-    IK->>H: request with tx bound to ctx
+    IK->>H: request with the savepoint's tx bound to ctx
     H->>Cat: validatePathId for every line
     alt unknown path
         H-->>IK: 400 unknown-path-id
@@ -84,7 +87,7 @@ sequenceDiagram
     OB->>OB: INSERT outbox_events, N integration rows and 1 analytics row
     UC-->>H: ShiftPlan
     H-->>IK: 201 Created, Location /shift-plans/buildingId/shiftId
-    IK->>IK: UPDATE idempotency_keys with the response, COMMIT
+    IK->>IK: RELEASE SAVEPOINT, UPDATE idempotency_keys with the response, COMMIT
     IK-->>Client: 201 Created
 ```
 
@@ -95,7 +98,11 @@ Source: `internal/adapters/inbound/http/idempotency.go`, `router.go`
 `internal/adapters/outbound/kafka/publisher.go`. Omits: request-body decoding
 errors, the `ErrCommitShiftPlanNoCatalogue` wiring error, and the circuit
 breaker around the capacity client. Every normal response, including a 4xx,
-is stored against the key; only a panic rolls the key back.
+is stored against the key; only a panic rolls the key back. The wrapped
+handler runs inside a savepoint: a 2xx releases it, any other status rolls
+back to it first, so a failed request's domain writes and outbox rows are
+discarded (no partial write) while the idempotency row still records the
+failed response for replay.
 
 ## AssignLabor — `POST /associates/{id}/assignments` and MCP `assign_labor`
 
@@ -287,9 +294,9 @@ sequenceDiagram
     In->>UC: Execute buildingId, pathId, charge, plannedRate
     opt plannedRate not positive and MeasuredRate wired
         UC->>MR: MeanActualSeconds pathId
-        alt available
-            MR-->>UC: rate, rateSource measured
-        else ErrMeasuredRateUnavailable
+        alt available and seconds positive
+            MR-->>UC: seconds per task, rate = 3600 / seconds, rateSource measured
+        else ErrMeasuredRateUnavailable or seconds not positive
             MR-->>UC: keep caller rate, rateSource caller
         end
     end

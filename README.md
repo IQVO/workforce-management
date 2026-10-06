@@ -296,8 +296,9 @@ curl -X POST localhost:8080/associates/assoc-1/break/end
 
 # Staffing gap read model for a path within a committed plan
 # -> {"pathId":"pack","plannedHeads":3,"activeHeads":1,"understaffed":true}
-#    plus observedIdlePct when LABOR_PERFORMANCE_MODE=kafka-cache has a signal
-#    for the path (ADR-0020). Unknown path ids are 400 unknown-path-id.
+#    plus observedIdleShare (a 0..1 fraction; observedIdlePct is its deprecated
+#    alias, same value) when LABOR_PERFORMANCE_MODE=kafka-cache has a signal
+#    for the path (ADR-0020, ADR-0033). Unknown path ids are 400 unknown-path-id.
 curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
 
 # Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)

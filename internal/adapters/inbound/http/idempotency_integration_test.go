@@ -33,6 +33,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
+	"github.com/claudioed/workforce-management/internal/domain/assignment"
 	"github.com/claudioed/workforce-management/internal/domain/associate"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
@@ -118,15 +119,25 @@ type idempotencyFixture struct {
 // uses (internal/pgtx via postgres.UnitOfWork.Execute).
 func newIdempotencyFixture(t *testing.T, pool *pgxpool.Pool) idempotencyFixture {
 	t.Helper()
+	return newIdempotencyFixtureWith(t, pool, idemClock(time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)), nil)
+}
+
+// newIdempotencyFixtureWith is newIdempotencyFixture with an injectable clock
+// and an optional decorator over the real Postgres assignment repo (used to
+// force a deterministic optimistic-concurrency conflict).
+func newIdempotencyFixtureWith(t *testing.T, pool *pgxpool.Pool, clock ports.Clock, wrapAssignments func(ports.AssignmentRepo) ports.AssignmentRepo) idempotencyFixture {
+	t.Helper()
 	associates := postgres.NewAssociateRepo(pool)
 	shiftPlans := postgres.NewShiftPlanRepo(pool)
-	assignments := postgres.NewAssignmentRepo(pool)
+	var assignments ports.AssignmentRepo = postgres.NewAssignmentRepo(pool)
+	if wrapAssignments != nil {
+		assignments = wrapAssignments(assignments)
+	}
 	uow := postgres.NewUnitOfWork(pool)
 	outbox := postgres.NewOutboxPublisher(pool,
 		outboundkafka.NewPublisherWithWriter(nil, shiftPlans),
 		outboundkafka.NewAnalyticsPublisherWithWriter(nil, outboundkafka.NewEventID))
 	publisher := &countingPublisher{inner: outbox}
-	clock := idemClock(time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC))
 	catalogue := pathcatalog.New([]pathcatalog.PathDefinition{
 		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
 	})
@@ -457,6 +468,128 @@ func TestIdempotency_Assign_Concurrent_ExactlyOneEffect(t *testing.T) {
 	if got := countAssignmentEvents(t, pool); got != 1 {
 		t.Fatalf("assignment outbox rows = %d, want 1", got)
 	}
+}
+
+// ---------------------------------------------------------------------
+// atomicity on a non-2xx response (docs-audit 2026-10-05)
+// ---------------------------------------------------------------------
+
+// settableClock is a ports.Clock the test can advance between requests.
+type settableClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *settableClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *settableClock) Set(t time.Time) {
+	c.mu.Lock()
+	c.t = t
+	c.mu.Unlock()
+}
+
+// conflictingAssignments forces a REAL optimistic-concurrency conflict: just
+// before delegating Save it commits (on an independent connection) a version
+// bump of the associate's labor_assignment row, as a concurrent writer would,
+// so the real version-guarded Save returns ports.ErrConcurrentModification.
+type conflictingAssignments struct {
+	ports.AssignmentRepo
+	pool *pgxpool.Pool
+}
+
+func (c conflictingAssignments) Save(ctx context.Context, la *assignment.LaborAssignment) error {
+	if _, err := c.pool.Exec(context.Background(),
+		"UPDATE labor_assignment SET version = version + 1 WHERE associate_id = $1", string(la.AssociateId())); err != nil {
+		return err
+	}
+	return c.AssignmentRepo.Save(ctx, la)
+}
+
+func associateShiftState(t *testing.T, pool *pgxpool.Pool, id string) (hours float64, version int) {
+	t.Helper()
+	if err := pool.QueryRow(context.Background(),
+		"SELECT hours_logged, version FROM associate_shift WHERE associate_id = $1", id).Scan(&hours, &version); err != nil {
+		t.Fatalf("read associate_shift: %v", err)
+	}
+	return hours, version
+}
+
+// A reassignment first logs the closed interval's hours on the associate
+// (associates.Save) and only then saves the assignment. When that second
+// write loses an optimistic-concurrency race the response is a 409 — and the
+// associate's hours write made earlier in the SAME request must NOT survive:
+// the middleware used to commit the shared transaction for any non-panic
+// response, persisting the partial write. The 409 itself is still recorded
+// and replayed (ADR-0027's stored-response semantics), and the failed attempt
+// must not publish any event.
+func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *testing.T) {
+	pool := idempotencyDB(t)
+	clock := &settableClock{t: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)}
+	conflict := false
+	wrap := func(inner ports.AssignmentRepo) ports.AssignmentRepo {
+		return switchableAssignments{AssignmentRepo: inner, pool: pool, conflict: &conflict}
+	}
+	fx := newIdempotencyFixtureWith(t, pool, clock, wrap)
+	seedAssociate(t, pool, "assoc-1", "pack")
+
+	if first := post(fx.router, "/associates/assoc-1/assignments", "assign-setup", assignBody); first.Code != http.StatusCreated {
+		t.Fatalf("setup assignment status = %d, want 201 (body: %s)", first.Code, first.Body.String())
+	}
+	hoursBefore, versionBefore := associateShiftState(t, pool, "assoc-1")
+	outboxBefore := count(t, pool, "SELECT count(*) FROM outbox_events")
+
+	// Two hours later, move the associate to another pack path while a
+	// concurrent writer wins the labor_assignment row.
+	clock.Set(clock.Now().Add(2 * time.Hour))
+	conflict = true
+	rec := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body.String())
+	}
+	if slug := problemSlug(t, rec.Body.Bytes()); slug != "concurrent-modification" {
+		t.Fatalf("problem.type slug = %q, want concurrent-modification", slug)
+	}
+
+	hoursAfter, versionAfter := associateShiftState(t, pool, "assoc-1")
+	if hoursAfter != hoursBefore || versionAfter != versionBefore {
+		t.Fatalf("associate_shift after a 409 = (hours %v, version %d), want unchanged (hours %v, version %d): the partial hours write was committed",
+			hoursAfter, versionAfter, hoursBefore, versionBefore)
+	}
+	if got := count(t, pool, "SELECT count(*) FROM outbox_events"); got != outboxBefore {
+		t.Fatalf("outbox rows after a 409 = %d, want %d (no events from a failed request)", got, outboxBefore)
+	}
+
+	// The 409 is still the stored idempotent outcome for this key.
+	_, statusCode, _ := idempotencyRowOutcome(t, pool, "assign-conflict")
+	if statusCode == nil || *statusCode != http.StatusConflict {
+		t.Fatalf("stored status_code = %v, want 409", statusCode)
+	}
+	conflict = false
+	replay := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if replay.Code != http.StatusConflict || replay.Body.String() != rec.Body.String() {
+		t.Fatalf("replay = %d %s, want the stored 409 %s", replay.Code, replay.Body.String(), rec.Body.String())
+	}
+	if h, v := associateShiftState(t, pool, "assoc-1"); h != hoursBefore || v != versionBefore {
+		t.Fatalf("replay changed associate_shift to (hours %v, version %d)", h, v)
+	}
+}
+
+// switchableAssignments injects the forced conflict only while *conflict is true.
+type switchableAssignments struct {
+	ports.AssignmentRepo
+	pool     *pgxpool.Pool
+	conflict *bool
+}
+
+func (s switchableAssignments) Save(ctx context.Context, la *assignment.LaborAssignment) error {
+	if *s.conflict {
+		return conflictingAssignments{AssignmentRepo: s.AssignmentRepo, pool: s.pool}.Save(ctx, la)
+	}
+	return s.AssignmentRepo.Save(ctx, la)
 }
 
 // ---------------------------------------------------------------------

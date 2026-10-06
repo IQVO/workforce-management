@@ -81,6 +81,37 @@ paths:
               example:
                 status: ok
 
+  /readyz:
+    get:
+      operationId: readyz
+      summary: Readiness check
+      description: >-
+        Reports whether this instance should receive traffic. Returns 200
+        `{"status":"ready"}` while serving and 503 `{"status":"not_ready"}`
+        once graceful shutdown has begun (ADR-0022): readiness is flipped
+        first so a Kubernetes readinessProbe stops routing new requests
+        during the drain window, while the liveness probe (`/healthz`)
+        stays green. Like `/healthz` it does not probe downstream
+        dependencies.
+      tags: [System]
+      responses:
+        "200":
+          description: Instance is ready to receive traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyzResponse"
+              example:
+                status: ready
+        "503":
+          description: Instance is draining for shutdown and must not receive new traffic.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ReadyzResponse"
+              example:
+                status: not_ready
+
   /associates/{id}/start-shift:
     post:
       operationId: startAssociateShift
@@ -586,6 +617,7 @@ paths:
                 plannedHeads: 3
                 activeHeads: 1
                 understaffed: true
+                observedIdleShare: 0.42
                 observedIdlePct: 0.42
         "400":
           $ref: "#/components/responses/BadRequest"
@@ -642,6 +674,7 @@ paths:
                   plannedHeads: 3
                   activeHeads: 1
                   understaffed: true
+                  observedIdleShare: 0.42
                   observedIdlePct: 0.42
                 - pathId: pick
                   plannedHeads: 1
@@ -872,6 +905,15 @@ components:
           type: string
           example: ok
 
+    ReadyzResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [ready, not_ready]
+          example: ready
+
     StartShiftRequest:
       type: object
       properties:
@@ -930,10 +972,12 @@ components:
           type: number
           format: double
           description: >-
-            Planned units-per-head throughput rate for this path. OPTIONAL:
+            Planned units-per-head-per-hour throughput rate for this path. OPTIONAL:
             omit (or send <= 0) to let the proposal fall back to a real
             measured rate fed back from labor-performance for this path's
-            task type (feature: close-the-loop measured rate, ADR-0012).
+            task type (feature: close-the-loop measured rate, ADR-0012;
+            its mean seconds per task is converted to units per head per
+            hour as 3600 / meanActualSeconds, ADR-0033).
             A supplied plannedRate always wins outright over any measured
             rate.
           example: 30
@@ -956,10 +1000,12 @@ components:
           type: number
           format: double
           description: >-
-            The rate actually used to compute proposedHeads -- either the
-            caller-supplied plannedRate, or a measured rate fed back from
-            labor-performance. 0 when neither was available (proposedHeads
-            is then also 0).
+            The rate actually used to compute proposedHeads, in units per
+            head per hour -- either the caller-supplied plannedRate, or a
+            measured rate fed back from labor-performance (its mean
+            seconds per task converted to a per-head hourly rate:
+            3600 / meanActualSeconds). 0 when neither was available
+            (proposedHeads is then also 0).
           example: 30
         rateSource:
           type: string
@@ -1111,15 +1157,29 @@ components:
         understaffed:
           type: boolean
           example: true
-        observedIdlePct:
+        observedIdleShare:
           type: number
           format: double
+          minimum: 0
+          maximum: 1
           description: >-
-            The observed idle share (a fraction in [0, 1], NOT a 0-100
-            percentage) for this path's task type, fed back from
+            The observed idle share -- a fraction in [0, 1], NOT a 0-100
+            percentage -- for this path's task type, fed back from
             labor-performance's idleness signal via
             LABOR_PERFORMANCE_MODE=kafka-cache. Omitted entirely -- never
             a fabricated 0 -- when no idle-share signal is available: the
             mode isn't kafka-cache, or no observation has been recorded
             yet for this task type.
+          example: 0.42
+        observedIdlePct:
+          type: number
+          format: double
+          deprecated: true
+          description: >-
+            DEPRECATED -- use observedIdleShare. The original, misleadingly
+            named field: despite the "Pct" suffix it carries the SAME
+            fraction in [0, 1] as observedIdleShare (not a 0-100
+            percentage), and is kept with its unchanged value so existing
+            consumers do not break. Present exactly when observedIdleShare
+            is.
           example: 0.42

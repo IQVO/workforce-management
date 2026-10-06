@@ -42,10 +42,10 @@ so the generated REST pages do not show it. Cross-checked route by route:
 | `GET` | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | `listStaffingGapsForShift` | `GetStaffingGap.ExecuteAll` | `200` (array) |
 | `POST` | `/associates/{id}/end-shift` | `endAssociateShift` | `EndAssociateShift` | `204` |
 | `GET` | `/healthz` | `healthz` | — | `200` |
-| `GET` | `/readyz` | — (not in the spec) | — | `200` ready / `503` not ready |
+| `GET` | `/readyz` | `readyz` | — | `200` ready / `503` not ready |
 
 Grouped by OpenAPI tag: **Associates** (5), **Shift Plans** (2),
-**Assignments** (1), **Staffing** (2), **System** (1).
+**Assignments** (1), **Staffing** (2), **System** (2).
 
 The two creation POSTs are wrapped in the transactional `Idempotency-Key`
 middleware ([ADR 0027](../adr/0027-idempotency-key-middleware.md)) whenever
