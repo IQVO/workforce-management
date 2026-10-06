@@ -305,6 +305,13 @@ components:
         bounded context surfaces the gap and never moves anyone in response.
         Rebalancing is a human call, recorded back here as a new assignment.
 
+        **Site scope (ADR 0034, additive).** When the gap was requested for
+        one canonical site, `data.site_code` carries it and `active_heads`
+        counts only associates with an active shift at that site. When
+        `site_code` is absent the gap is **unscoped** (every site together,
+        the pre-ADR-0034 behaviour): consumers MUST treat absence as
+        "unscoped", never as a particular site.
+
         **Not on the integration topic.** Published only to the internal
         analytics topic `warehouse.workforce.analytics` (dataschema
         `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
@@ -330,6 +337,22 @@ components:
               path_id: "pack"
               planned_heads: 5
               active_heads: 3
+        - name: packUnderstaffedAtSite
+          summary: The same gap computed for site WH1 only (additive site_code).
+          payload:
+            specversion: "1.0"
+            id: "c92f6a3d-8ba5-4e1f-8d44-2f8a5c7b9e16"
+            source: "/warehouse/workforce-management"
+            type: "com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed"
+            subject: "pack"
+            time: "2026-08-22T02:15:00Z"
+            datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1"
+            data:
+              path_id: "pack"
+              planned_heads: 5
+              active_heads: 2
+              site_code: "WH1"
 
     AssociateShiftStarted:
       name: AssociateShiftStarted
@@ -810,6 +833,18 @@ components:
                   type: integer
                   minimum: 0
                   description: Count of currently ACTIVE LaborAssignments on this path.
+                site_code:
+                  type: string
+                  description: >-
+                    ADDITIVE and optional (ADR 0034; the payload stays v1). The
+                    canonical Site code (the facility-layout Site code, the
+                    same identifier warehouse-planning carries as `site_id`)
+                    the gap was computed for: `active_heads` then counts only
+                    associates with an active shift at that site. Omitted when
+                    the gap was computed fleet-wide, so consumers MUST treat
+                    absence as "unscoped" (every site together), never as a
+                    particular site.
+                  example: "WH1"
 
     AssociateShiftStartedEvent:
       title: AssociateShiftStarted CloudEvent

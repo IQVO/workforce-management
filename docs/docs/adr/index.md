@@ -113,3 +113,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0031](./0031-kafka-writer-durability.md) | Kafka writer durability: RequireAll acks and a 10ms batch timeout | Accepted |
 | [0032](./0032-bootretry-first-outbound-dial.md) | Boot-time retry for the first outbound dial (Istio sidecar warm-up) | Accepted |
 | [0033](./0033-docs-audit-corrections-2026-10.md) | Corrections from the 2026-10-05 docs audit (idempotent-request atomicity, measured-rate unit, idle-share naming, /readyz) | Accepted |
+| [0034](./0034-site-scoped-staffing-gap.md) | Site-scoped staffing gap (optional canonical siteCode) | Accepted |

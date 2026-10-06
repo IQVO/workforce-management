@@ -122,7 +122,9 @@ paths:
         associate id is client-supplied and this endpoint is naturally
         idempotent by that id: calling it twice for the same associate
         upserts the roster entry rather than erroring (each call still
-        re-raises AssociateShiftStarted and returns 201).
+        re-raises AssociateShiftStarted and returns 201). The optional
+        siteCode records the canonical site the associate works at (ADR
+        0034) so the staffing gap can be scoped to a site.
       tags: [Associates]
       parameters:
         - $ref: "#/components/parameters/AssociateId"
@@ -134,6 +136,7 @@ paths:
               $ref: "#/components/schemas/StartShiftRequest"
             example:
               certifications: ["pack"]
+              siteCode: WH1
       responses:
         "201":
           description: >-
@@ -587,7 +590,9 @@ paths:
         POST /associates/{id}/assignments. ShiftPlan is keyed by
         building+shift, so both are required as query parameters alongside
         the path in the URL — a path's planned heads only make sense within
-        one committed plan.
+        one committed plan. The optional siteCode query parameter scopes
+        activeHeads to one canonical site (ADR 0034); without it the count
+        is fleet-wide across every site, exactly as before.
       tags: [Staffing]
       parameters:
         - $ref: "#/components/parameters/PathId"
@@ -605,6 +610,7 @@ paths:
           schema:
             type: string
           example: shift-1
+        - $ref: "#/components/parameters/SiteCodeQuery"
       responses:
         "200":
           description: Staffing gap for this path within the committed plan.
@@ -653,11 +659,14 @@ paths:
         a given path — and raises PathUnderstaffed for every understaffed
         path in the plan. This surfaces the gaps only — it never decides
         or performs a rebalance; that stays a human call recorded via
-        POST /associates/{id}/assignments.
+        POST /associates/{id}/assignments. The optional siteCode query
+        parameter scopes every path's activeHeads to one canonical site
+        (ADR 0034); without it the list is fleet-wide, as before.
       tags: [Staffing]
       parameters:
         - $ref: "#/components/parameters/BuildingId"
         - $ref: "#/components/parameters/ShiftId"
+        - $ref: "#/components/parameters/SiteCodeQuery"
       responses:
         "200":
           description: >-
@@ -780,6 +789,23 @@ components:
         type: string
         minLength: 1
       example: shift-1
+
+    SiteCodeQuery:
+      name: siteCode
+      in: query
+      required: false
+      description: >-
+        ADDITIVE and optional (ADR 0034). The canonical Site code (the
+        facility-layout Site code, e.g. WH1). When given, activeHeads counts
+        only assignments whose associate has an active (not-ended) shift at
+        that site; associates started without a site (including every row
+        that predates this parameter) never match a site. Absent or blank
+        keeps the original behaviour exactly: a fleet-wide count across every
+        site. The code is accepted as given, never validated against
+        facility-layout, so an unknown code simply counts 0.
+      schema:
+        type: string
+      example: WH1
 
     IdempotencyKey:
       name: Idempotency-Key
@@ -930,8 +956,21 @@ components:
             type: string
             minLength: 1
           example: ["pack", "hazmat"]
+        siteCode:
+          type: string
+          description: >-
+            ADDITIVE and optional (ADR 0034). The canonical Site code (the
+            facility-layout Site code, e.g. WH1 -- the same identifier
+            warehouse-planning carries as site_id) this associate works at
+            for the shift. Omitted or blank leaves the site unknown: such an
+            associate counts only in UNSCOPED staffing-gap queries. The code
+            is accepted as given -- this context never validates it against
+            facility-layout. A restart (second call for the same associate)
+            replaces the roster entry, site included.
+          example: WH1
       example:
         certifications: ["pack"]
+        siteCode: WH1
 
     StartShiftResponse:
       type: object
@@ -1183,3 +1222,12 @@ components:
             consumers do not break. Present exactly when observedIdleShare
             is.
           example: 0.42
+        siteCode:
+          type: string
+          description: >-
+            ADDITIVE (ADR 0034). Echoed only when the request was scoped
+            with the siteCode query parameter: the canonical site the
+            activeHeads were counted at. Omitted when unscoped, i.e. the
+            gap is fleet-wide across every site -- consumers must treat
+            absence as "unscoped", never as a particular site.
+          example: WH1
