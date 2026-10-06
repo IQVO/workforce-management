@@ -1,0 +1,59 @@
+---
+id: readyz
+title: "Readiness check"
+description: "Reports whether this instance should receive traffic. Returns 200 `{'status':'ready'}` while serving and 503 `{'status':'not_ready'}` once graceful shutdown has begun (ADR-0022): readiness is flipped first so a Kubernetes readinessProbe stops routing new requests during the drain window, while the liveness probe (`/healthz`) stays green. Like `/healthz` it does not probe downstream dependencies."
+sidebar_label: "Readiness check"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/workforce-management-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Readiness check"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/readyz"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Reports whether this instance should receive traffic. Returns 200 `{"status":"ready"}` while serving and 503 `{"status":"not_ready"}` once graceful shutdown has begun (ADR-0022): readiness is flipped first so a Kubernetes readinessProbe stops routing new requests during the drain window, while the liveness probe (`/healthz`) stays green. Like `/healthz` it does not probe downstream dependencies.
+
+<ParamsDetails>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./readyz.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./readyz.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      
