@@ -102,14 +102,19 @@ Estimate: one to a dozen `PathPlan` lines; one domain event per commit
 ### 2. Description
 
 One associate's roster entry for a shift: their certifications, break state,
-logged hours and whether the shift ended. It answers "can this associate be
-assigned right now?" (`CanBeAssigned`, `HasCertification`).
+logged hours, whether the shift ended and — optionally — the canonical **site**
+they work at (`siteCode`, the facility-layout Site code, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)).
+It answers "can this associate be assigned right now?" (`CanBeAssigned`,
+`HasCertification`) and, through its site, "whose staff counts toward this
+site's staffing gap?". The site is recorded as given at start (no lookup in
+facility-layout), is `NULL`/empty for legacy rows, and never changes during the
+shift.
 
 ### 3. State Transitions
 
 ```mermaid
 stateDiagram-v2
-    [*] --> OnShift: NewAssociateShift / AssociateShiftStarted
+    [*] --> OnShift: NewAssociateShift or NewAssociateShiftAtSite / AssociateShiftStarted
     OnShift --> OnBreak: StartBreak / AssociateBreakStarted
     OnBreak --> OnShift: EndBreak / AssociateBreakEnded
     OnShift --> OnShift: Certify / AssociateCertified
@@ -143,8 +148,8 @@ invariants below) and the infrastructure-only `SetVersion`.
 - `EndAssociateShift` closes the associate's active `LaborAssignment` and
   logs its hours before ending the shift — the one cross-aggregate policy,
   run inside one unit of work.
-- Restarting (`StartAssociateShift` on an existing id) replaces the entry and
-  carries over the stored `version`.
+- Restarting (`StartAssociateShift` on an existing id) replaces the entry —
+  site included — and carries over the stored `version`.
 
 ### 6. Handled Commands
 
@@ -219,8 +224,10 @@ whether `active` is nil. Omits: `Rehydrate`; the closed interval moved into
 ### 6. Handled Commands
 
 `AssignLabor` (`POST /associates/{id}/assignments`, MCP `assign_labor`);
-`EndActive` from `EndAssociateShift`. `CountActiveByPath` on its repository
-backs `GetStaffingGap`.
+`EndActive` from `EndAssociateShift`. `CountActiveByPath` (fleet-wide) and
+`CountActiveByPathAtSite` (joins the associate's site, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md))
+on its repository back `GetStaffingGap`. `LaborAssignment` itself carries no
+site: the associate's shift is the single place the site lives.
 
 ### 7. Created Events
 
@@ -246,7 +253,7 @@ These hold state or raise events but have no aggregate identity:
 | Thing | What it is | Where |
 | --- | --- | --- |
 | `ProposedHeads` / `ProposePathPlan` | pure computation that raises `ShiftPlanProposed` | `internal/domain/shiftplan`, `internal/application/usecases/propose_path_plan.go` |
-| `StaffingGap` / `GetStaffingGap` | read model derived from a `ShiftPlan` and `CountActiveByPath`; raises `PathUnderstaffed` | `internal/application/usecases/get_staffing_gap.go` |
+| `StaffingGap` / `GetStaffingGap` | read model derived from a `ShiftPlan` and `CountActiveByPath` (unscoped) or `CountActiveByPathAtSite` (optional `siteCode`, ADR 0034); raises `PathUnderstaffed` | `internal/application/usecases/get_staffing_gap.go` |
 | `pathcatalog.Catalogue` | in-memory lookup of the process-path catalogue (file or Kafka-fed) | `internal/domain/pathcatalog` |
 | `labor_rollup` and the `analytics_*` tables | analytics projection, written by `cmd/workforce-projector` | `migrations/analytics/0001_report.up.sql`, `internal/adapters/outbound/analyticsstore` |
 | `laborperformancecache.Consumer` | per-TaskType running mean and idle share cache | `internal/adapters/outbound/laborperformancecache` |

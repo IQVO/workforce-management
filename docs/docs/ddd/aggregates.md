@@ -19,6 +19,7 @@ classDiagram
     -onBreak: bool
     -hoursLogged: float64
     -ended: bool
+    -siteCode: SiteCode
     +Certify(c, at) error
     +StartBreak(at) error
     +EndBreak(at) error
@@ -70,7 +71,8 @@ classDiagram
 **Package:** `internal/domain/associate` · **Identity:** `AssociateId`
 
 The roster entry: who is on this shift, what they are qualified for, whether
-they are on a logged break, and how many hours they have accumulated.
+they are on a logged break, how many hours they have accumulated, and — optionally —
+which canonical site they work at (`siteCode`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)).
 
 **Consistency boundary.** One associate, one shift. Every rule about a single
 person's availability — break state, shift-ended state, the hours cap — is
@@ -151,6 +153,7 @@ invariant; this one was chosen and is documented in
 | `AssociateId` | non-empty; `ErrEmptyAssociateId` otherwise |
 | `PathId` | non-empty; `ErrEmptyPathId` otherwise |
 | `Certification` | non-empty; `ErrEmptyCertification` otherwise |
+| `SiteCode` | optional (empty = unscoped / site unknown); trimmed, otherwise accepted as given — no format check, no lookup in facility-layout ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) |
 | `DomainEvent` | interface: `EventName() string`, `OccurredAt() time.Time` |
 
 Constructors validate, so an invalid identifier cannot exist as a value. The
@@ -162,7 +165,8 @@ type.
 There is no `activeHeads` field on `ShiftPlan`, and no `utilization` field on
 `AssociateShift`. Both read models —
 
-- heads-planned-versus-active per path (`GetStaffingGap`),
+- heads-planned-versus-active per path (`GetStaffingGap`, fleet-wide or scoped to
+  a canonical site, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)),
 - per-associate utilization,
 
 — are computed from the aggregates and events at read time. Storing them on the

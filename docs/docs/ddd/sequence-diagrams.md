@@ -178,9 +178,9 @@ sequenceDiagram
     participant AR as AssociateRepo
     participant UoW as UnitOfWork
     participant OB as OutboxPublisher
-    Client->>H: POST /associates/id/start-shift, certifications
-    H->>UC: Execute associateId, certifications
-    UC->>AS: NewAssociateShift, raises AssociateShiftStarted
+    Client->>H: POST /associates/id/start-shift, certifications, optional siteCode
+    H->>UC: ExecuteAtSite associateId, certifications, siteCode
+    UC->>AS: NewAssociateShiftAtSite, raises AssociateShiftStarted
     UC->>AR: FindByID
     alt existing roster entry
         UC->>AS: SetVersion existing version
@@ -200,7 +200,10 @@ Source: `internal/application/usecases/start_associate_shift.go`,
 `internal/adapters/outbound/postgres/associate_repo.go`, `unit_of_work.go`.
 Omits: request validation (`ErrEmptyAssociateId`, `ErrEmptyCertification` →
 400). Not behind the idempotency middleware: restarting is an upsert by
-associate id.
+associate id. The optional `siteCode` ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md))
+is trimmed, accepted as given (no lookup in facility-layout) and persisted as
+`associate_shift.site_code` (`NULL` when absent); a restart replaces it.
+`Execute` (no site) is the same call with an empty site.
 
 ## CertifyAssociate, StartBreak, EndBreak
 
@@ -329,18 +332,22 @@ sequenceDiagram
     participant LR as AssignmentRepo
     participant IS as IdleShareClient
     participant OB as EventPublisher
-    Client->>In: buildingId, shiftId, pathId or all paths
-    In->>UC: Execute or ExecuteAll
+    Client->>In: buildingId, shiftId, pathId or all paths, optional siteCode
+    In->>UC: Execute or ExecuteAll, or ExecuteForSite or ExecuteAllForSite with siteCode
     UC->>SR: FindByBuildingAndShift
     alt no committed plan
         SR-->>UC: ErrNotFound, mapped to 404
     end
     loop each requested path
         UC->>SR: PlannedHeadsFor pathId
-        UC->>LR: CountActiveByPath pathId
+        alt no siteCode, unscoped
+            UC->>LR: CountActiveByPath pathId
+        else siteCode given
+            UC->>LR: CountActiveByPathAtSite pathId, siteCode
+        end
         UC->>IS: IdleSharePct, optional, nil on failure
         opt activeHeads below plannedHeads
-            UC->>UC: build PathUnderstaffed
+            UC->>UC: build PathUnderstaffed, with siteCode when scoped
         end
     end
     opt any path understaffed
@@ -354,5 +361,10 @@ Source: `internal/application/usecases/get_staffing_gap.go`,
 `internal/adapters/inbound/http/router.go` (`staffingGap`,
 `staffingGapForShift`), `internal/adapters/inbound/mcp/tools.go`,
 `resources.go`. Omits: query-parameter validation (missing `buildingId` /
-`shiftId` → 400). `CountActiveByPath` counts every active assignment on the
-path across buildings — the repository is not building-scoped.
+`shiftId` → 400). **Resolved (Decided 2026-10-06, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)):**
+`CountActiveByPath` still counts every active assignment on the path across
+sites and buildings — that is the **unscoped** answer, unchanged for callers
+that send no `siteCode`. With a `siteCode`, `CountActiveByPathAtSite` counts
+only assignments whose associate has a not-ended shift at that site
+(`labor_assignment` ⨝ `associate_shift`); legacy `NULL`-site rows never match a
+site. The MCP resource `staffing://…/gap` stays unscoped.

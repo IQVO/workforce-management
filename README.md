@@ -243,9 +243,10 @@ helm upgrade --install workforce-management charts/workforce-management \
 All bodies are JSON. `{id}` and `{pathId}` are path parameters.
 
 ```bash
-# Start an associate's shift with initial certifications
+# Start an associate's shift with initial certifications. siteCode is OPTIONAL
+# (ADR-0034): the canonical facility-layout Site code the associate works at.
 curl -X POST localhost:8080/associates/assoc-1/start-shift \
-  -d '{"certifications":["pack"]}'
+  -d '{"certifications":["pack"],"siteCode":"WH1"}'
 
 # Add a certification
 curl -X POST localhost:8080/associates/assoc-1/certifications \
@@ -300,6 +301,12 @@ curl -X POST localhost:8080/associates/assoc-1/break/end
 #    alias, same value) when LABOR_PERFORMANCE_MODE=kafka-cache has a signal
 #    for the path (ADR-0020, ADR-0033). Unknown path ids are 400 unknown-path-id.
 curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
+
+# Same, counting only associates with an active shift at one site (ADR-0034;
+# optional siteCode, also on the list below and on the MCP get_staffing_gap
+# tool). The response then echoes "siteCode"; without it the count is
+# fleet-wide, exactly as before.
+curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1&siteCode=WH1"
 
 # Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)
 # -> a JSON array of the same per-path objects

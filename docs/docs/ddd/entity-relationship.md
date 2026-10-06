@@ -15,7 +15,7 @@ a real `FOREIGN KEY` exists.
 ## OLTP database (`DATABASE_URL`)
 
 Migrations `000001_init` → `000002_outbox` → `000003_version` →
-`000004_idempotency_keys`, applied by `cmd/workforce` (and `cmd/mcp`) on boot
+`000004_idempotency_keys` → `000005_associate_shift_site_code`, applied by `cmd/workforce` (and `cmd/mcp`) on boot
 through `MIGRATIONS_DATABASE_URL` ([ADR 0025](../adr/0025-migrations-direct-postgres-connection.md)).
 
 ```mermaid
@@ -39,6 +39,7 @@ erDiagram
         DOUBLE_PRECISION hours_logged
         BOOLEAN ended
         INTEGER version
+        TEXT site_code "nullable, ADR 0034"
     }
     labor_assignment {
         TEXT associate_id PK
@@ -87,8 +88,10 @@ erDiagram
 ```
 
 Source: `migrations/000001_init.up.sql`, `000002_outbox.up.sql`,
-`000003_version.up.sql`, `000004_idempotency_keys.up.sql`. Omits: the
+`000003_version.up.sql`, `000004_idempotency_keys.up.sql`,
+`000005_associate_shift_site_code.up.sql`. Omits: the
 indexes (`idx_labor_assignment_active_path`,
+`idx_associate_shift_site_code` (partial, non-NULL `site_code` only),
 `idx_outbox_events_unpublished`, `idx_outbox_events_published_at`,
 `idx_idempotency_keys_created_at`), column defaults, and golang-migrate's own
 `schema_migrations` table. Types with spaces or brackets are written with
@@ -99,7 +102,13 @@ indexes (`idx_labor_assignment_active_path`,
 - `labor_assignment.associate_id` and `associate_shift.associate_id` hold the
   same `AssociateId` but are **not** linked: they are two aggregates, and
   `AssignLabor` / `EndAssociateShift` coordinate them in the application
-  layer, not through the schema.
+  layer, not through the schema. The **site-scoped staffing gap** (ADR 0034)
+  joins them by value at query time — `labor_assignment` ⨝ `associate_shift`
+  on `associate_id`, `site_code = :siteCode AND ended = FALSE` — a read-side
+  join, still not a constraint. `site_code` is `NULL` for every legacy row and
+  for shifts started without a site; `NULL` matches no site, so those rows
+  count only in unscoped queries. The code is accepted as given (no lookup in
+  facility-layout).
 - `path_plan.path_id`, `labor_assignment.active_path_id` and
   `labor_assignment_history.path_id` are process-path ids validated against
   the process-path catalogue at the adapter edge; the catalogue is not a
@@ -150,9 +159,9 @@ There are no foreign keys in this schema at all.
 | Table | Kind | Aggregate / role |
 | --- | --- | --- |
 | `shift_plan` + `path_plan` | aggregate state | `ShiftPlan` with its `PathPlan` lines; `Save` deletes and re-inserts the lines |
-| `associate_shift` | aggregate state | `AssociateShift` (certifications as a `TEXT[]`, not a child table) |
+| `associate_shift` | aggregate state | `AssociateShift` (certifications as a `TEXT[]`, not a child table; optional canonical `site_code`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) |
 | `labor_assignment` + `labor_assignment_history` | aggregate state | `LaborAssignment`: active interval in the parent row, closed `Interval`s in the child |
-| `domain_event` | **unused** | created by `000001_init` but no production code reads or writes it; only the integration test's truncate list names it |
+| `domain_event` | legacy, unused; retained | Decided 2026-10-06: **keep** — created by `000001_init`, no production code reads or writes it; retained because migrations are additive only (dropping a table is destructive and needs explicit approval) |
 | `outbox_events` | infrastructure | transactional outbox, one row per encoded Kafka message on either topic ([ADR 0016](../adr/0016-transactional-outbox.md)) |
 | `idempotency_keys` | infrastructure | `Idempotency-Key` middleware store ([ADR 0027](../adr/0027-idempotency-key-middleware.md)), swept by housekeeping ([ADR 0028](../adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox.md)) |
 | `schema_migrations` | infrastructure | golang-migrate bookkeeping |

@@ -25,7 +25,7 @@ names are fixed vocabulary — they appear verbatim in the Go code, in
 | `AssociateBreakEnded` | `AssociateShift` | A logged break ended | `associateId` |
 | `LaborAssigned` | `LaborAssignment` | An associate was placed on a path (first assignment) | `associateId`, `pathId` |
 | `LaborReassigned` | `LaborAssignment` | An active assignment was closed in favour of another path | `associateId`, `fromPathId`, `toPathId` |
-| `PathUnderstaffed` | `GetStaffingGap` use case | Active assignments fell short of committed heads | `pathId`, `plannedHeads`, `activeHeads` |
+| `PathUnderstaffed` | `GetStaffingGap` use case | Active assignments fell short of committed heads | `pathId`, `plannedHeads`, `activeHeads`, optional `siteCode` ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) |
 | `AssociateShiftEnded` | `AssociateShift` | A shift closed, ending all active assignments | `associateId` |
 
 ## Wire catalog
@@ -43,7 +43,7 @@ fields from `internal/adapters/outbound/kafka/publisher.go` (integration) and
 | `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.events` (one message per `PathPlan` line) | `<buildingId>/<shiftId>` / same | `building_id`, `shift_id`, `path_id`, `planned_heads`, `planned_rate`, `planned_hours` | `CommitShiftPlan` | `wes-work-planning` (`LaborPlanObserved`), `warehouse-planning` (group `warehouse-planning-labor-capacity`) |
 | `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.analytics` (one per commit) | `<buildingId>` / `<buildingId>/<shiftId>` | `building_id`, `shift_id` | `CommitShiftPlan` | acknowledged, not projected, by `cmd/workforce-projector` |
 | `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed` | `warehouse.workforce.analytics` | `<pathId>` / same | `building_id`, `path_id`, `planned_heads`, `planned_rate` | `ProposePathPlan` | acknowledged, not projected |
-| `com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed` | `warehouse.workforce.analytics` | `<pathId>` / same | `path_id`, `planned_heads`, `active_heads` | `GetStaffingGap` | `cmd/workforce-projector` → `labor_rollup.understaffing_events` |
+| `com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed` | `warehouse.workforce.analytics` | `<pathId>` / same | `path_id`, `planned_heads`, `active_heads`, optional `site_code` (additive, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md): the canonical site the gap was computed for; **absent = unscoped/fleet-wide**, consumers must not read absence as a site; payload stays `v1`) | `GetStaffingGap` | `cmd/workforce-projector` → `labor_rollup.understaffing_events` |
 | `com.warehouse.wes.workforce-management.associate.AssociateShiftStarted` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `StartAssociateShift` | projector → `shifts_started` |
 | `com.warehouse.wes.workforce-management.associate.AssociateCertified` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id`, `certification` | `CertifyAssociate` | projector → `certifications` |
 | `com.warehouse.wes.workforce-management.associate.AssociateBreakStarted` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `StartBreak` | projector → `breaks`, `analytics_pending_breaks` |
@@ -149,7 +149,9 @@ read-model endpoint, not an event stream of individual moves.
 
 `PathUnderstaffed` likewise stays off the integration topic. It is a **flag, not a
 decision**, and the platform's rebalancing authority is human, so it currently
-surfaces through `GetStaffingGap`'s response rather than a topic.
+surfaces through `GetStaffingGap`'s response rather than a topic. (It is
+published on the analytics topic only; since [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)
+its payload carries an optional `site_code` when the gap was site-scoped.)
 
 ## Where each event is constructed
 
@@ -174,6 +176,6 @@ against. The construction site in code is the use case.
 
 Aggregates record events and hand them to the application layer via
 `PullEvents()`, which publishes them through the `EventPublisher` port. State is
-persisted as state (`Rehydrate` reconstructs from rows without raising events),
+persisted as state (`Rehydrate` / `RehydrateAtSite` reconstruct from rows without raising events),
 not replayed from a log. Events are the **integration and notification**
 mechanism, not the storage mechanism.
