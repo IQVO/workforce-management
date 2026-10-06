@@ -143,3 +143,21 @@ func (r *AssignmentRepo) CountActiveByPath(ctx context.Context, pathId shared.Pa
 	`, string(pathId)).Scan(&count)
 	return count, err
 }
+
+// CountActiveByPathAtSite counts how many associates with an active
+// assignment to pathId have a not-ended shift recorded at siteCode (ADR
+// 0034). Legacy associate_shift rows (NULL site_code) never match; an empty
+// siteCode matches nothing, so the query never degrades into a fleet-wide
+// count by accident.
+func (r *AssignmentRepo) CountActiveByPathAtSite(ctx context.Context, pathId shared.PathId, siteCode shared.SiteCode) (int, error) {
+	var count int
+	err := querierFrom(ctx, r.pool).QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM labor_assignment la
+		JOIN associate_shift a ON a.associate_id = la.associate_id
+		WHERE la.active_path_id = $1
+		  AND a.site_code = $2
+		  AND a.ended = FALSE
+	`, string(pathId), string(siteCode)).Scan(&count)
+	return count, err
+}

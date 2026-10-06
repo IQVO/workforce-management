@@ -13,11 +13,23 @@ import (
 type AssignmentRepo struct {
 	mu   sync.RWMutex
 	byID map[shared.AssociateId]*assignment.LaborAssignment
+	// associates, when linked via WithAssociates, lets the site-scoped
+	// count resolve each associate's site and shift state (the Postgres
+	// adapter does the same with a JOIN on associate_shift). Unlinked, no
+	// associate has a known site, so the scoped count is always 0.
+	associates *AssociateRepo
 }
 
 // NewAssignmentRepo constructs an empty AssignmentRepo.
 func NewAssignmentRepo() *AssignmentRepo {
 	return &AssignmentRepo{byID: make(map[shared.AssociateId]*assignment.LaborAssignment)}
+}
+
+// WithAssociates links the associate roster used to answer
+// CountActiveByPathAtSite and returns r for chaining.
+func (r *AssignmentRepo) WithAssociates(a *AssociateRepo) *AssignmentRepo {
+	r.associates = a
+	return r
 }
 
 // Save stores a snapshot of la.
@@ -47,6 +59,31 @@ func (r *AssignmentRepo) CountActiveByPath(ctx context.Context, pathId shared.Pa
 	count := 0
 	for _, la := range r.byID {
 		if active, ok := la.ActivePathId(); ok && active == pathId {
+			count++
+		}
+	}
+	return count, nil
+}
+
+// CountActiveByPathAtSite counts associates with an active assignment to
+// pathId whose not-ended shift is recorded at siteCode. Associates with no
+// site never match (ADR 0034); an empty siteCode matches nothing.
+func (r *AssignmentRepo) CountActiveByPathAtSite(ctx context.Context, pathId shared.PathId, siteCode shared.SiteCode) (int, error) {
+	if r.associates == nil || siteCode.IsUnscoped() {
+		return 0, nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	count := 0
+	for id, la := range r.byID {
+		if active, ok := la.ActivePathId(); !ok || active != pathId {
+			continue
+		}
+		a, err := r.associates.FindByID(ctx, id)
+		if err != nil {
+			continue // no roster entry: no site, never counted at a site
+		}
+		if !a.Ended() && a.SiteCode() == siteCode {
 			count++
 		}
 	}

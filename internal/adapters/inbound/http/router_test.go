@@ -65,7 +65,7 @@ func (f *fakeInstalledCapacityClient) InstalledCapacity(_ context.Context, capab
 func newTestHandler() *Handler {
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
-	assignments := memory.NewAssignmentRepo()
+	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
 	pub := events.NewLogPublisher(nil)
 	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
 	const maxHoursPerShift = 8.0

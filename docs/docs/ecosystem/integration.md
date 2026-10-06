@@ -143,7 +143,11 @@ kafka-console-consumer.sh \
 ## What is deliberately not published
 
 `LaborAssigned`, `LaborReassigned` and `PathUnderstaffed` never go on the
-integration topic; they reach only this service's own analytics topic.
+integration topic; they reach only this service's own analytics topic. Since
+[ADR 0034](../adr/0034-site-scoped-staffing-gap.md) the analytics
+`PathUnderstaffed` carries an optional `site_code` (additive, still `v1`):
+present when the gap was computed for one canonical site, absent when it was
+computed fleet-wide — consumers must treat absence as "unscoped".
 
 Publishing individual assignment moves would let a downstream context
 reconstruct a per-associate location feed — exactly the picture the

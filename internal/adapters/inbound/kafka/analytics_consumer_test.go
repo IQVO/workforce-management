@@ -115,6 +115,9 @@ func TestAnalyticsConsumer_RoutesEachEventType(t *testing.T) {
 		{"laborAssigned", cloudevents.EntityAssignment, "LaborAssigned", map[string]any{"associate_id": "a1", "path_id": "pack"}, "laborAssigned", "pack"},
 		{"laborReassigned", cloudevents.EntityAssignment, "LaborReassigned", map[string]any{"associate_id": "a1", "from_path_id": "pick", "to_path_id": "pack"}, "laborReassigned", "pack"},
 		{"pathUnderstaffed", cloudevents.EntityShiftPlan, "PathUnderstaffed", map[string]any{"path_id": "pack", "planned_heads": 5, "active_heads": 3}, "pathUnderstaffed", "pack"},
+		// ADR 0034: the additive site_code must not break the v1 projector
+		// (unknown fields are ignored; the understaffing counter is per path).
+		{"pathUnderstaffed scoped to a site", cloudevents.EntityShiftPlan, "PathUnderstaffed", map[string]any{"path_id": "pack", "planned_heads": 5, "active_heads": 3, "site_code": "WH1"}, "pathUnderstaffed", "pack"},
 	}
 
 	for _, tt := range tests {

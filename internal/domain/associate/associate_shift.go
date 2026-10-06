@@ -37,6 +37,13 @@ type AssociateShift struct {
 	hoursLogged    float64
 	ended          bool
 
+	// siteCode is the canonical Site the associate works at for this shift
+	// (ADR 0034). Empty = unknown (legacy rows, callers that sent none); such
+	// associates count only in unscoped staffing-gap queries. Recorded as
+	// given at StartAssociateShift and never validated against
+	// facility-layout.
+	siteCode shared.SiteCode
+
 	// version is inert optimistic-concurrency infrastructure metadata
 	// (see ADR 0021) -- the domain layer carries it but never reasons
 	// about it in business logic, exactly like associateId's identity
@@ -50,6 +57,13 @@ type AssociateShift struct {
 // NewAssociateShift starts a shift for an associate with an initial set of
 // certifications, raising AssociateShiftStarted.
 func NewAssociateShift(associateId shared.AssociateId, certifications []shared.Certification, at time.Time) *AssociateShift {
+	return NewAssociateShiftAtSite(associateId, certifications, "", at)
+}
+
+// NewAssociateShiftAtSite starts a shift for an associate working at the
+// given canonical site (an empty siteCode leaves the site unknown, exactly
+// like NewAssociateShift), raising AssociateShiftStarted.
+func NewAssociateShiftAtSite(associateId shared.AssociateId, certifications []shared.Certification, siteCode shared.SiteCode, at time.Time) *AssociateShift {
 	certs := make(map[shared.Certification]struct{}, len(certifications))
 	for _, c := range certifications {
 		certs[c] = struct{}{}
@@ -57,6 +71,7 @@ func NewAssociateShift(associateId shared.AssociateId, certifications []shared.C
 	a := &AssociateShift{
 		associateId:    associateId,
 		certifications: certs,
+		siteCode:       siteCode,
 		version:        1,
 	}
 	a.record(shared.NewAssociateShiftStarted(at, associateId, certifications))
@@ -66,8 +81,16 @@ func NewAssociateShift(associateId shared.AssociateId, certifications []shared.C
 // Rehydrate reconstructs an AssociateShift from persisted state without
 // raising events. Adapters use this to load an aggregate from storage.
 // version is the value the aggregate was loaded at (see ADR 0021,
-// optimistic concurrency) -- adapters pass through whatever they read.
+// optimistic concurrency) -- adapters pass through whatever they read. The
+// restored aggregate has no site (legacy shape); use RehydrateAtSite to
+// restore a persisted site.
 func Rehydrate(associateId shared.AssociateId, certifications []shared.Certification, onBreak bool, hoursLogged float64, ended bool, version int) *AssociateShift {
+	return RehydrateAtSite(associateId, certifications, onBreak, hoursLogged, ended, version, "")
+}
+
+// RehydrateAtSite is Rehydrate plus the persisted site (ADR 0034); siteCode
+// is "" for a legacy row with no site.
+func RehydrateAtSite(associateId shared.AssociateId, certifications []shared.Certification, onBreak bool, hoursLogged float64, ended bool, version int, siteCode shared.SiteCode) *AssociateShift {
 	certs := make(map[shared.Certification]struct{}, len(certifications))
 	for _, c := range certifications {
 		certs[c] = struct{}{}
@@ -78,9 +101,14 @@ func Rehydrate(associateId shared.AssociateId, certifications []shared.Certifica
 		onBreak:        onBreak,
 		hoursLogged:    hoursLogged,
 		ended:          ended,
+		siteCode:       siteCode,
 		version:        version,
 	}
 }
+
+// SiteCode returns the canonical site this associate works at, or the empty
+// SiteCode when it is unknown (legacy row / none supplied).
+func (a *AssociateShift) SiteCode() shared.SiteCode { return a.siteCode }
 
 // Certifications returns the associate's current certifications.
 func (a *AssociateShift) Certifications() []shared.Certification {

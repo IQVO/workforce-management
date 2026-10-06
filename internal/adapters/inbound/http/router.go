@@ -182,7 +182,7 @@ func (h *Handler) startShift(w http.ResponseWriter, r *http.Request) {
 		certs[i] = cert
 	}
 
-	shift, err := h.StartAssociateShift.Execute(r.Context(), associateId, certs)
+	shift, err := h.StartAssociateShift.ExecuteAtSite(r.Context(), associateId, certs, shared.NewSiteCode(req.SiteCode))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
@@ -383,9 +383,11 @@ func (h *Handler) endBreak(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// staffingGap answers GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=.
+// staffingGap answers GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=[&siteCode=].
 // ShiftPlan is keyed by building+shift, so this context requires those as
-// query parameters alongside the path in the URL.
+// query parameters alongside the path in the URL. The optional siteCode
+// (ADR 0034) scopes ActiveHeads to associates at that canonical site; absent
+// or blank keeps the fleet-wide count.
 func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 	pathId, err := shared.NewPathId(chi.URLParam(r, "pathId"))
 	if err != nil {
@@ -407,7 +409,7 @@ func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gap, err := h.GetStaffingGap.Execute(r.Context(), buildingId, shiftId, pathId)
+	gap, err := h.GetStaffingGap.ExecuteForSite(r.Context(), buildingId, shiftId, pathId, shared.NewSiteCode(r.URL.Query().Get("siteCode")))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
@@ -432,7 +434,7 @@ func (h *Handler) staffingGapForShift(w http.ResponseWriter, r *http.Request) {
 	buildingId := chi.URLParam(r, "buildingId")
 	shiftId := chi.URLParam(r, "shiftId")
 
-	gaps, err := h.GetStaffingGap.ExecuteAll(r.Context(), buildingId, shiftId)
+	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), buildingId, shiftId, shared.NewSiteCode(r.URL.Query().Get("siteCode")))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return

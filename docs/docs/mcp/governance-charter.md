@@ -196,6 +196,9 @@ Jaeger and Grafana alongside HTTP.
   / not understaffed. An unknown **building or shift** is a clean
   `not found` tool error; an unknown **path** inside a committed plan is
   zeros, not an error. Pinned as the visible contract.
+- `get_staffing_gap` takes an **optional** `siteCode` ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md)):
+  absent = the fleet-wide count (unchanged); given = only associates with an
+  active shift at that site. The result echoes `siteCode` only when scoped.
 - Reading an understaffed path via `get_staffing_gap` **publishes
   `PathUnderstaffed`** — a read with a domain-event side effect (the
   analytics audit trail). Likewise `propose_path_heads` publishes

@@ -24,6 +24,8 @@ type staffingGap struct {
 	PlannedHeads int    `json:"plannedHeads"`
 	ActiveHeads  int    `json:"activeHeads"`
 	Understaffed bool   `json:"understaffed"`
+	// SiteCode is echoed only when the gap was scoped to one site (ADR 0034).
+	SiteCode string `json:"siteCode,omitempty"`
 }
 
 // toStaffingGap maps the application read model into the tool-boundary DTO,
@@ -36,6 +38,7 @@ func toStaffingGap(buildingId, shiftId string, gap usecases.StaffingGap) staffin
 		PlannedHeads: gap.PlannedHeads,
 		ActiveHeads:  gap.ActiveHeads,
 		Understaffed: gap.Understaffed,
+		SiteCode:     string(gap.SiteCode),
 	}
 }
 

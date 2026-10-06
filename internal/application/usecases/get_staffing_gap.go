@@ -16,12 +16,16 @@ import (
 // the active MeasuredRateClient implementation) or the cache has no idle
 // observation yet for this TaskType. NEVER coerced to 0; a nil here means
 // "no signal", not "zero idle".
+//
+// SiteCode is the site the ActiveHeads were counted at (ADR 0034): empty
+// means the gap is unscoped, i.e. fleet-wide across every site.
 type StaffingGap struct {
 	PathId          shared.PathId
 	PlannedHeads    int
 	ActiveHeads     int
 	Understaffed    bool
 	ObservedIdlePct *float64
+	SiteCode        shared.SiteCode
 }
 
 // GetStaffingGap computes the staffing gap for a path within a building's
@@ -31,6 +35,11 @@ type StaffingGap struct {
 // list, reusing the exact same per-path computation core so the two can
 // never drift (ADR-0011's deferred fast-follow: a list-by-building/shift
 // endpoint).
+//
+// Execute/ExecuteAll are UNSCOPED: they count active assignments across
+// every site, exactly as before ADR 0034. ExecuteForSite/ExecuteAllForSite
+// take an optional canonical siteCode and, when it is non-empty, count only
+// assignments whose associate has an active shift at that site.
 type GetStaffingGap struct {
 	ShiftPlans  ports.ShiftPlanRepo
 	Assignments ports.AssignmentRepo
@@ -50,14 +59,22 @@ type GetStaffingGap struct {
 	UnitOfWork ports.UnitOfWork
 }
 
-// Execute computes the gap for pathId within buildingId's shiftId plan.
+// Execute computes the unscoped (fleet-wide) gap for pathId within
+// buildingId's shiftId plan.
 func (uc *GetStaffingGap) Execute(ctx context.Context, buildingId, shiftId string, pathId shared.PathId) (StaffingGap, error) {
+	return uc.ExecuteForSite(ctx, buildingId, shiftId, pathId, "")
+}
+
+// ExecuteForSite computes the gap for pathId within buildingId's shiftId
+// plan, counting only associates at siteCode when it is non-empty. An empty
+// siteCode is the unscoped query, identical to Execute.
+func (uc *GetStaffingGap) ExecuteForSite(ctx context.Context, buildingId, shiftId string, pathId shared.PathId, siteCode shared.SiteCode) (StaffingGap, error) {
 	sp, err := uc.ShiftPlans.FindByBuildingAndShift(ctx, buildingId, shiftId)
 	if err != nil {
 		return StaffingGap{}, err
 	}
 
-	gap, event, err := uc.gapForLine(ctx, sp, pathId)
+	gap, event, err := uc.gapForLine(ctx, sp, pathId, siteCode)
 	if err != nil {
 		return StaffingGap{}, err
 	}
@@ -70,8 +87,8 @@ func (uc *GetStaffingGap) Execute(ctx context.Context, buildingId, shiftId strin
 	return gap, nil
 }
 
-// ExecuteAll computes the staffing gap for EVERY path planned within
-// buildingId's shiftId committed plan -- the fleet-wide list ADR-0011
+// ExecuteAll computes the unscoped staffing gap for EVERY path planned
+// within buildingId's shiftId committed plan -- the fleet-wide list ADR-0011
 // flagged as a deferred fast-follow ("a fleet-wide 'all paths, one
 // building/shift' list endpoint"). It fetches the ShiftPlan exactly once
 // and reuses gapForLine per line, so the per-path computation can never
@@ -79,6 +96,13 @@ func (uc *GetStaffingGap) Execute(ctx context.Context, buildingId, shiftId strin
 // raised across the whole plan is published together, in one atomic
 // scope, rather than one outbox write per line.
 func (uc *GetStaffingGap) ExecuteAll(ctx context.Context, buildingId, shiftId string) ([]StaffingGap, error) {
+	return uc.ExecuteAllForSite(ctx, buildingId, shiftId, "")
+}
+
+// ExecuteAllForSite is ExecuteAll with every line's active heads counted at
+// siteCode only when it is non-empty (ADR 0034); an empty siteCode is the
+// unscoped list, identical to ExecuteAll.
+func (uc *GetStaffingGap) ExecuteAllForSite(ctx context.Context, buildingId, shiftId string, siteCode shared.SiteCode) ([]StaffingGap, error) {
 	sp, err := uc.ShiftPlans.FindByBuildingAndShift(ctx, buildingId, shiftId)
 	if err != nil {
 		return nil, err
@@ -88,7 +112,7 @@ func (uc *GetStaffingGap) ExecuteAll(ctx context.Context, buildingId, shiftId st
 	gaps := make([]StaffingGap, 0, len(lines))
 	var events []shared.DomainEvent
 	for _, line := range lines {
-		gap, event, err := uc.gapForLine(ctx, sp, line.PathId)
+		gap, event, err := uc.gapForLine(ctx, sp, line.PathId, siteCode)
 		if err != nil {
 			return nil, err
 		}
@@ -107,14 +131,23 @@ func (uc *GetStaffingGap) ExecuteAll(ctx context.Context, buildingId, shiftId st
 }
 
 // gapForLine is the shared per-path core: plannedHeads (already known from
-// sp, no extra repo call), active assignments, and the idle-share
-// surfacing. It returns the PathUnderstaffed event to raise (nil when the
-// path is adequately staffed) rather than publishing it itself, so both
-// Execute and ExecuteAll can batch their own publish call.
-func (uc *GetStaffingGap) gapForLine(ctx context.Context, sp *shiftplan.ShiftPlan, pathId shared.PathId) (StaffingGap, shared.DomainEvent, error) {
+// sp, no extra repo call), active assignments (fleet-wide, or at siteCode
+// when non-empty), and the idle-share surfacing. It returns the
+// PathUnderstaffed event to raise (nil when the path is adequately staffed)
+// rather than publishing it itself, so both Execute and ExecuteAll can
+// batch their own publish call.
+func (uc *GetStaffingGap) gapForLine(ctx context.Context, sp *shiftplan.ShiftPlan, pathId shared.PathId, siteCode shared.SiteCode) (StaffingGap, shared.DomainEvent, error) {
 	plannedHeads := sp.PlannedHeadsFor(pathId)
 
-	activeHeads, err := uc.Assignments.CountActiveByPath(ctx, pathId)
+	var (
+		activeHeads int
+		err         error
+	)
+	if siteCode.IsUnscoped() {
+		activeHeads, err = uc.Assignments.CountActiveByPath(ctx, pathId)
+	} else {
+		activeHeads, err = uc.Assignments.CountActiveByPathAtSite(ctx, pathId, siteCode)
+	}
 	if err != nil {
 		return StaffingGap{}, nil, err
 	}
@@ -125,11 +158,12 @@ func (uc *GetStaffingGap) gapForLine(ctx context.Context, sp *shiftplan.ShiftPla
 		ActiveHeads:     activeHeads,
 		Understaffed:    activeHeads < plannedHeads,
 		ObservedIdlePct: uc.observedIdlePct(ctx, pathId),
+		SiteCode:        siteCode,
 	}
 
 	var event shared.DomainEvent
 	if gap.Understaffed {
-		event = shared.NewPathUnderstaffed(uc.Clock.Now(), pathId, plannedHeads, activeHeads)
+		event = shared.NewPathUnderstaffedAtSite(uc.Clock.Now(), pathId, plannedHeads, activeHeads, siteCode)
 	}
 	return gap, event, nil
 }

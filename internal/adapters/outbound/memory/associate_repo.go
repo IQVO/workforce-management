@@ -37,7 +37,7 @@ func (r *AssociateRepo) Save(ctx context.Context, a *associate.AssociateShift) e
 	if existing, ok := r.byID[a.AssociateId()]; ok {
 		version = existing.Version() + 1
 	}
-	r.byID[a.AssociateId()] = associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), version)
+	r.byID[a.AssociateId()] = associate.RehydrateAtSite(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), version, a.SiteCode())
 	return nil
 }
 
@@ -49,5 +49,5 @@ func (r *AssociateRepo) FindByID(ctx context.Context, id shared.AssociateId) (*a
 	if !ok {
 		return nil, ports.ErrNotFound
 	}
-	return associate.Rehydrate(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version()), nil
+	return associate.RehydrateAtSite(a.AssociateId(), a.Certifications(), a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version(), a.SiteCode()), nil
 }
