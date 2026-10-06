@@ -125,9 +125,11 @@ Step 7 returns the staffing-gap read model — planned versus active, and the
 ```
 
 With `LABOR_PERFORMANCE_MODE=kafka-cache` the response can also carry
-`observedIdlePct`: the path's recently observed idle share, taken from
+`observedIdleShare` (a fraction in [0, 1]; the deprecated `observedIdlePct`
+carries the same value): the path's recently observed idle share, taken from
 `labor-performance`. It is omitted when there is no signal
-([ADR 0020](../adr/0020-idle-share-staffing-signal.md)).
+([ADR 0020](../adr/0020-idle-share-staffing-signal.md),
+[ADR 0033](../adr/0033-docs-audit-corrections-2026-10.md)).
 
 That flag is the whole point of this context's intra-shift half: it says the
 gap exists. It does not move anybody. See

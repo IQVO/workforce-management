@@ -641,8 +641,8 @@ func TestStaffingGap_ObservedIdlePctOmittedWhenUnwired(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	if strings.Contains(rec.Body.String(), "observedIdlePct") {
-		t.Fatalf("expected observedIdlePct to be omitted entirely when unwired, got body: %s", rec.Body.String())
+	if strings.Contains(rec.Body.String(), "observedIdlePct") || strings.Contains(rec.Body.String(), "observedIdleShare") {
+		t.Fatalf("expected observedIdlePct and observedIdleShare to be omitted entirely when unwired, got body: %s", rec.Body.String())
 	}
 }
 
@@ -676,6 +676,52 @@ func TestStaffingGap_ObservedIdlePctSurfacedOverHTTP(t *testing.T) {
 	}
 	if *resp.ObservedIdlePct != 0.42 {
 		t.Fatalf("observedIdlePct = %v, want 0.42", *resp.ObservedIdlePct)
+	}
+}
+
+// TestStaffingGap_ObservedIdleShareIsTheCorrectlyNamedField: the idle value
+// is a fraction in [0,1], so the contract carries it under the correctly
+// named observedIdleShare. The historical observedIdlePct stays (deprecated,
+// same fraction value, so no consumer breaks) and the two must always agree.
+func TestStaffingGap_ObservedIdleShareIsTheCorrectlyNamedField(t *testing.T) {
+	handler := newTestHandler()
+	handler.GetStaffingGap.IdleShare = &fakeIdleShareClient{share: 0.42}
+	router := NewRouter(handler, testLogger, "")
+	req := commitShiftPlanRequest{
+		BuildingId: "bldg-1",
+		ShiftId:    "shift-1",
+		Lines: []pathPlanLineRequest{
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
+		},
+	}
+	doRequest(t, router, http.MethodPost, "/shift-plans", req)
+
+	for _, url := range []string{
+		"/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1",
+		"/buildings/bldg-1/shifts/shift-1/staffing-gap",
+	} {
+		rec := doRequest(t, router, http.MethodGet, url, nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s: expected 200, got %d: %s", url, rec.Code, rec.Body.String())
+		}
+		var raw any
+		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+			t.Fatalf("%s: unmarshal: %v", url, err)
+		}
+		obj, ok := raw.(map[string]any)
+		if !ok {
+			list, _ := raw.([]any)
+			if len(list) != 1 {
+				t.Fatalf("%s: unexpected body %s", url, rec.Body.String())
+			}
+			obj = list[0].(map[string]any)
+		}
+		if obj["observedIdleShare"] != 0.42 {
+			t.Fatalf("%s: observedIdleShare = %v, want 0.42 (body %s)", url, obj["observedIdleShare"], rec.Body.String())
+		}
+		if obj["observedIdlePct"] != obj["observedIdleShare"] {
+			t.Fatalf("%s: deprecated observedIdlePct = %v must equal observedIdleShare = %v", url, obj["observedIdlePct"], obj["observedIdleShare"])
+		}
 	}
 }
 

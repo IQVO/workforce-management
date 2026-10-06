@@ -31,7 +31,7 @@ this documentation. Synonyms are not accepted: there is no "worker," no
 | **Process-path catalogue** | The fleet's declared process paths, each with a `MatchPrefix` family and `RequiredCapabilities`. A path id belongs to a family when it equals the prefix or starts with prefix + `-` (case-insensitive, longest prefix wins). Loaded from a file or from `process-path-management`'s topic ([ADR 0013](../adr/0013-process-path-catalogue-validation.md), [ADR 0030](../adr/0030-kafka-sourced-process-path-catalogue.md)). |
 | **Interval** | One stretch of time an associate spent on one path; open while active, closed into the assignment's history on reassignment or shift end. Its hours are logged on the `AssociateShift`. |
 | **Staffing gap** | Planned heads versus active heads for a path within a committed `ShiftPlan`, plus the optional observed idle share. A read model, not stored. |
-| **Measured rate** | `labor-performance`'s measured mean task duration (`meanActualSeconds`), used by `ProposePathPlan` only when the caller gives no `plannedRate` ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)). |
+| **Measured rate** | `labor-performance`'s measured mean task duration (`meanActualSeconds`), converted to a per-head hourly rate (`3600 / seconds`) and used by `ProposePathPlan` only when the caller gives no `plannedRate` ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [ADR 0033](../adr/0033-docs-audit-corrections-2026-10.md)). |
 | **Idle share** | The fraction (0–1) of a task type's clocked time that was idle, from `labor-performance`'s events. Above `IDLE_SHARE_TRIM_THRESHOLD` (default 0.30) it trims a proposal ([ADR 0020](../adr/0020-idle-share-staffing-signal.md)). |
 | **Max hours per shift** | `MAX_HOURS_PER_SHIFT` (default 8): caps logged hours per associate and `plannedHours` per head. |
 | **Direct vs indirect hours** | Direct hours are spent on a production path; indirect hours are everything else (training, breaks, meetings). Both consume the shift's hour budget. |
@@ -98,8 +98,8 @@ one-to-one:
 
 | Term | Code | Note |
 | --- | --- | --- |
-| Measured rate | `MeanActualSeconds` | The code name says what it is: a **duration per task in seconds**, not a throughput per head per hour. `ProposePathPlan` divides the charge by it exactly as it divides by a caller's `plannedRate`, so the two are not the same unit; the glossary keeps the term but the number is seconds. |
-| Idle share | `IdleSharePct` | Despite the `Pct` suffix the value is a fraction in [0, 1], not 0–100. |
+| Measured rate | `MeanActualSeconds` | The code name says what it is: a **duration per task in seconds**, not a throughput per head per hour. `ProposePathPlan` converts it to a per-head hourly rate (`3600 / seconds`, one task = one unit of charge) before dividing the charge by it, so the `resolvedRate` it reports is in the same unit as a caller's `plannedRate` ([ADR 0033](../adr/0033-docs-audit-corrections-2026-10.md)). |
+| Idle share | `IdleSharePct` | Despite the `Pct` suffix the value is a fraction in [0, 1], not 0–100. The REST field is `observedIdleShare` (same fraction); `observedIdlePct` is its deprecated alias with the same value ([ADR 0033](../adr/0033-docs-audit-corrections-2026-10.md)). |
 | Installed stations / installed capacity | `ErrPlannedHeadsExceedInstalled` / `ErrExceedsInstalledCapacity` | Two similar error names for two different ceilings — the first is the caller's number, the second the live one. |
 | Direct vs indirect hours | none | There is no code identifier: `AssociateShift.hoursLogged` accumulates only closed assignment intervals (direct hours). Breaks are tracked as a state, not as hours. |
 | Associate on break | `onBreak` / `ErrOnBreak` | No `Break` entity exists; a break is a boolean on `AssociateShift`. |

@@ -294,9 +294,9 @@ sequenceDiagram
     In->>UC: Execute buildingId, pathId, charge, plannedRate
     opt plannedRate not positive and MeasuredRate wired
         UC->>MR: MeanActualSeconds pathId
-        alt available
-            MR-->>UC: rate, rateSource measured
-        else ErrMeasuredRateUnavailable
+        alt available and seconds positive
+            MR-->>UC: seconds per task, rate = 3600 / seconds, rateSource measured
+        else ErrMeasuredRateUnavailable or seconds not positive
             MR-->>UC: keep caller rate, rateSource caller
         end
     end

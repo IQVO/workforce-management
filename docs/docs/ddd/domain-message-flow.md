@@ -66,7 +66,7 @@ sequenceDiagram
     participant AN as workforce analytics projector
     Agent->>WFM: qry: MCP get_staffing_gap
     WFM-->>AN: evt: PathUnderstaffed, only when activeHeads below plannedHeads
-    WFM-->>Agent: plannedHeads, activeHeads, understaffed, observedIdlePct
+    WFM-->>Agent: plannedHeads, activeHeads, understaffed
     Agent->>WFM: qry: MCP propose_path_heads
     WFM-->>AN: evt: ShiftPlanProposed
     WFM-->>Agent: proposedHeads

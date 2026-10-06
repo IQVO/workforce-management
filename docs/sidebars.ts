@@ -134,6 +134,7 @@ const sidebars: SidebarsConfig = {
         'adr/0030-kafka-sourced-process-path-catalogue',
         'adr/0031-kafka-writer-durability',
         'adr/0032-bootretry-first-outbound-dial',
+        'adr/0033-docs-audit-corrections-2026-10',
       ],
     },
   ],

@@ -80,25 +80,31 @@ type assignmentResponse struct {
 	Active       bool   `json:"active"`
 }
 
-// staffingGapResponse's ObservedIdlePct is a pure surfacing addition
+// staffingGapResponse's ObservedIdleShare is a pure surfacing addition
 // (idleness-as-staffing-signal): omitted entirely when no idle-share
 // signal is available for this path's task type (IdleShare unwired, or
-// no observation yet) -- never a fabricated 0.
+// no observation yet) -- never a fabricated 0. The value is a FRACTION in
+// [0, 1]. ObservedIdlePct is the original, misleadingly named field: it
+// carries the SAME fraction (not a 0-100 percentage) and is kept,
+// deprecated, so existing consumers keep working (ADR-0033).
 type staffingGapResponse struct {
-	PathId          string   `json:"pathId"`
-	PlannedHeads    int      `json:"plannedHeads"`
-	ActiveHeads     int      `json:"activeHeads"`
-	Understaffed    bool     `json:"understaffed"`
+	PathId            string   `json:"pathId"`
+	PlannedHeads      int      `json:"plannedHeads"`
+	ActiveHeads       int      `json:"activeHeads"`
+	Understaffed      bool     `json:"understaffed"`
+	ObservedIdleShare *float64 `json:"observedIdleShare,omitempty"`
+	// Deprecated: use ObservedIdleShare; same fraction value.
 	ObservedIdlePct *float64 `json:"observedIdlePct,omitempty"`
 }
 
 func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
 	return staffingGapResponse{
-		PathId:          string(g.PathId),
-		PlannedHeads:    g.PlannedHeads,
-		ActiveHeads:     g.ActiveHeads,
-		Understaffed:    g.Understaffed,
-		ObservedIdlePct: g.ObservedIdlePct,
+		PathId:            string(g.PathId),
+		PlannedHeads:      g.PlannedHeads,
+		ActiveHeads:       g.ActiveHeads,
+		Understaffed:      g.Understaffed,
+		ObservedIdleShare: g.ObservedIdlePct,
+		ObservedIdlePct:   g.ObservedIdlePct,
 	}
 }
 
