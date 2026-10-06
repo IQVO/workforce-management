@@ -958,11 +958,13 @@ components:
           example: ["pack", "hazmat"]
         siteCode:
           type: string
+          nullable: true
           description: >-
             ADDITIVE and optional (ADR 0034). The canonical Site code (the
             facility-layout Site code, e.g. WH1 -- the same identifier
             warehouse-planning carries as site_id) this associate works at
-            for the shift. Omitted or blank leaves the site unknown: such an
+            for the shift. Omitted, null or blank all leave the site unknown
+            (null is treated exactly like omitting the field): such an
             associate counts only in UNSCOPED staffing-gap queries. The code
             is accepted as given -- this context never validates it against
             facility-layout. A restart (second call for the same associate)

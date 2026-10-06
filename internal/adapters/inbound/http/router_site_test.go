@@ -66,6 +66,28 @@ func TestStartShift_AcceptsOptionalSiteCode(t *testing.T) {
 	}
 }
 
+// The spec declares siteCode nullable (like certifications): an explicit JSON
+// null is the same as omitting it, so the site stays unknown (contract job).
+func TestStartShift_NullSiteCodeIsOmitted(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", map[string]any{"certifications": []string{"pack"}, "siteCode": nil})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	assignPack(t, router, "assoc-1")
+	rec = doRequest(t, router, http.MethodPost, "/shift-plans", commitShiftPlanRequest{
+		BuildingId: "bldg-1", ShiftId: "shift-1",
+		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8, InstalledStations: 10}},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("commit plan: expected 201, got %d: %s", rec.Code, rec.Body.String())
+	}
+	scoped := decodeGap(t, doRequest(t, router, http.MethodGet, "/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1&siteCode=WH1", nil))
+	if scoped["activeHeads"] != float64(0) {
+		t.Fatalf("a null siteCode must leave the associate site-unknown (not counted at WH1), got %v", scoped)
+	}
+}
+
 func TestStaffingGap_SingleUnscopedStaysFleetWide(t *testing.T) {
 	router := siteFixture(t)
 	got := decodeGap(t, doRequest(t, router, http.MethodGet, "/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1", nil))
