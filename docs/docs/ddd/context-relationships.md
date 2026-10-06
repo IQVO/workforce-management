@@ -18,6 +18,9 @@ wiring-level detail (topics, envelopes, env vars) see
 | Counterpart | Pattern | Direction | Wired today? |
 | --- | --- | --- | --- |
 | `wes-work-planning` | **Customer/Supplier** — this context supplies, Work Planning consumes | Publish only, one-way | **Yes** — `ShiftPlanCommitted` on `warehouse.workforce.events` |
+| `warehouse-planning` | **Customer/Supplier** (Published Language) — same event, second customer | Publish only, one-way | **Yes** — its labor-capacity consumer (group `warehouse-planning-labor-capacity`) reads `ShiftPlanCommitted` |
+| `warehouse-ops-agent` | **Open Host Service** — this context is upstream; the agent is a downstream client | Agent calls MCP `get_staffing_gap`, `propose_path_heads`; its console reads `GET /reports/labor` | **Yes**, read-only |
+| `warehouse-console` | Presentation-layer composition, not a domain edge | Lazy-loads this repo's `workforce_mfe` remote, which calls only this service's REST API | **Yes** — see [ADR 0011](../adr/0011-adopt-fleet-mfe-console-architecture.md) |
 | `fulfillment-execution` | **Deliberate non-relationship** at the task/write boundary; **Conformist** read of installed capacity | This context reads `GET /capacity/{capability}` | **Yes, capacity only** — [ADR 0014](../adr/0014-installed-capacity-ceiling.md) |
 | `labor-performance` | **Conformist** on measured rates and idle share | Consume `warehouse.labor-performance.events` (`kafka-cache`) or `GET /task-types/{taskType}/performance` (`http`) | **Yes, opt-in** — [ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [0019](../adr/0019-labor-performance-cache-consumer.md), [0020](../adr/0020-idle-share-staffing-signal.md) |
 | `process-path-management` | **Conformist** on the process-path catalogue | Consume `warehouse.process-path-management.events` | **Yes, opt-in** (`PATH_CATALOGUE_SOURCE=kafka`); otherwise a file |
@@ -130,7 +133,7 @@ This platform splits that aggregate in two along the path/task line:
 | `Assignment` (task → resource → time) | `LaborAssignment` (associate → **path** → interval), here; task-level claiming in `fulfillment-execution` |
 | `AssignmentOptimizer` domain service | **Not built.** Rebalancing is a human decision; this context surfaces `PathUnderstaffed` and stops |
 
-The reference also frames Orchestration ↔ Task&nbsp;&&nbsp;Labor as a
+The reference also frames Orchestration ↔ Task & Labor as a
 **Partnership** — "they evolve together; sequencing and assignment are two
 halves of one optimization loop." That framing assumes the optimization loop is
 automated. Here it is not: a human commits the plan and a human moves people.

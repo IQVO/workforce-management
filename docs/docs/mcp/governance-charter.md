@@ -12,9 +12,9 @@ warehouse-systems: one set of global standards, enforced the same way in every
 repository, while each bounded context owns its own server. It is the MCP
 counterpart to the platform's existing 5-stage quality gate and its ADR
 discipline. `fulfillment-execution` is the reference implementation
-(see [ADR-0008](../adr/0008-mcp-inbound-adapter.md)); the other four contexts —
-`inventory-storage`, `wes-work-planning`, `workforce-management`,
-`facility-layout` — copy it.
+(see [ADR-0008](../adr/0008-mcp-inbound-adapter.md)); every other context in
+the fleet that ships an MCP server — including `workforce-management` —
+copies it.
 
 Keywords **MUST**, **SHOULD**, **MAY** are used per RFC 2119.
 
@@ -228,5 +228,6 @@ when a reports client is configured, one resource template
 ## 11. Changing this charter
 
 This charter is versioned with the docs. A change to a global standard **MUST**
-be proposed as a PR and, because it binds all five contexts, **SHOULD** be
+be proposed as a PR and, because it binds every context's MCP server,
+**SHOULD** be
 recorded as an ADR when it changes an architecturally significant rule.

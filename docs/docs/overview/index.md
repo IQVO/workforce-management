@@ -16,9 +16,9 @@ production system** and is **not affiliated with, endorsed by, or
 representative of any real-world company**.
 :::
 
-**Workforce Management** is one of five Go services that make up the
-`warehouse-systems` platform. It is a **Supporting** bounded context, and it
-owns exactly one question:
+**Workforce Management** is one of the eleven Go backend bounded contexts that
+make up the `warehouse-systems` platform. It is a **Supporting** bounded
+context, and it owns exactly one question:
 
 > *Who is on shift, on which process path, at what rate — and how many of
 > those hours are direct versus indirect?*
@@ -40,7 +40,7 @@ It covers two horizons that people often (wrongly) fuse into one:
 This context **never links an associate to a specific task**. It stops at
 "this associate is on this path, for this interval," full stop. Dispatching an
 individual unit of work to a claiming station is
-[fulfillment-execution](https://github.com/claudioed/fulfillment-execution)'s
+[fulfillment-execution](https://github.com/IQVO/fulfillment-execution)'s
 job, and it happens on a completely different cadence — seconds, versus the
 minutes-to-hours on which headcount moves between paths.
 
@@ -57,9 +57,10 @@ boundary](../business-context/path-boundary.md) and recorded as
 | Three aggregates — `AssociateShift`, `ShiftPlan`, `LaborAssignment` | [Aggregates](../ddd/aggregates.md) |
 | Four hard invariants, each with a dedicated red-path test | [Invariants](../ddd/invariants.md) |
 | Ten domain events | [Domain events](../ddd/domain-events.md) |
-| Ten REST endpoints, RFC 7807 errors | [API Reference](../api-reference/index.md) |
-| One outbound Kafka topic, `warehouse.workforce.events` | [Integration](../ecosystem/integration.md) |
+| Ten business REST endpoints plus `/healthz` and `/readyz`, RFC 7807 errors | [API Reference](../api-reference/index.md) |
+| One outbound integration topic, `warehouse.workforce.events` (plus the internal analytics topic) | [Integration](../ecosystem/integration.md) |
 | Hexagonal layering, enforced by executable architecture tests | [Architecture](./architecture.md) |
+| The full ddd-crew artifact pack and UML / ER / sequence diagrams | [DDD artifacts](../ddd/ddd-artifacts.md) |
 
 ## Where to go next
 

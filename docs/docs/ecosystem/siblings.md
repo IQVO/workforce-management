@@ -108,6 +108,10 @@ Aggregates: `Site`, `Zone`, `Aisle`, `LocationSlot`, `PlacementRule`.
   report.
 - **network-fulfillment** — the anti-corruption layer to an external
   fulfillment network, feeding `order-management`. No edge to this service.
+- **warehouse-planning** — capacity planning (WES). Its labor-capacity
+  consumer reads `ShiftPlanCommitted` from `warehouse.workforce.events` under
+  the group `warehouse-planning-labor-capacity` and registers it as a labor
+  capacity constraint. It never calls this service.
 
 ## The tiering, at a glance
 

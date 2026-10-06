@@ -137,7 +137,7 @@ npm run build         # tsc -b && vite build -> dist/
 
 CI's `web` job (`.github/workflows/ci.yml`) runs this exact sequence
 against a dual checkout — it checks out this repo into
-`workforce-management/`, checks out `claudioed/warehouse-ui-kit@develop`
+`workforce-management/`, checks out `IQVO/warehouse-ui-kit@develop`
 into a sibling `warehouse-ui-kit/` directory, builds the ui-kit first
 (`npm ci && npm run build`), then runs this repo's `web/` steps.
 Reproduce that locally by checking out `warehouse-ui-kit` as a real

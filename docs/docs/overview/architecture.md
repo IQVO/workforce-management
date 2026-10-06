@@ -24,7 +24,7 @@ flowchart LR
   end
 
   subgraph app["Application"]
-    UC["8 use cases<br/>one struct each"]
+    UC["9 use cases<br/>one struct each"]
     P["Ports (OUT)<br/>repos, EventPublisher, UnitOfWork, Clock,<br/>PathCatalogue, InstalledCapacityClient,<br/>MeasuredRateClient, IdleShareClient"]
   end
 
@@ -116,7 +116,12 @@ them as a blocking `arch-test` job. The tests assert that:
 A layering violation therefore fails the build rather than surviving as a code
 review comment. See [ADR 0007](../adr/0007-arch-go-architecture-fitness-tests.md).
 
-## The eight use cases
+## The nine use cases
+
+Nine use-case structs; `StartBreak` and `EndBreak` share a row below.
+`GetStaffingGap` answers both the single-path lookup (`Execute`) and the
+all-paths list for one building/shift (`ExecuteAll`,
+[ADR 0029](../adr/0029-all-paths-staffing-gap-endpoint.md)).
 
 | Use case | What it does |
 | --- | --- |
@@ -141,13 +146,18 @@ These run in `.github/workflows/ci.yml`; unless noted, on every push and pull re
 | Gate | Tool |
 | --- | --- |
 | Lint | `golangci-lint` (errcheck, govet, staticcheck, unused, ineffassign, bodyclose, misspell, unconvert, gocritic) |
+| Complexity | `complexity` job — `golangci-lint --enable-only gocyclo,gocognit,cyclop,funlen,nestif` |
+| Agent guides | `guide-lint` — `scripts/harness/guide_lint.py` + `repo_lint.py` and their tests |
 | Unit tests + race | `go test ./... -race`, coverage ≥ 90% on domain + application |
-| Integration | build-tagged tests against a live Postgres 16 service container, plus testcontainers-backed outbox and Kafka-consumer tests |
+| Integration | `go test -tags=integration ./... -race`; every test boots its own Postgres (and Kafka where needed) via testcontainers — no service containers, no env-gated skips |
+| Contract | Schemathesis property-based tests over `apis/openapi.yaml` (`scripts/contract-test.sh`, Postgres 16 service container) |
+| MCP evals | `evals-tests` — `go test ./internal/adapters/inbound/mcp/... -run '^TestEval\|^TestMCPEvalSuite'` |
 | Architecture fitness | `arch-go` via `internal/architecture` |
 | BDD acceptance | `godog` over the real chi router |
 | OpenAPI + AsyncAPI lint | Spectral, against `apis/*.yaml` |
-| Helm chart lint | `ct lint` — pull requests into `main` only |
-| Mutation testing | `gremlins` — weekly and on manual dispatch, never blocking PRs |
-| Drift | `deadcode`, `go mod tidy -diff`, `knip` on `web/` — weekly and on manual dispatch |
+| Mutation testing | `mutation-fast` — `gremlins` on `internal/domain/shiftplan`, **blocking on every push and PR**; the exhaustive `mutation` job runs weekly and on manual dispatch |
+| Drift | `deadcode`, `go mod tidy -diff`, `knip` on `web/`, coverage-quality — weekly and on manual dispatch |
 | Generated API docs | `docs-api-drift` regenerates `docs/docs/api-reference/rest` and fails on a diff |
+| Frontend | `web` — lint, `tsc -b`, `npm test`, build of `web/` against `IQVO/warehouse-ui-kit@develop` |
+| Helm chart lint | `ct lint` — pull requests into `main` only |
 | Vulnerabilities / image | `govulncheck`; Trivy image scan (pull requests into `main` only) |

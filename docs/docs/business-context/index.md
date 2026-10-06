@@ -12,7 +12,7 @@ description: Why this bounded context exists, what it owns, and what it delibera
 A fulfillment centre's throughput is a product of two things it can actually
 control on the day: **how much work is released**, and **how many trained
 people are standing at each process path**. The first belongs to
-[wes-work-planning](https://github.com/claudioed/wes-work-planning). The second
+[wes-work-planning](https://github.com/IQVO/wes-work-planning). The second
 is this context.
 
 Four pages here, in reading order:
