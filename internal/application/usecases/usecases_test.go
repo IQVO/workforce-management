@@ -276,10 +276,12 @@ func testCatalogue() *pathcatalog.Catalogue {
 
 // TestProposePathPlan_FallsBackToMeasuredRateWhenNoCallerRate covers the
 // core close-the-loop behaviour: an omitted (<=0) plannedRate consults
-// MeasuredRate and uses it when available.
+// MeasuredRate and uses it when available. meanActualSeconds is a DURATION
+// per task, so it is converted to the per-head hourly rate the arithmetic
+// expects: 120 s/task = 30 tasks/head/hour.
 func TestProposePathPlan_FallsBackToMeasuredRateWhenNoCallerRate(t *testing.T) {
 	f := newFixtures()
-	measured := &fakeMeasuredRateClient{seconds: 25}
+	measured := &fakeMeasuredRateClient{seconds: 120}
 	uc := &ProposePathPlan{Events: f.pub, Clock: f.clock, MeasuredRate: measured}
 
 	heads, resolvedRate, rateSource, _, err := uc.Execute(context.Background(), "bldg-1", "pack", 100, 0)
@@ -289,14 +291,65 @@ func TestProposePathPlan_FallsBackToMeasuredRateWhenNoCallerRate(t *testing.T) {
 	if !measured.called {
 		t.Fatal("expected MeasuredRate to be consulted when plannedRate is not supplied")
 	}
-	if resolvedRate != 25 {
-		t.Fatalf("expected resolvedRate 25, got %v", resolvedRate)
+	if resolvedRate != 30 {
+		t.Fatalf("expected resolvedRate 30 units/head/hour (3600/120), got %v", resolvedRate)
 	}
 	if rateSource != RateSourceMeasured {
 		t.Fatalf("expected rateSource %q, got %q", RateSourceMeasured, rateSource)
 	}
-	if heads != 4 { // ceil(100/25)
+	if heads != 4 { // ceil(100/30)
 		t.Fatalf("expected 4 heads, got %d", heads)
+	}
+}
+
+// TestProposePathPlan_MeasuredRateIsConvertedFromSecondsPerTask pins the
+// unit conversion at several magnitudes. Dividing the charge by the raw
+// seconds (the pre-fix behaviour) would give ceil(3600/36)=100 heads for a
+// 36 s task; the right answer for 3600 units at 100 units/head/hour is 36.
+func TestProposePathPlan_MeasuredRateIsConvertedFromSecondsPerTask(t *testing.T) {
+	cases := []struct {
+		name      string
+		seconds   float64
+		charge    float64
+		wantRate  float64
+		wantHeads int
+	}{
+		{"36s per task is 100/head/hour", 36, 3600, 100, 36},
+		{"60s per task is 60/head/hour", 60, 90, 60, 2},
+		{"3600s per task is 1/head/hour", 3600, 5, 1, 5},
+		{"fast 1.8s task is 2000/head/hour", 1.8, 2000, 2000, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			uc := &ProposePathPlan{Events: f.pub, Clock: f.clock, MeasuredRate: &fakeMeasuredRateClient{seconds: tc.seconds}}
+			heads, resolvedRate, rateSource, _, err := uc.Execute(context.Background(), "bldg-1", "pack", tc.charge, 0)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if resolvedRate != tc.wantRate || heads != tc.wantHeads || rateSource != RateSourceMeasured {
+				t.Fatalf("got heads=%d resolvedRate=%v rateSource=%q, want heads=%d resolvedRate=%v rateSource=%q",
+					heads, resolvedRate, rateSource, tc.wantHeads, tc.wantRate, RateSourceMeasured)
+			}
+		})
+	}
+}
+
+// TestProposePathPlan_NonPositiveMeasuredSecondsIsUnavailable: a measured
+// duration of 0 (or negative / NaN / Inf) cannot be converted into a rate, so
+// it is treated exactly like ErrMeasuredRateUnavailable -- fail-open to 0
+// heads, never a division by zero or an infinite rate.
+func TestProposePathPlan_NonPositiveMeasuredSecondsIsUnavailable(t *testing.T) {
+	for _, seconds := range []float64{0, -5, math.NaN(), math.Inf(1)} {
+		f := newFixtures()
+		uc := &ProposePathPlan{Events: f.pub, Clock: f.clock, MeasuredRate: &fakeMeasuredRateClient{seconds: seconds}}
+		heads, resolvedRate, rateSource, _, err := uc.Execute(context.Background(), "bldg-1", "pack", 100, 0)
+		if err != nil {
+			t.Fatalf("seconds=%v: unexpected error: %v", seconds, err)
+		}
+		if heads != 0 || resolvedRate != 0 || rateSource != RateSourceCaller {
+			t.Fatalf("seconds=%v: got heads=%d resolvedRate=%v rateSource=%q, want the zero-rate fallback", seconds, heads, resolvedRate, rateSource)
+		}
 	}
 }
 
