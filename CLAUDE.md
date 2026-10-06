@@ -7,7 +7,7 @@ a headcount split across paths) plus **intra-shift assignment tracking**
 call; this context makes the gap legible, it does not decide). It stops at
 the **path boundary**: it never links an associate to a specific task —
 individual task dispatch belongs to `fulfillment-execution`. Docs:
-<https://claudioed.github.io/workforce-management/> and [`docs/`](docs/).
+<https://iqvo.github.io/workforce-management/> and [`docs/`](docs/).
 
 Source of truth for the domain model: `/Users/claudioed/docs/amazon-fulfillment-ddd.md`
 and `/Users/claudioed/warehouse-systems-ddd.md`. Honor that ubiquitous language.
