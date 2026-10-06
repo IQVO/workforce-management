@@ -40,6 +40,21 @@ const sidebars: SidebarsConfig = {
         'ddd/invariants',
         'ddd/domain-events',
         'ddd/context-relationships',
+        {
+          type: 'category',
+          label: 'DDD artifacts (ddd-crew)',
+          link: {type: 'doc', id: 'ddd/ddd-artifacts'},
+          items: [
+            'ddd/core-domain-chart',
+            'ddd/bounded-context-canvas',
+            'ddd/aggregate-design-canvas',
+            'ddd/domain-message-flow',
+            'ddd/eventstorming',
+            'ddd/class-diagram',
+            'ddd/entity-relationship',
+            'ddd/sequence-diagrams',
+          ],
+        },
       ],
     },
     {

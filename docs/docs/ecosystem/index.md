@@ -22,9 +22,10 @@ own deployment.
 ## The one-paragraph version
 
 This service **publishes** `ShiftPlanCommitted` to
-`warehouse.workforce.events`, one message per `PathPlan` line. One sibling
-consumes it: `wes-work-planning`, which projects it into a read model called
-`LaborPlanObserved`, keyed by `path_id`.
+`warehouse.workforce.events`, one message per `PathPlan` line. Two siblings
+consume it: `wes-work-planning`, which projects it into a read model called
+`LaborPlanObserved`, keyed by `path_id`, and `warehouse-planning`, whose
+labor-capacity consumer registers it as a labor constraint.
 
 It also **reads from** three siblings, each edge selected by an env var: the
 live installed capacity from `fulfillment-execution` on every

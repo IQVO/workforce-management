@@ -17,12 +17,16 @@ legible, it does not decide).
 ## Documentation
 
 Full documentation is published at
-**<https://claudioed.github.io/workforce-management/>** — the business context
+**<https://iqvo.github.io/workforce-management/>** — the business context
 and the path-boundary reasoning, the DDD model (aggregates, invariants, all ten
-domain events), an interactive REST API reference generated from
-`apis/openapi.yaml`, the CloudEvents catalog from `apis/asyncapi.yaml`, the
-ecosystem context map, and the Architecture Decision Records. Source lives in
-[`docs/`](docs/) and deploys on every push to `main`.
+domain events), the ddd-crew DDD artifact pack (core domain chart, bounded
+context canvas, aggregate design canvas, domain message flows, EventStorming,
+UML class / ER / sequence diagrams — see
+[`docs/docs/ddd/ddd-artifacts.md`](docs/docs/ddd/ddd-artifacts.md)), an
+interactive REST API reference generated from `apis/openapi.yaml`, the
+CloudEvents catalog from `apis/asyncapi.yaml`, the ecosystem context map, and
+the Architecture Decision Records. Source lives in [`docs/`](docs/) and deploys
+on every push to `main`.
 
 ## Why this context stops at the path boundary
 
@@ -140,7 +144,12 @@ Env vars:
 | `DATABASE_URL` | yes | — | Postgres connection string |
 | `HTTP_ADDR` | no | `:8080` | listen address |
 | `MIGRATIONS_PATH` | no | `migrations` | path to golang-migrate SQL files |
+| `MIGRATIONS_DATABASE_URL` | no | `DATABASE_URL` | direct (non-PgBouncer) connection string used ONLY by the boot-time golang-migrate step ([ADR-0025](docs/docs/adr/0025-migrations-direct-postgres-connection.md)); the request pool always uses `DATABASE_URL` |
 | `MAX_HOURS_PER_SHIFT` | no | `8` | the configured max-hours-per-shift cap |
+| `HOUSEKEEPING_INTERVAL` | no | `1h` | how often the housekeeping sweeper runs ([ADR-0028](docs/docs/adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox.md)); `0` disables it |
+| `IDEMPOTENCY_KEY_TTL` | no | `24h` | how long an `idempotency_keys` row is kept; `0` keeps them forever |
+| `OUTBOX_RETENTION` | no | `168h` | how long a PUBLISHED `outbox_events` row is kept; `0` keeps them forever |
+| `SHUTDOWN_DRAIN_DELAY` | no | `10s` | how long the process keeps serving after `/readyz` flips to 503 on SIGTERM ([ADR-0022](docs/docs/adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)); `0` disables the wait |
 | `EVENT_PUBLISHER` | no | `log` | `log` or `kafka` — see [Integration](#integration). With `kafka`, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both topics by an in-process relay ([ADR-0016](docs/docs/adr/0016-transactional-outbox.md)); they never go straight to the broker from a request |
 | `KAFKA_BROKERS` | no | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
 | `OUTBOX_RELAY_INTERVAL` | no | `1s` | how long the outbox relay sleeps between passes that found nothing to publish (Go duration; only meaningful with `EVENT_PUBLISHER=kafka`). A full batch is followed immediately by another pass |
@@ -265,13 +274,20 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 # Requires INSTALLED_CAPACITY_MODE=http: in the default permissive mode every
 # commit is rejected with 503 installed-capacity-unavailable (ADR-0014), and a
 # line whose plannedHeads exceeds fulfillment-execution's live capacity is 409.
+# POST /shift-plans and POST /associates/{id}/assignments require an
+# Idempotency-Key header (ADR-0027): a missing key is 400
+# idempotency-key-required, the same key with a different body is 422
+# idempotency-key-reused, and a retry with the same key + body replays the
+# stored response.
 curl -X POST localhost:8080/shift-plans \
+  -H 'Idempotency-Key: 6f1d2c3a-commit-bldg-1-shift-1' \
   -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10}
       ]}'
 
 # Assign an associate to a path (ends any prior active assignment)
 curl -X POST localhost:8080/associates/assoc-1/assignments \
+  -H 'Idempotency-Key: 0b7e9a41-assign-assoc-1-pack' \
   -d '{"pathId":"pack"}'
 
 # Break start/end
@@ -284,10 +300,15 @@ curl -X POST localhost:8080/associates/assoc-1/break/end
 #    for the path (ADR-0020). Unknown path ids are 400 unknown-path-id.
 curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
 
+# Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)
+# -> a JSON array of the same per-path objects
+curl localhost:8080/buildings/bldg-1/shifts/shift-1/staffing-gap
+
 # End an associate's shift (closes any active assignment first)
 curl -X POST localhost:8080/associates/assoc-1/end-shift
 
-curl localhost:8080/healthz
+curl localhost:8080/healthz   # liveness
+curl localhost:8080/readyz    # readiness: 503 {"status":"not_ready"} once shutdown begins (ADR-0022)
 ```
 
 ## Errors
@@ -321,10 +342,11 @@ this occurrence; `instance` is the request path.
 ## Integration
 
 This service can publish `ShiftPlanCommitted` to the shared warehouse-systems
-Kafka broker so other bounded contexts (e.g. `wes-work-planning`, which
-projects these into its own `LaborPlanObserved` read model, keyed by
-`path_id`) can react to committed headcount without calling back into this
-service. Inbound, it can optionally consume `process-path-management`'s
+Kafka broker so other bounded contexts can react to committed headcount
+without calling back into this service. Two consume it today:
+`wes-work-planning` (projects it into its own `LaborPlanObserved` read model,
+keyed by `path_id`) and `warehouse-planning` (its labor-capacity consumer,
+group `warehouse-planning-labor-capacity`). Inbound, it can optionally consume `process-path-management`'s
 catalogue topic (`PATH_CATALOGUE_SOURCE=kafka`) and `labor-performance`'s
 `warehouse.labor-performance.events` (`LABOR_PERFORMANCE_MODE=kafka-cache`),
 each into an in-memory cache rebuilt from the earliest offset under a
@@ -499,12 +521,10 @@ go test ./...
 go test ./... -race
 gofmt -l .                      # should print nothing
 
-# Postgres integration tests (build-tagged). The repo tests need DATABASE_URL;
-# the outbox tests (-run Outbox) start their own Postgres via testcontainers.
-docker compose up -d
-export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
-go test -tags=integration ./internal/adapters/outbound/postgres/...
-go test -tags=integration ./internal/adapters/outbound/postgres/ -run Outbox -race -count=1
+# Integration tests (build-tagged). Every one boots its own Postgres (and,
+# where needed, Kafka) via testcontainers — Docker is required, no
+# DATABASE_URL is read and nothing is skip-gated.
+go test -tags=integration ./... -race -count=1
 ```
 
 The four invariants named in this context's Definition of Done each have a
@@ -545,9 +565,14 @@ go test ./... -run TestFeatures -v
 | Feature file | Covers |
 | --- | --- |
 | `features/shift_plan.feature` | `CommitShiftPlan` — within capacity, rejected when `plannedHeads` exceed installed stations, live capacity resolved by the path's required capability (`PICK` → `pick`), unknown path rejected |
+| `features/shift_plan_hours_capacity.feature` | `CommitShiftPlan` — `plannedHours` bounded by `plannedHeads × MAX_HOURS_PER_SHIFT` |
+| `features/path_plan_proposal.feature` | `ProposePathPlan` — pure computation, nothing committed |
 | `features/labor_assignment.feature` | `AssignLabor` — certified assignment, uncertified rejection, no double-booking, and rejection while on break |
 | `features/breaks.feature` | `StartBreak` / `EndBreak` — break state gates assignment, then releases it |
+| `features/break_state_transitions.feature` | `StartBreak` / `EndBreak` — discrete transitions (`associate-already-on-break`, `associate-not-on-break`), not upserts |
+| `features/associate_shift_lifecycle.feature` | `EndAssociateShift` — closes the active assignment, ending an ended shift is a no-op, an ended shift cannot be assigned |
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |
+| `features/staffing_gap_read_model.feature` | `GetStaffingGap` — a fully staffed path is not flagged; no committed `ShiftPlan` is rejected |
 
 Step definitions and the suite entry point (`TestFeatures`) are in
 [`features_test.go`](features_test.go) at the repo root. CI runs them as a

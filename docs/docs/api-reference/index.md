@@ -4,7 +4,7 @@ slug: /api-reference
 title: API Reference
 sidebar_label: Overview
 sidebar_position: 1
-description: Ten REST endpoints, ten domain events, and RFC 7807 errors throughout.
+description: Ten business REST endpoints plus two probes, ten domain events, and RFC 7807 errors throughout.
 ---
 
 # API Reference
@@ -24,24 +24,35 @@ transcribed by hand, so they cannot drift from the spec.
 
 ## Every endpoint
 
-**10 of 10 routes in `internal/adapters/inbound/http/router.go` are documented
-in `apis/openapi.yaml`.** Cross-checked route by route:
+**12 routes in `internal/adapters/inbound/http/router.go`; 11 of them are
+documented in `apis/openapi.yaml`.** The one missing from the spec is the
+readiness probe `GET /readyz` ([ADR 0022](../adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)),
+so the generated REST pages do not show it. Cross-checked route by route:
 
 | Method | Path | Operation | Use case | Success |
 | --- | --- | --- | --- | --- |
 | `POST` | `/associates/{id}/start-shift` | `startAssociateShift` | `StartAssociateShift` | `201` + `Location` |
 | `POST` | `/associates/{id}/certifications` | `certifyAssociate` | `CertifyAssociate` | `204` |
 | `POST` | `/paths/{pathId}/plan/propose` | `proposePathPlan` | `ProposePathPlan` | `200` |
-| `POST` | `/shift-plans` | `commitShiftPlan` | `CommitShiftPlan` | `201` + `Location` |
-| `POST` | `/associates/{id}/assignments` | `assignLabor` | `AssignLabor` | `201` + `Location` |
+| `POST` | `/shift-plans` | `commitShiftPlan` | `CommitShiftPlan` | `201` + `Location` (requires `Idempotency-Key`) |
+| `POST` | `/associates/{id}/assignments` | `assignLabor` | `AssignLabor` | `201` + `Location` (requires `Idempotency-Key`) |
 | `POST` | `/associates/{id}/break/start` | `startAssociateBreak` | `StartBreak` | `204` |
 | `POST` | `/associates/{id}/break/end` | `endAssociateBreak` | `EndBreak` | `204` |
-| `GET` | `/paths/{pathId}/staffing-gap` | `getStaffingGap` | `GetStaffingGap` | `200` |
+| `GET` | `/paths/{pathId}/staffing-gap` | `getStaffingGap` | `GetStaffingGap.Execute` | `200` |
+| `GET` | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | `listStaffingGapsForShift` | `GetStaffingGap.ExecuteAll` | `200` (array) |
 | `POST` | `/associates/{id}/end-shift` | `endAssociateShift` | `EndAssociateShift` | `204` |
 | `GET` | `/healthz` | `healthz` | — | `200` |
+| `GET` | `/readyz` | — (not in the spec) | — | `200` ready / `503` not ready |
 
 Grouped by OpenAPI tag: **Associates** (5), **Shift Plans** (2),
-**Assignments** (1), **Staffing** (1), **System** (1).
+**Assignments** (1), **Staffing** (2), **System** (1).
+
+The two creation POSTs are wrapped in the transactional `Idempotency-Key`
+middleware ([ADR 0027](../adr/0027-idempotency-key-middleware.md)) whenever
+the service runs on Postgres (every deployment): a missing key is
+`400 idempotency-key-required`, the same key with a different body is
+`422 idempotency-key-reused`, and a retry with the same key and body replays
+the stored response.
 
 ## Conventions
 

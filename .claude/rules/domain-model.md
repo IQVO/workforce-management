@@ -110,13 +110,15 @@ raised and consumed in-process.
 | POST | `/associates/{id}/start-shift` | StartAssociateShift |
 | POST | `/associates/{id}/certifications` | CertifyAssociate |
 | POST | `/paths/{pathId}/plan/propose` | ProposePathPlan |
-| POST | `/shift-plans` | CommitShiftPlan |
-| POST | `/associates/{id}/assignments` | AssignLabor |
+| POST | `/shift-plans` | CommitShiftPlan (requires `Idempotency-Key`, ADR-0027) |
+| POST | `/associates/{id}/assignments` | AssignLabor (requires `Idempotency-Key`, ADR-0027) |
 | POST | `/associates/{id}/break/start` | StartBreak |
 | POST | `/associates/{id}/break/end` | EndBreak |
 | GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap |
+| GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029) |
 | POST | `/associates/{id}/end-shift` | EndAssociateShift |
-| GET | `/healthz` | liveness/readiness |
+| GET | `/healthz` | liveness |
+| GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); not in `apis/openapi.yaml` |
 
 All bodies are JSON. Every error response is RFC 7807
 `application/problem+json` (ADR-0005): `type` identifies the error CATEGORY

@@ -59,6 +59,36 @@ Errors: `ErrNoPathPlans`, `ErrMissingInstalledStations` → `400`.
 Tests: `TestCommitShiftPlan_RejectsEmptyLines`,
 `TestCommitShiftPlan_RejectsMissingInstalledStations`.
 
+### `plannedHeads(path) ≤ liveInstalledCapacity(path)`
+
+A second, **independent** ceiling ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)).
+`CommitShiftPlan` resolves each line's path through the process-path catalogue
+to its `requiredCapabilities`, asks `fulfillment-execution` for the live
+station count per capability (`GET /capacity/{capability}`), and takes the
+smallest count as the path's ceiling. The domain then rejects any line above
+it:
+
+```go
+if line.PlannedHeads > installedCapacity[line.PathId] {
+    return nil, ErrExceedsInstalledCapacity
+}
+```
+
+A path with no entry in the map gets a ceiling of `0` — a missing live fetch
+can never silently bypass the check. Errors: `ErrExceedsInstalledCapacity` →
+`409 exceeds-installed-capacity`; any failure to fetch the count →
+`ErrInstalledCapacityUnavailable` → `503 installed-capacity-unavailable`
+(fail-loud, the whole commit is rejected); an undeclared path →
+`pathcatalog.ErrUnknownPath` → `400 unknown-path-id`.
+
+| Layer | Test |
+| --- | --- |
+| Domain | `shiftplan.TestCommitShiftPlan_RejectsPlanExceedingInstalledCapacity` |
+| Domain (boundary) | `shiftplan.TestCommitShiftPlan_AllowsPlannedHeadsExactlyEqualToInstalledCapacity` |
+| Domain (missing entry) | `shiftplan.TestCommitShiftPlan_MissingInstalledCapacityEntryDefaultsToZeroCeiling` |
+| Application | `usecases.TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity`, `usecases.TestCommitShiftPlan_FailsLoudWhenInstalledCapacityUnavailable`, `usecases.TestCommitShiftPlan_QueriesInstalledCapacityByRequiredCapability` |
+| HTTP | `http.TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity`, `http.TestCommitShiftPlan_ServiceUnavailableWhenInstalledCapacityUnreachable` |
+
 ### Validation is all-or-nothing
 
 `CommitShiftPlan` validates every line *before* constructing the aggregate. A
@@ -91,11 +121,17 @@ if !hasCertification {
 ```
 
 Rejected with `409`. A path's required certification is, by convention, the
-`Certification` with the same name as the `PathId` — path `pack` requires
-certification `pack`. This convention is generic: a hazmat-designated path
+`Certification` with the same name as the path. When the process-path
+catalogue is wired (every deployed composition root), `AssignLabor` resolves
+that name through the catalogue first and uses the matched family's
+`MatchPrefix` (`requiredCertification` in
+`internal/application/usecases/assign_labor.go`), so `PICK`, `pick` and
+`pick-zone-a` all require certification `pick`; without a catalogue the raw
+`PathId` is used. This convention is generic: a hazmat-designated path
 named `hazmat` is gated the same way, requiring certification `hazmat`,
 with no hazmat-specific code — see
-[ADR 0009](../adr/0009-hazmat-certification-via-existing-path-gating.md).
+[ADR 0009](../adr/0009-hazmat-certification-via-existing-path-gating.md) and
+its amendment in [ADR 0013](../adr/0013-process-path-catalogue-validation.md).
 
 | Layer | Test |
 | --- | --- |
@@ -155,6 +191,21 @@ Test: `associate.TestEndShift_RaisesEventOnceAndBlocksFurtherOps`.
 `AssociateId`, `PathId` and `Certification` are constructed through validating
 constructors and reject empty values (`400`). An invalid identifier cannot
 exist as a value in this system.
+
+## Concurrency guard (infrastructure, not a business rule)
+
+`AssociateShift` and `LaborAssignment` carry an inert `version` field
+([ADR 0021](../adr/0021-optimistic-concurrency-version-column.md)). The domain
+never branches on it; the Postgres repos' `Save` only applies when the row's
+`version` still equals the loaded one, and otherwise returns
+`ports.ErrConcurrentModification` → `409 concurrent-modification`. `ShiftPlan`
+has no version column: `CommitShiftPlan` always builds a fresh plan from the
+request instead of loading and mutating the old one.
+
+Tests: `postgres.TestAssociateRepo_Save_StaleVersionFails`,
+`postgres.TestAssignmentRepo_Save_StaleVersionFails`,
+`postgres.TestAssociateRepo_ConcurrentSaves_ExactlyOneWinner`,
+`usecases.TestStartAssociateShift_RestartCarriesOverExistingVersion`.
 
 ## Read models are projections
 

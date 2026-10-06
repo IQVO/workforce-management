@@ -68,8 +68,9 @@ Everything is environment-driven — there is no config file.
 | `KAFKA_BROKERS` | no | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
 
 The README's env table lists the remaining knobs (`LABOR_PERFORMANCE_BASE_URL`,
-`IDLE_SHARE_TRIM_THRESHOLD`, `OUTBOX_RELAY_INTERVAL`, `CORS_ALLOWED_ORIGINS`,
-OTel variables).
+`IDLE_SHARE_TRIM_THRESHOLD`, `OUTBOX_RELAY_INTERVAL`, `MIGRATIONS_DATABASE_URL`,
+`HOUSEKEEPING_INTERVAL`, `IDEMPOTENCY_KEY_TTL`, `OUTBOX_RETENTION`,
+`SHUTDOWN_DRAIN_DELAY`, `CORS_ALLOWED_ORIGINS`, OTel variables).
 
 ## 3. Walk one shift end to end
 
@@ -89,13 +90,17 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 # 4. A human commits the split (this is the ShiftPlan). Needs
 #    INSTALLED_CAPACITY_MODE=http and reported capacity >= 3 for pack;
 #    otherwise 503 (capacity unavailable) or 409 (exceeds-installed-capacity).
+#    The two creation POSTs require an Idempotency-Key header (ADR 0027):
+#    without one the service answers 400 idempotency-key-required.
 curl -X POST localhost:8080/shift-plans \
+  -H 'Idempotency-Key: 6f1d2c3a-commit-bldg-1-shift-1' \
   -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10}
       ]}'
 
 # 5. Put the associate on the pack path
 curl -X POST localhost:8080/associates/assoc-1/assignments \
+  -H 'Idempotency-Key: 0b7e9a41-assign-assoc-1-pack' \
   -d '{"pathId":"pack"}'
 
 # 6. Breaks gate assignment while they are open
@@ -108,7 +113,8 @@ curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
 # 8. Clock off — closes any active assignment first
 curl -X POST localhost:8080/associates/assoc-1/end-shift
 
-curl localhost:8080/healthz
+curl localhost:8080/healthz   # liveness
+curl localhost:8080/readyz    # readiness (503 once graceful shutdown starts)
 ```
 
 Step 7 returns the staffing-gap read model — planned versus active, and the
@@ -136,10 +142,10 @@ go test ./...
 go test ./... -race
 gofmt -l .                      # should print nothing
 
-# Integration tests (build-tagged). Postgres repo tests skip without
-# DATABASE_URL; outbox and Kafka-consumer tests start their own containers
-# via testcontainers (Docker required).
-go test -tags=integration ./...
+# Integration tests (build-tagged). Every one boots its own Postgres (and,
+# where needed, Kafka) via testcontainers (Docker required); none reads
+# DATABASE_URL and none is skip-gated.
+go test -tags=integration ./... -race -count=1
 
 # Gherkin acceptance specs, driven through the real HTTP surface
 go test ./... -run TestFeatures -v

@@ -82,7 +82,9 @@ published-language file (`warehouse-infra/config/process-paths/*.yaml`).
 
 This service publishes `ShiftPlanCommitted` to the shared warehouse-systems
 Kafka broker; `wes-work-planning` projects it into its own
-`LaborPlanObserved` read model, keyed by `path_id`. On the consuming side,
+`LaborPlanObserved` read model, keyed by `path_id`, and `warehouse-planning`'s
+labor-capacity consumer (group `warehouse-planning-labor-capacity`) registers
+it as a labor capacity constraint. On the consuming side,
 the only inbound topics are the two opt-in cache feeds above
 (`kafkacatalog`, `laborperformancecache`); neither writes to Postgres.
 
