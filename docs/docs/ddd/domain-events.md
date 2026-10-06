@@ -28,6 +28,46 @@ names are fixed vocabulary — they appear verbatim in the Go code, in
 | `PathUnderstaffed` | `GetStaffingGap` use case | Active assignments fell short of committed heads | `pathId`, `plannedHeads`, `activeHeads` |
 | `AssociateShiftEnded` | `AssociateShift` | A shift closed, ending all active assignments | `associateId` |
 
+## Wire catalog
+
+Every event is a CloudEvents 1.0 **structured-mode** message
+(`content-type: application/cloudevents+json; charset=UTF-8`), built only by
+`internal/adapters/kafka/cloudevents.New`. `type` and `dataschema` come from
+`internal/adapters/kafka/cloudevents/types.go`; topics, keys and `data`
+fields from `internal/adapters/outbound/kafka/publisher.go` (integration) and
+`analytics_publisher.go` (analytics). `dataschema` is
+`urn:warehouse:workforce-management:<events|analytics>:<EventName>:v1`.
+
+| Full CloudEvents `type` | Topic | Kafka key / `subject` | `data` fields | Producer use case | Known consumers |
+| --- | --- | --- | --- | --- | --- |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.events` (one message per `PathPlan` line) | `<buildingId>/<shiftId>` / same | `building_id`, `shift_id`, `path_id`, `planned_heads`, `planned_rate`, `planned_hours` | `CommitShiftPlan` | `wes-work-planning` (`LaborPlanObserved`), `warehouse-planning` (group `warehouse-planning-labor-capacity`) |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.analytics` (one per commit) | `<buildingId>` / `<buildingId>/<shiftId>` | `building_id`, `shift_id` | `CommitShiftPlan` | acknowledged, not projected, by `cmd/workforce-projector` |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed` | `warehouse.workforce.analytics` | `<pathId>` / same | `building_id`, `path_id`, `planned_heads`, `planned_rate` | `ProposePathPlan` | acknowledged, not projected |
+| `com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed` | `warehouse.workforce.analytics` | `<pathId>` / same | `path_id`, `planned_heads`, `active_heads` | `GetStaffingGap` | `cmd/workforce-projector` → `labor_rollup.understaffing_events` |
+| `com.warehouse.wes.workforce-management.associate.AssociateShiftStarted` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `StartAssociateShift` | projector → `shifts_started` |
+| `com.warehouse.wes.workforce-management.associate.AssociateCertified` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id`, `certification` | `CertifyAssociate` | projector → `certifications` |
+| `com.warehouse.wes.workforce-management.associate.AssociateBreakStarted` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `StartBreak` | projector → `breaks`, `analytics_pending_breaks` |
+| `com.warehouse.wes.workforce-management.associate.AssociateBreakEnded` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `EndBreak` | projector → `break_seconds` |
+| `com.warehouse.wes.workforce-management.associate.AssociateShiftEnded` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `EndAssociateShift` | projector → `shifts_ended` |
+| `com.warehouse.wes.workforce-management.assignment.LaborAssigned` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id`, `path_id` | `AssignLabor` | projector → `labor_assigned` |
+| `com.warehouse.wes.workforce-management.assignment.LaborReassigned` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id`, `from_path_id`, `to_path_id` | `AssignLabor` | projector → `labor_reassigned` (bucketed under `to_path_id`) |
+
+The analytics `data` payloads are deliberately thinner than the domain
+events: `AssociateShiftStarted` drops the certification list. The analytics
+consumer (group `workforce-analytics`) dedupes on the CloudEvents `id`,
+ignores unknown types, and sends anything that fails CloudEvents validation
+or exhausts its retries to `warehouse.workforce.analytics.dlq`
+([ADR 0022](../adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)).
+
+### Events this context consumes
+
+| Full CloudEvents `type` | Topic | Consumer | Enabled by |
+| --- | --- | --- | --- |
+| `com.warehouse.wes.process-path-management.processpath.ProcessPathCreated` | `warehouse.process-path-management.events` | `internal/adapters/outbound/kafkacatalog` (per-process group prefix `workforce-management-process-path-catalogue`) | `PATH_CATALOGUE_SOURCE=kafka` |
+| `com.warehouse.wes.process-path-management.processpath.ProcessPathUpdated` | same | same | same |
+| `com.warehouse.wes.process-path-management.processpath.ProcessPathDeactivated` | same | same | same |
+| `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` | `warehouse.labor-performance.events` | `internal/adapters/outbound/laborperformancecache` (per-process group prefix `workforce-management-labor-performance-cache`) | `LABOR_PERFORMANCE_MODE=kafka-cache` |
+
 ## Which ones leave the process
 
 **One, to other contexts.** The integration Kafka adapter
@@ -59,12 +99,20 @@ flowchart LR
 
   PORT["EventPublisher port"]
 
-  PORT --> LOG["log / buffered publisher<br/>(default, EVENT_PUBLISHER=log)"]
-  PORT --> KAFKA["Kafka publisher<br/>(EVENT_PUBLISHER=kafka)"]
+  PORT --> LOG["log publisher<br/>(default, EVENT_PUBLISHER=log)"]
+  PORT --> KAFKA["outbox_events + relay<br/>(EVENT_PUBLISHER=kafka)"]
 
   KAFKA -->|"ShiftPlanCommitted only,<br/>fanned out per PathPlan line"| TOPIC["warehouse.workforce.events"]
+  KAFKA -->|"all ten"| ATOPIC["warehouse.workforce.analytics"]
   TOPIC --> WP["wes-work-planning<br/>LaborPlanObserved read model"]
+  TOPIC --> PL["warehouse-planning<br/>labor-capacity consumer"]
+  ATOPIC --> PROJ["workforce-projector<br/>labor_rollup"]
 ```
+
+Source: `internal/domain/**`, `internal/application/usecases/*.go`,
+`internal/composition/publisher.go`, `internal/adapters/outbound/kafka/*.go`.
+Omits: the direct (no-outbox) Kafka mode used when no Postgres pool is
+wired, and the DLQ.
 
 `apis/asyncapi.yaml` documents all ten as CloudEvents 1.0 events with their
 exact `type` and `dataschema`. Only `ShiftPlanCommitted` is on the integration

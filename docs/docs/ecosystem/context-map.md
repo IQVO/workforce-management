@@ -10,58 +10,71 @@ description: What is actually wired between this service and its siblings today,
 
 ## What is actually wired today
 
-Solid arrows are live edges with real code on both ends: Kafka topics with a
-real producer and consumer, and synchronous HTTP reads (labelled `GET`).
-Dashed arrows are strategic relationships with **no** implementation. The
-diagram shows this service's own edges plus the sibling edges that give it
-context. It is not the full fleet map.
+This is the ddd-crew [Context Mapping](https://github.com/ddd-crew/context-mapping)
+view of **this context's slice** of the fleet map. Every edge is labelled
+with upstream (U) / downstream (D), the pattern(s), and the technology.
+Every edge has code on both ends. Solid arrows are on in the reference
+deployment (warehouse-infra `terraform/locals.tf`); dotted arrows are
+wired but unused there: the REST labor-performance client, which the
+reference deployment replaces with the `kafka-cache` feed. Every Kafka and
+outbound REST edge is selected by an env var whose service default is off
+(`EVENT_PUBLISHER=log`, `INSTALLED_CAPACITY_MODE=permissive`,
+`LABOR_PERFORMANCE_MODE=permissive`, `PATH_CATALOGUE_SOURCE=file`). There
+are no arrows for deliberately absent relationships — those are listed in
+the table.
+Arrows point from upstream to downstream.
 
 ```mermaid
-flowchart TB
-  classDef core fill:#1f6feb,stroke:#0b3d91,color:#ffffff
-  classDef supporting fill:#238636,stroke:#0f5323,color:#ffffff
-  classDef generic fill:#6e7681,stroke:#3d434b,color:#ffffff
+flowchart LR
+    WFM["workforce-management<br/>Supporting"]
+    WP["wes-work-planning<br/>Core"]
+    PL["warehouse-planning"]
+    FE["fulfillment-execution<br/>Core"]
+    PPM["process-path-management"]
+    LP["labor-performance"]
+    AG["warehouse-ops-agent"]
+    CON["warehouse-console"]
 
-  subgraph WMS["WMS tier — what &amp; where"]
-    INV["inventory-storage<br/><i>Core</i><br/>stock ledger, chaotic stow,<br/>revocable reservations"]
-  end
-
-  subgraph WES["WES tier — who &amp; when"]
-    WFM["<b>workforce-management</b><br/><i>Supporting — this service</i><br/>ShiftPlan, AssociateShift,<br/>LaborAssignment"]
-    WP["wes-work-planning<br/><i>Core — the conductor</i><br/>charge to plan, continuous<br/>release, flow balancing"]
-    FE["fulfillment-execution<br/><i>Core</i><br/>Pick/Pack/SLAM task lifecycle,<br/>pull-based claimNext"]
-  end
-
-  subgraph GEN["Generic subdomain"]
-    FL["facility-layout<br/><i>Generic — Open Host Service</i><br/>Site to Zone to Aisle to LocationSlot"]
-  end
-
-  subgraph SUP["Supporting siblings this service reads from"]
-    PPM["process-path-management<br/>process-path catalogue"]
-    LP["labor-performance<br/>measured rates, idle share"]
-  end
-
-  AG["warehouse-ops-agent<br/>MCP client"]
-
-  FL -- "location reads" --> INV
-  FL -- "travel-distance reads" --> WP
-  FL -- "location reads" --> FE
-
-  WFM -- "warehouse.workforce.events<br/>ShiftPlanCommitted<br/>(one message per PathPlan line)" --> WP
-  INV -- "warehouse.inventory.events<br/>StockReserved, ReservationRevoked" --> WP
-  WP -- "warehouse.work-planning.events<br/>WorkReleased" --> FE
-  FE -- "warehouse.fulfillment.events<br/>TaskCompleted" --> WP
-
-  WFM -- "GET /capacity/{capability}<br/>installed-capacity ceiling on commit" --> FE
-  PPM -- "warehouse.process-path-management.events<br/>(PATH_CATALOGUE_SOURCE=kafka)" --> WFM
-  LP -- "warehouse.labor-performance.events<br/>TaskPerformanceRecorded (kafka-cache)" --> WFM
-  WFM -. "GET /task-types/{taskType}/performance<br/>(LABOR_PERFORMANCE_MODE=http)" .-> LP
-  AG -- "MCP: get_staffing_gap,<br/>propose_path_heads" --> WFM
-
-  class INV,WP,FE core
-  class WFM,PPM,LP supporting
-  class FL generic
+    WFM -- "U to D, C/S + PL<br/>Kafka warehouse.workforce.events<br/>ShiftPlanCommitted, consumer translates" --> WP
+    WFM -- "U to D, C/S + PL<br/>Kafka warehouse.workforce.events<br/>ShiftPlanCommitted" --> PL
+    FE -- "U to D, OHS / CF<br/>REST GET /capacity/capability<br/>INSTALLED_CAPACITY_MODE=http" --> WFM
+    PPM -- "U to D, PL / CF<br/>Kafka ProcessPathCreated, Updated, Deactivated<br/>PATH_CATALOGUE_SOURCE=kafka" --> WFM
+    LP -- "U to D, PL / CF + ACL<br/>Kafka TaskPerformanceRecorded<br/>LABOR_PERFORMANCE_MODE=kafka-cache" --> WFM
+    LP -. "U to D, OHS / CF + ACL<br/>REST GET /task-types/taskType/performance<br/>LABOR_PERFORMANCE_MODE=http" .-> WFM
+    WFM -- "U to D, OHS<br/>MCP get_staffing_gap, propose_path_heads<br/>REST GET /reports/labor" --> AG
+    WFM -- "U to D, OHS<br/>REST via workforce_mfe remote<br/>REST GET /reports/labor" --> CON
 ```
+
+Source: `internal/adapters/outbound/kafka/publisher.go`,
+`internal/adapters/outbound/fulfillmentexecution/client.go`,
+`internal/adapters/outbound/kafkacatalog/consumer.go`,
+`internal/adapters/outbound/laborperformancecache/consumer.go`,
+`internal/adapters/outbound/laborperformance/client.go`,
+`internal/adapters/inbound/mcp/tools.go`, `cmd/workforce/main.go`, and the
+sibling files named in the table. Omits: sibling-to-sibling edges,
+`facility-layout` and `inventory-storage` (no edge, see below), and this
+context's internal analytics topic.
+
+The `fulfillment-execution` edge is drawn solid because the reference
+deployment sets `INSTALLED_CAPACITY_MODE=http`; the service default,
+`permissive`, rejects every commit, so any deployment must opt in.
+
+| Relationship | U/D | Pattern | Technology | Status | Evidence |
+| --- | --- | --- | --- | --- | --- |
+| → `wes-work-planning` | WFM upstream | Customer/Supplier, Published Language; consumer-side translation into `LaborPlanObserved` | Kafka `warehouse.workforce.events`, `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | live when `EVENT_PUBLISHER=kafka` | here: `internal/adapters/outbound/kafka/publisher.go`; there: `wes-work-planning/internal/adapters/inbound/kafka/consumer.go` |
+| → `warehouse-planning` | WFM upstream | Customer/Supplier, Published Language | same topic and type | live when `EVENT_PUBLISHER=kafka` | there: `warehouse-planning/internal/adapters/inbound/kafka/labor_capacity_consumer.go` (group `warehouse-planning-labor-capacity`) |
+| ← `fulfillment-execution` | WFM downstream | Open Host Service upstream, Conformist here | REST `GET /capacity/{capability}`, fail-loud | live in the kind cluster (`INSTALLED_CAPACITY_MODE=http`); service default `permissive` rejects every commit | here: `internal/adapters/outbound/fulfillmentexecution/client.go`; there: `fulfillment-execution/internal/adapters/inbound/http/handlers.go` (`GetInstalledCapacityHandler`) |
+| ← `process-path-management` | WFM downstream | Published Language, Conformist | Kafka `warehouse.process-path-management.events`, `com.warehouse.wes.process-path-management.processpath.ProcessPath{Created,Updated,Deactivated}` | live in the warehouse-infra kind cluster (`deploy_process_path_kafka_source`); service default is `file` | `internal/adapters/outbound/kafkacatalog/consumer.go` |
+| ← `labor-performance` (events) | WFM downstream | Published Language, Conformist + ACL (`taskTypeForPathId`) | Kafka `warehouse.labor-performance.events`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` | live in the kind cluster (`LABOR_PERFORMANCE_MODE=kafka-cache`); service default is `permissive` | `internal/adapters/outbound/laborperformancecache/consumer.go` |
+| ← `labor-performance` (REST) | WFM downstream | Open Host Service upstream, Conformist + ACL here | REST `GET /task-types/{taskType}/performance`, fail-open | wired but unused in the kind cluster (it runs `kafka-cache`) | `internal/adapters/outbound/laborperformance/client.go`; there: `labor-performance/internal/adapters/inbound/http/server.go` |
+| → `warehouse-ops-agent` | WFM upstream | Open Host Service | MCP `get_staffing_gap`, `propose_path_heads`; REST `GET /reports/labor` (+ `/freshness`) | live | there: `internal/adapters/outbound/mcpclient/workforce_management.go`, `internal/adapters/outbound/restclient/reports_clients.go` |
+| → `warehouse-console` | WFM upstream | Open Host Service (presentation composition, not a domain edge) | REST via the `workforce_mfe` remote; REST `GET /reports/labor` | live | there: `src/features/context-reports/workforceManagement.config.tsx`; here: `web/` ([ADR 0011](../adr/0011-adopt-fleet-mfe-console-architecture.md)) |
+| `fulfillment-execution` at the task level | — | **Separate Ways** | none | deliberately absent | [ADR 0002](../adr/0002-stop-at-the-path-boundary.md) |
+| `inventory-storage` | — | **Separate Ways** | none | deliberately absent | no adapter package; see "The WMS tier" below |
+| `facility-layout` | would be WFM downstream | Conformist, unexercised | none | deliberately absent | no adapter package; see below |
+
+Unused surface: the MCP tool `assign_labor` is registered, but no sibling
+calls it in code today.
 
 ## Reading the diagram
 
@@ -80,8 +93,9 @@ ways, each selected by an env var (see [Integration](./integration.md)):
   `PATH_CATALOGUE_SOURCE=kafka`. Otherwise it comes from a file.
 
 In every one of these edges, data flows *into* this service. The only
-callers of this service are read-only: `wes-work-planning` consumes the topic,
-and `warehouse-ops-agent` calls two MCP tools (`get_staffing_gap`,
+callers of this service are read-only: `wes-work-planning` and
+`warehouse-planning` consume the topic, `warehouse-console` reads the labor
+report, and `warehouse-ops-agent` calls two MCP tools (`get_staffing_gap`,
 `propose_path_heads`) and reads the labor report (`GET /reports/labor`). No
 sibling invokes one of this service's commands, so it is still in no Core
 context's write path. The reverse no longer holds, though: `CommitShiftPlan`
