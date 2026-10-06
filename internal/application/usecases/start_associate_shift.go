@@ -29,7 +29,16 @@ type StartAssociateShift struct {
 // otherwise the second call's Save would be rejected as a stale write
 // against a fresh aggregate that always starts at version 1.
 func (uc *StartAssociateShift) Execute(ctx context.Context, associateId shared.AssociateId, certifications []shared.Certification) (*associate.AssociateShift, error) {
-	shift := associate.NewAssociateShift(associateId, certifications, uc.Clock.Now())
+	return uc.ExecuteAtSite(ctx, associateId, certifications, "")
+}
+
+// ExecuteAtSite is Execute plus the optional canonical site the associate
+// works at (ADR 0034). An empty siteCode leaves the site unknown, exactly
+// like Execute. The code is accepted as given -- no lookup or validation
+// against facility-layout. A restart replaces the whole roster entry, site
+// included, just like certifications.
+func (uc *StartAssociateShift) ExecuteAtSite(ctx context.Context, associateId shared.AssociateId, certifications []shared.Certification, siteCode shared.SiteCode) (*associate.AssociateShift, error) {
+	shift := associate.NewAssociateShiftAtSite(associateId, certifications, siteCode, uc.Clock.Now())
 
 	existing, err := uc.Associates.FindByID(ctx, associateId)
 	switch {

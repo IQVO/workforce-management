@@ -89,6 +89,12 @@ var analyticsGoldenCases = []analyticsGoldenCase{
 		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1","time":"2026-01-02T03:04:05Z","data":{"active_heads":3,"path_id":"pack","planned_heads":5}}`,
 	},
 	{
+		name:   "PathUnderstaffed scoped to a site (additive site_code, ADR 0034)",
+		event:  shared.NewPathUnderstaffedAtSite(goldenAt, "pack", 5, 3, "WH1"),
+		key:    "pack",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:PathUnderstaffed:v1","time":"2026-01-02T03:04:05Z","data":{"active_heads":3,"path_id":"pack","planned_heads":5,"site_code":"WH1"}}`,
+	},
+	{
 		name:   "ShiftPlanProposed",
 		event:  shared.NewShiftPlanProposed(goldenAt, "b1", "pack", 4, 10.5),
 		key:    "pack",

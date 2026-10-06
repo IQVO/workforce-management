@@ -64,6 +64,7 @@ type staffingGapInput struct {
 	BuildingId string `json:"buildingId" jsonschema:"the building whose committed shift plan holds this path"`
 	ShiftId    string `json:"shiftId" jsonschema:"the shift whose committed plan to read the gap from"`
 	PathId     string `json:"pathId" jsonschema:"the process path to measure planned-vs-active heads for (e.g. pack, pick, stow)"`
+	SiteCode   string `json:"siteCode,omitempty" jsonschema:"optional canonical site code (the facility-layout Site code, e.g. WH1); when given, count only associates with an active shift at that site, otherwise count across every site"`
 }
 
 func (d Deps) getStaffingGap(ctx context.Context, in staffingGapInput) (staffingGap, error) {
@@ -73,7 +74,7 @@ func (d Deps) getStaffingGap(ctx context.Context, in staffingGapInput) (staffing
 	if err := d.validatePathId(in.PathId); err != nil {
 		return staffingGap{}, err
 	}
-	gap, err := d.GetStaffingGap.Execute(ctx, in.BuildingId, in.ShiftId, shared.PathId(in.PathId))
+	gap, err := d.GetStaffingGap.ExecuteForSite(ctx, in.BuildingId, in.ShiftId, shared.PathId(in.PathId), shared.NewSiteCode(in.SiteCode))
 	if err != nil {
 		return staffingGap{}, err
 	}

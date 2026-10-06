@@ -40,7 +40,17 @@ type ShiftPlanRepo interface {
 type AssignmentRepo interface {
 	Save(ctx context.Context, la *assignment.LaborAssignment) error
 	FindByAssociateID(ctx context.Context, id shared.AssociateId) (*assignment.LaborAssignment, error)
+	// CountActiveByPath counts active assignments to pathId across EVERY
+	// site, legacy no-site associates included (the unscoped, fleet-wide
+	// count).
 	CountActiveByPath(ctx context.Context, pathId shared.PathId) (int, error)
+	// CountActiveByPathAtSite counts active assignments to pathId whose
+	// associate has a not-ended shift at siteCode (ADR 0034). An associate
+	// with no recorded site (legacy row) never matches any siteCode, so
+	// such associates count only in CountActiveByPath. An empty siteCode
+	// matches nothing; callers wanting the unscoped count call
+	// CountActiveByPath instead.
+	CountActiveByPathAtSite(ctx context.Context, pathId shared.PathId, siteCode shared.SiteCode) (int, error)
 }
 
 // MeasuredRateClient queries labor-performance for a real, measured mean

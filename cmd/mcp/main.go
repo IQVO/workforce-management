@@ -86,10 +86,11 @@ type repos struct {
 func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsDatabaseURL, migrationsPath string) (repos, func(), error) {
 	if databaseURL == "" {
 		logger.Info("database url not configured; using in-memory adapters")
+		associates := memory.NewAssociateRepo()
 		return repos{
-			associates:  memory.NewAssociateRepo(),
+			associates:  associates,
 			shiftPlans:  memory.NewShiftPlanRepo(),
-			assignments: memory.NewAssignmentRepo(),
+			assignments: memory.NewAssignmentRepo().WithAssociates(associates),
 		}, func() {}, nil
 	}
 	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP
