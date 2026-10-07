@@ -5,8 +5,13 @@ package http
 
 import "github.com/claudioed/workforce-management/internal/application/usecases"
 
+// startShiftRequest's siteCode is OPTIONAL (ADR 0034): the canonical Site
+// code (the facility-layout Site code, e.g. "WH1") the associate works at
+// for this shift. Omitted/blank leaves the site unknown; the code is
+// accepted as given, never validated against facility-layout.
 type startShiftRequest struct {
 	Certifications []string `json:"certifications"`
+	SiteCode       string   `json:"siteCode,omitempty"`
 }
 
 type certifyRequest struct {
@@ -87,6 +92,8 @@ type assignmentResponse struct {
 // [0, 1]. ObservedIdlePct is the original, misleadingly named field: it
 // carries the SAME fraction (not a 0-100 percentage) and is kept,
 // deprecated, so existing consumers keep working (ADR-0033).
+// SiteCode is echoed only when the gap was scoped to one site (ADR 0034);
+// omitted means the gap is unscoped, i.e. fleet-wide.
 type staffingGapResponse struct {
 	PathId            string   `json:"pathId"`
 	PlannedHeads      int      `json:"plannedHeads"`
@@ -95,6 +102,7 @@ type staffingGapResponse struct {
 	ObservedIdleShare *float64 `json:"observedIdleShare,omitempty"`
 	// Deprecated: use ObservedIdleShare; same fraction value.
 	ObservedIdlePct *float64 `json:"observedIdlePct,omitempty"`
+	SiteCode        string   `json:"siteCode,omitempty"`
 }
 
 func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
@@ -105,6 +113,7 @@ func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
 		Understaffed:      g.Understaffed,
 		ObservedIdleShare: g.ObservedIdlePct,
 		ObservedIdlePct:   g.ObservedIdlePct,
+		SiteCode:          string(g.SiteCode),
 	}
 }
 

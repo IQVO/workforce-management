@@ -15,9 +15,11 @@ paths:
   ONE per building per shift. Contains PathPlan lines: path, plannedHeads,
   plannedRate, plannedHours. Committed by a human; the software proposes
   (charge per path / planned rate = heads needed), a human commits it.
-- **AssociateShift** — who is on, their certifications, their breaks. Owned
-  here, referenced everywhere else (e.g. Fulfillment Execution reads
-  certifications to gate station claims, but never writes here).
+- **AssociateShift** — who is on, their certifications, their breaks, and
+  optionally the canonical Site code they work at (`siteCode`, the
+  facility-layout Site code; ADR-0034). Owned here, referenced everywhere else
+  (e.g. Fulfillment Execution reads certifications to gate station claims, but
+  never writes here).
 - **LaborAssignment** — one associate on one path for an interval. INVARIANT:
   exactly one ACTIVE assignment per associate at a time. The assignment MUST
   satisfy the path's certification requirement (reject if uncertified).
@@ -33,7 +35,9 @@ paths:
   station-capability level for individual task claims — different bounded
   context, different mechanism, same real-world concern.
 - **PathUnderstaffed** — a flag, not a decision: plannedHeads(path) not
-  currently met by active assignments. Surfacing the gap, not moving anyone,
+  currently met by active assignments (optionally scoped to one Site: the event
+  carries an optional `site_code`, omitted when the query was unscoped; a
+  consumer treats absence as "fleet-wide", ADR-0034). Surfacing the gap, not moving anyone,
   is this context's job — moving people is a human call recorded via
   AssignLabor.
 - What this context explicitly does NOT do: it does not link an associate to
@@ -85,7 +89,7 @@ raised and consumed in-process.
 
 ## Use cases (application layer, `internal/application/usecases/`)
 
-1. `StartAssociateShift(associateId, certifications) -> AssociateShift`
+1. `StartAssociateShift(associateId, certifications, siteCode?) -> AssociateShift`
 2. `CertifyAssociate(associateId, certification)` — adds a certification
 3. `ProposePathPlan(buildingId, charge-per-path, plannedRate) -> proposed heads`
    — pure computation: `heads = ceil(charge / resolvedRate)`; does not commit.
@@ -98,8 +102,12 @@ raised and consumed in-process.
 5. `AssignLabor(associateId, pathId) -> LaborAssignment` — validates
    certification, ends any prior active assignment for this associate.
 6. `StartBreak(associateId)` / `EndBreak(associateId)`
-7. `GetStaffingGap(pathId) -> plannedHeads vs activeAssignments` read model;
-   may raise `PathUnderstaffed`.
+7. `GetStaffingGap(pathId, siteCode?) -> plannedHeads vs activeAssignments` read
+   model; may raise `PathUnderstaffed`. With `siteCode` only assignments of
+   associates whose active shift is at that Site count; without it, all do
+   (legacy rows with no site count only unscoped, ADR-0034). `buildingId` (the
+   ShiftPlan key) and `siteCode` are NOT yet mapped to each other: callers pass
+   a consistent pair.
 8. `EndAssociateShift(associateId)` — closes all active assignments, raises
    `AssociateShiftEnded`.
 
@@ -107,18 +115,18 @@ raised and consumed in-process.
 
 | Method | Path | Use case |
 |---|---|---|
-| POST | `/associates/{id}/start-shift` | StartAssociateShift |
+| POST | `/associates/{id}/start-shift` | StartAssociateShift (optional `siteCode`, ADR-0034) |
 | POST | `/associates/{id}/certifications` | CertifyAssociate |
 | POST | `/paths/{pathId}/plan/propose` | ProposePathPlan |
 | POST | `/shift-plans` | CommitShiftPlan (requires `Idempotency-Key`, ADR-0027) |
 | POST | `/associates/{id}/assignments` | AssignLabor (requires `Idempotency-Key`, ADR-0027) |
 | POST | `/associates/{id}/break/start` | StartBreak |
 | POST | `/associates/{id}/break/end` | EndBreak |
-| GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap |
-| GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029) |
+| GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap (optional `siteCode`) |
+| GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029; optional `siteCode`) |
 | POST | `/associates/{id}/end-shift` | EndAssociateShift |
 | GET | `/healthz` | liveness |
-| GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); not in `apis/openapi.yaml` |
+| GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); declared in `apis/openapi.yaml` |
 
 All bodies are JSON. Every error response is RFC 7807
 `application/problem+json` (ADR-0005): `type` identifies the error CATEGORY

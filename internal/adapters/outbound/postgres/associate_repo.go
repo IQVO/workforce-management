@@ -30,17 +30,25 @@ func NewAssociateRepo(pool *pgxpool.Pool) *AssociateRepo {
 // re-fetch and retry, not blindly re-Save the same in-memory aggregate.
 func (r *AssociateRepo) Save(ctx context.Context, a *associate.AssociateShift) error {
 	certs := certsToStrings(a.Certifications())
+	// An unknown site is stored as NULL (never ''), so legacy rows and
+	// no-site starts are indistinguishable and neither matches any site.
+	var siteCode *string
+	if !a.SiteCode().IsUnscoped() {
+		s := string(a.SiteCode())
+		siteCode = &s
+	}
 	tag, err := querierFrom(ctx, r.pool).Exec(ctx, `
-		INSERT INTO associate_shift (associate_id, certifications, on_break, hours_logged, ended, version)
-		VALUES ($1, $2, $3, $4, $5, 1)
+		INSERT INTO associate_shift (associate_id, certifications, on_break, hours_logged, ended, version, site_code)
+		VALUES ($1, $2, $3, $4, $5, 1, $7)
 		ON CONFLICT (associate_id) DO UPDATE SET
 			certifications = EXCLUDED.certifications,
 			on_break = EXCLUDED.on_break,
 			hours_logged = EXCLUDED.hours_logged,
 			ended = EXCLUDED.ended,
+			site_code = EXCLUDED.site_code,
 			version = associate_shift.version + 1
 		WHERE associate_shift.version = $6
-	`, string(a.AssociateId()), certs, a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version())
+	`, string(a.AssociateId()), certs, a.IsOnBreak(), a.HoursLogged(), a.Ended(), a.Version(), siteCode)
 	if err != nil {
 		return err
 	}
@@ -59,20 +67,25 @@ func (r *AssociateRepo) FindByID(ctx context.Context, id shared.AssociateId) (*a
 	var onBreak, ended bool
 	var hoursLogged float64
 	var version int
+	var siteCode *string
 
 	row := querierFrom(ctx, r.pool).QueryRow(ctx, `
-		SELECT certifications, on_break, hours_logged, ended, version
+		SELECT certifications, on_break, hours_logged, ended, version, site_code
 		FROM associate_shift WHERE associate_id = $1
 	`, string(id))
 
-	if err := row.Scan(&certs, &onBreak, &hoursLogged, &ended, &version); err != nil {
+	if err := row.Scan(&certs, &onBreak, &hoursLogged, &ended, &version, &siteCode); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ports.ErrNotFound
 		}
 		return nil, err
 	}
 
-	return associate.Rehydrate(id, stringsToCerts(certs), onBreak, hoursLogged, ended, version), nil
+	var site shared.SiteCode
+	if siteCode != nil {
+		site = shared.SiteCode(*siteCode)
+	}
+	return associate.RehydrateAtSite(id, stringsToCerts(certs), onBreak, hoursLogged, ended, version, site), nil
 }
 
 func certsToStrings(certs []shared.Certification) []string {

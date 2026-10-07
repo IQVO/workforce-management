@@ -33,10 +33,11 @@ type fixtures struct {
 }
 
 func newFixtures() *fixtures {
+	associates := memory.NewAssociateRepo()
 	return &fixtures{
-		associates:  memory.NewAssociateRepo(),
+		associates:  associates,
 		shiftPlans:  memory.NewShiftPlanRepo(),
-		assignments: memory.NewAssignmentRepo(),
+		assignments: memory.NewAssignmentRepo().WithAssociates(associates),
 		pub:         events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil))),
 		clock:       &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)},
 	}

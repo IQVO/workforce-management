@@ -151,14 +151,25 @@ type PathUnderstaffed struct {
 	PathId       PathId
 	PlannedHeads int
 	ActiveHeads  int
+	// SiteCode is the canonical site the gap was computed for. Empty means
+	// the gap was computed fleet-wide (unscoped); consumers must treat the
+	// absence of a site as "unscoped", never as a particular site (ADR 0034).
+	SiteCode SiteCode
 }
 
 // EventName implements DomainEvent.
 func (PathUnderstaffed) EventName() string { return "PathUnderstaffed" }
 
-// NewPathUnderstaffed constructs a PathUnderstaffed event.
+// NewPathUnderstaffed constructs an unscoped (fleet-wide) PathUnderstaffed event.
 func NewPathUnderstaffed(at time.Time, pathId PathId, plannedHeads, activeHeads int) PathUnderstaffed {
-	return PathUnderstaffed{baseEvent{at}, pathId, plannedHeads, activeHeads}
+	return NewPathUnderstaffedAtSite(at, pathId, plannedHeads, activeHeads, "")
+}
+
+// NewPathUnderstaffedAtSite constructs a PathUnderstaffed event for a gap
+// computed against one site's staff only. An empty siteCode is the unscoped
+// event, identical to NewPathUnderstaffed.
+func NewPathUnderstaffedAtSite(at time.Time, pathId PathId, plannedHeads, activeHeads int, siteCode SiteCode) PathUnderstaffed {
+	return PathUnderstaffed{baseEvent{at}, pathId, plannedHeads, activeHeads, siteCode}
 }
 
 // AssociateShiftEnded is raised when an associate's shift closes, ending all

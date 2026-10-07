@@ -64,9 +64,9 @@ sequenceDiagram
     actor Lead as Shift lead
     participant WFM as workforce-management
     participant AN as workforce analytics projector
-    Agent->>WFM: qry: MCP get_staffing_gap
-    WFM-->>AN: evt: PathUnderstaffed, only when activeHeads below plannedHeads
-    WFM-->>Agent: plannedHeads, activeHeads, understaffed
+    Agent->>WFM: qry: MCP get_staffing_gap, optional siteCode
+    WFM-->>AN: evt: PathUnderstaffed, only when activeHeads below plannedHeads, site_code only when scoped
+    WFM-->>Agent: plannedHeads, activeHeads, understaffed, siteCode when scoped
     Agent->>WFM: qry: MCP propose_path_heads
     WFM-->>AN: evt: ShiftPlanProposed
     WFM-->>Agent: proposedHeads
@@ -94,7 +94,7 @@ sequenceDiagram
     participant AN as workforce-projector
     participant RP as workforce-reports
     participant Con as warehouse-console
-    Lead->>WFM: cmd: POST /associates/id/start-shift
+    Lead->>WFM: cmd: POST /associates/id/start-shift, optional siteCode
     WFM-->>AN: evt: AssociateShiftStarted
     Lead->>WFM: cmd: POST /associates/id/certifications
     WFM-->>AN: evt: AssociateCertified

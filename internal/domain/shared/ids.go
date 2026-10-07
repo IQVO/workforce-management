@@ -3,7 +3,10 @@
 // the domain event envelope.
 package shared
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // AssociateId identifies a single associate.
 type AssociateId string
@@ -15,6 +18,24 @@ type PathId string
 // "hazmat", "pick"). An associate untrained on a path cannot be assigned to
 // it.
 type Certification string
+
+// SiteCode is the canonical Site identifier of the fleet: the facility-layout
+// Site code (e.g. "WH1", "SIM1") that warehouse-planning also carries as
+// `site_id`. It is OPTIONAL in this context -- the empty SiteCode means
+// "unscoped / site unknown" (every legacy row and every caller that does
+// not send one). The value is accepted as given: this context keeps its
+// data local and never validates it against facility-layout (ADR 0034).
+type SiteCode string
+
+// NewSiteCode builds a SiteCode from caller input. Surrounding whitespace is
+// trimmed; a blank value becomes the empty (unscoped) SiteCode. No case
+// normalisation and no format check: the code is accepted as given.
+func NewSiteCode(v string) SiteCode {
+	return SiteCode(strings.TrimSpace(v))
+}
+
+// IsUnscoped reports whether no site is known (the empty SiteCode).
+func (s SiteCode) IsUnscoped() bool { return s == "" }
 
 // ErrEmptyAssociateId is returned when an AssociateId is constructed empty.
 var ErrEmptyAssociateId = errors.New("associate id must not be empty")

@@ -49,7 +49,9 @@ and it never decides who moves — that is a human call it records.
 - **Enforcer** — rejects an uncertified, on-break, ended-shift or
   over-capacity request; the rules are the point of the context.
 - **Analysis / gap detector** — `GetStaffingGap` compares plan against
-  active heads and raises `PathUnderstaffed` as a flag, never as an action.
+  active heads (fleet-wide, or one canonical site when `siteCode` is given,
+  [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) and raises
+  `PathUnderstaffed` as a flag, never as an action.
 - **Draft producer** — `ProposePathPlan` computes a headcount proposal that a
   human may or may not commit.
 
@@ -57,15 +59,15 @@ and it never decides who moves — that is a human call it records.
 
 | Collaborator | Message | Type | Channel | Relationship |
 | --- | --- | --- | --- | --- |
-| Shift lead (console `workforce_mfe`, curl) | StartAssociateShift | Command | `POST /associates/{id}/start-shift` | OHS (REST, OpenAPI) |
+| Shift lead (console `workforce_mfe`, curl) | StartAssociateShift | Command | `POST /associates/{id}/start-shift` (optional `siteCode`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) | OHS (REST, OpenAPI) |
 | Shift lead | CertifyAssociate | Command | `POST /associates/{id}/certifications` | OHS |
 | Shift lead | ProposePathPlan | Command (pure computation; publishes `ShiftPlanProposed`) | `POST /paths/{pathId}/plan/propose` | OHS |
 | Shift lead | CommitShiftPlan | Command | `POST /shift-plans` (requires `Idempotency-Key`) | OHS |
 | Shift lead | AssignLabor | Command | `POST /associates/{id}/assignments` (requires `Idempotency-Key`) | OHS |
 | Shift lead | StartBreak / EndBreak | Command | `POST /associates/{id}/break/start`, `POST /associates/{id}/break/end` | OHS |
 | Shift lead | EndAssociateShift | Command | `POST /associates/{id}/end-shift` | OHS |
-| Shift lead, console | GetStaffingGap | Query | `GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`, `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | OHS |
-| `warehouse-ops-agent` | get_staffing_gap | Query | MCP tool `get_staffing_gap` (`cmd/mcp`) | OHS (MCP) |
+| Shift lead, console | GetStaffingGap | Query | `GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=[&siteCode=]`, `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap[?siteCode=]` | OHS |
+| `warehouse-ops-agent` | get_staffing_gap | Query | MCP tool `get_staffing_gap` (`cmd/mcp`; optional `siteCode`) | OHS (MCP) |
 | `warehouse-ops-agent` | propose_path_heads | Command (pure computation) | MCP tool `propose_path_heads` | OHS (MCP) |
 | MCP host / model | assign_labor | Command | MCP tool `assign_labor` (registered; no sibling calls it in code today) | OHS (MCP) |
 | MCP host / model | get_workforce_labor_report | Query | MCP tool `get_workforce_labor_report` (only when `REPORTS_BASE_URL` is set) | OHS (MCP) |
@@ -142,10 +144,23 @@ Top terms: **ShiftPlan**, **PathPlan**, **AssociateShift**,
   or stay a read-model flag? Today it is analytics-only
   ([Domain events](./domain-events.md)).
 - The measured-rate fallback feeds `meanActualSeconds` (seconds per task),
-  converted to a per-head hourly rate (`3600 / seconds`, assuming one task is
-  one unit of charge), into the same `ceil(charge / plannedRate)` arithmetic
+  converted to a per-head hourly rate (`3600 / seconds`, one task is one unit
+  of charge) into the same `ceil(charge / plannedRate)` arithmetic
   as a caller's rate ([ADR 0033](../adr/0033-docs-audit-corrections-2026-10.md)).
-  Open: is one labor-performance task always one unit of `charge`?
+  **Verified 2026-10-06 (resolved, no longer open):** in wes-work-planning a
+  `WorkUnit` carries no quantity (`id`, `pathId`, `cpt`, `reference`, `sku`,
+  `giftWrap`, state, timestamps); one `WorkReleased` makes
+  fulfillment-execution's Kafka consumer call `CreateTask` exactly once
+  (`internal/adapters/inbound/kafka/consumer.go`); and the charge forecast's
+  quantity counts those units. So 1 work unit = 1 task = 1 unit of charge and
+  `3600 / MeanActualSeconds` is correct — no unit factor is needed (ADR 0033
+  is unchanged).
+- **Decided 2026-10-06 — staffing gap by site (resolved, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)):**
+  the gap used to count active assignments across every building. It is now
+  optionally scoped to a canonical site (`siteCode`); unscoped callers and
+  legacy rows behave as before.
+- **Decided 2026-10-06 — `domain_event` table:** legacy, unused; retained
+  (additive migrations only; dropping needs explicit approval).
 - `PathDefinition.DestinationLocationRole` is carried from
   `process-path-management` but nothing here branches on it yet.
 - `cmd/mcp` keeps per-process MCP session state, so it is not horizontally

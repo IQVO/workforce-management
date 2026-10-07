@@ -49,7 +49,7 @@ func newHarness(t *testing.T) *harness {
 	t.Helper()
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
-	assignments := memory.NewAssignmentRepo()
+	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
 	publisher := events.NewLogPublisher(nil)
 	clk := fixedClock{now: base}
 	const maxHours = 10.0

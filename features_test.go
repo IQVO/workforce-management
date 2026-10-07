@@ -95,7 +95,7 @@ func (r stationRegistry) InstalledCapacity(_ context.Context, capability shared.
 func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient) *httptest.Server {
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
-	assignments := memory.NewAssignmentRepo()
+	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
 	pub := events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
 	catalogue := fleetCatalogue()
@@ -359,6 +359,21 @@ func (w *world) associateShiftStartedWithoutCertifications(ctx context.Context, 
 	return w.associateShiftStartedWithCertifications(ctx, associateId, "")
 }
 
+// associateShiftStartedAtSite starts a shift with the optional canonical
+// siteCode (ADR 0034).
+func (w *world) associateShiftStartedAtSite(ctx context.Context, associateId, siteCode, certs string) error {
+	list := []string{}
+	for _, c := range strings.Split(certs, ",") {
+		if trimmed := strings.TrimSpace(c); trimmed != "" {
+			list = append(list, trimmed)
+		}
+	}
+	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/start-shift", map[string]any{"certifications": list, "siteCode": siteCode}); err != nil {
+		return err
+	}
+	return w.expectStatus(http.StatusCreated)
+}
+
 func (w *world) associateIsCertifiedFor(ctx context.Context, associateId, certification string) error {
 	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/certifications", map[string]any{"certification": certification}); err != nil {
 		return err
@@ -402,6 +417,10 @@ func (w *world) associateEndsTheBreak(ctx context.Context, associateId string) e
 
 func (w *world) staffingGapIsRequested(ctx context.Context, pathId, buildingId, shiftId string) error {
 	return w.do(ctx, http.MethodGet, fmt.Sprintf("/paths/%s/staffing-gap?buildingId=%s&shiftId=%s", pathId, buildingId, shiftId), nil)
+}
+
+func (w *world) staffingGapIsRequestedAtSite(ctx context.Context, pathId, buildingId, shiftId, siteCode string) error {
+	return w.do(ctx, http.MethodGet, fmt.Sprintf("/paths/%s/staffing-gap?buildingId=%s&shiftId=%s&siteCode=%s", pathId, buildingId, shiftId, siteCode), nil)
 }
 
 func (w *world) associateEndsTheirShift(ctx context.Context, associateId string) error {
@@ -643,6 +662,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	// Given
 	sc.Step(`^an AssociateShift is started for associate "([^"]*)" with certifications "([^"]*)"$`, w.associateShiftStartedWithCertifications)
 	sc.Step(`^an AssociateShift is started for associate "([^"]*)" with no certifications$`, w.associateShiftStartedWithoutCertifications)
+	sc.Step(`^an AssociateShift is started for associate "([^"]*)" at site "([^"]*)" with certifications "([^"]*)"$`, w.associateShiftStartedAtSite)
 	sc.Step(`^associate "([^"]*)" is certified for "([^"]*)"$`, w.associateIsCertifiedFor)
 	sc.Step(`^a ShiftPlan is committed for building "([^"]*)" shift "([^"]*)" with lines:$`, w.shiftPlanIsCommitted)
 	sc.Step(`^associate "([^"]*)" has started a break$`, w.associateHasStartedABreak)
@@ -657,6 +677,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^associate "([^"]*)" ends the break$`, w.associateEndsTheBreak)
 	sc.Step(`^associate "([^"]*)" ends their shift$`, w.associateEndsTheirShift)
 	sc.Step(`^the staffing gap for path "([^"]*)" is requested for building "([^"]*)" shift "([^"]*)"$`, w.staffingGapIsRequested)
+	sc.Step(`^the staffing gap for path "([^"]*)" is requested for building "([^"]*)" shift "([^"]*)" at site "([^"]*)"$`, w.staffingGapIsRequestedAtSite)
 	sc.Step(`^a path plan is proposed for path "([^"]*)" building "([^"]*)" with charge (\d+) and planned rate (\d+)$`, w.pathPlanIsProposed)
 
 	// Then

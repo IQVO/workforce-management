@@ -43,8 +43,10 @@ classDiagram
         -onBreak bool
         -hoursLogged float64
         -ended bool
+        -siteCode SiteCode
         -version int
         +NewAssociateShift(associateId, certifications, at) AssociateShift
+        +NewAssociateShiftAtSite(associateId, certifications, siteCode, at) AssociateShift
         +Certify(c, at) error
         +StartBreak(at) error
         +EndBreak(at) error
@@ -91,6 +93,11 @@ classDiagram
         <<ValueObject>>
         string
     }
+    class SiteCode {
+        <<ValueObject>>
+        string, empty = unscoped
+        +IsUnscoped() bool
+    }
     class Catalogue {
         <<Entity>>
         -defs PathDefinition[]
@@ -108,6 +115,7 @@ classDiagram
     PathPlan --> PathId
     AssociateShift *-- "0..*" Certification
     AssociateShift --> AssociateId
+    AssociateShift --> "0..1" SiteCode : works at (ADR 0034)
     LaborAssignment *-- "0..1" Interval : active
     LaborAssignment *-- "0..*" Interval : history
     LaborAssignment --> AssociateId
@@ -122,7 +130,7 @@ Source: `internal/domain/shiftplan/shift_plan.go`,
 `internal/domain/shared/ids.go`, `internal/domain/pathcatalog/path_definition.go`.
 Omits: getters that only expose a field (`BuildingId`, `ShiftId`,
 `AssociateId`, `Version`, `IsOnBreak`, `HoursLogged`, `Ended`,
-`Certifications`, `ActiveInterval`, `History`), every `Rehydrate`
+`Certifications`, `ActiveInterval`, `History`), every `Rehydrate` / `RehydrateAtSite`
 constructor, the private `record`/`closeActive` helpers, the `New*`
 validating constructors of the string value objects, and the free function
 `shiftplan.ProposedHeads(charge, plannedRate)`. `Catalogue` is marked
@@ -158,6 +166,7 @@ classDiagram
         PathId PathId
         PlannedHeads int
         ActiveHeads int
+        SiteCode SiteCode optional
     }
     class AssociateShiftStarted {
         <<DomainEvent>>
@@ -229,6 +238,7 @@ classDiagram
         +Save(ctx, la) error
         +FindByAssociateID(ctx, id) LaborAssignment
         +CountActiveByPath(ctx, pathId) int
+        +CountActiveByPathAtSite(ctx, pathId, siteCode) int
     }
     class EventPublisher {
         <<interface>>

@@ -172,13 +172,20 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 				"to_path_id":   string(ev.ToPathId),
 			})}, true
 	case shared.PathUnderstaffed:
+		data := map[string]any{
+			"path_id":       string(ev.PathId),
+			"planned_heads": ev.PlannedHeads,
+			"active_heads":  ev.ActiveHeads,
+		}
+		// site_code is ADDITIVE on the v1 payload (ADR 0034): present only
+		// when the gap was computed for one site, omitted for an unscoped
+		// (fleet-wide) gap. Consumers must treat absence as "unscoped".
+		if !ev.SiteCode.IsUnscoped() {
+			data["site_code"] = string(ev.SiteCode)
+		}
 		return analyticsEvent{entity: cloudevents.EntityShiftPlan, eventName: ev.EventName(),
 			key: string(ev.PathId), subject: string(ev.PathId),
-			data: mustMarshal(map[string]any{
-				"path_id":       string(ev.PathId),
-				"planned_heads": ev.PlannedHeads,
-				"active_heads":  ev.ActiveHeads,
-			})}, true
+			data: mustMarshal(data)}, true
 	case shared.ShiftPlanProposed:
 		return analyticsEvent{entity: cloudevents.EntityShiftPlan, eventName: ev.EventName(),
 			key: string(ev.PathId), subject: string(ev.PathId),
