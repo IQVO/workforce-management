@@ -37,7 +37,8 @@ Entity segments: `shiftplan` (ShiftPlanCommitted/Proposed, PathUnderstaffed),
 `associate` (AssociateShift*/Break*/Certified), `assignment`
 (LaborAssigned/Reassigned). `ShiftPlanCommitted` is fanned out one message per
 `PathPlan` line, each with its own `id`; `subject` = Kafka key =
-`<buildingId>/<shiftId>`. Exact type strings live in
+`<siteCode>/<shiftId>` (unchanged value; the first segment is the site code,
+formerly the building id, ADR-0035). Exact type strings live in
 `internal/adapters/kafka/cloudevents/types.go`.
 
 See also `integrations.md` (example payload, outbox, consumers).

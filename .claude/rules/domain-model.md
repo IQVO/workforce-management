@@ -12,7 +12,8 @@ paths:
 ## Ubiquitous Language (use these exact names — do not invent synonyms)
 
 - **ShiftPlan** — the committed split of headcount across paths for one shift.
-  ONE per building per shift. Contains PathPlan lines: path, plannedHeads,
+  ONE per Site per shift (keyed by `siteCode` + `shiftId`; `buildingId` is the
+  deprecated alias of `siteCode`, same value, same column, ADR-0035). Contains PathPlan lines: path, plannedHeads,
   plannedRate, plannedHours. Committed by a human; the software proposes
   (charge per path / planned rate = heads needed), a human commits it.
 - **AssociateShift** — who is on, their certifications, their breaks, and
@@ -70,10 +71,10 @@ Design decisions worth calling out:
 - **Path → required certification is a naming convention**, not a separate
   concept: a path's required certification is the `Certification` with the
   same name as its `PathId` (path `"pack"` requires certification `"pack"`).
-- **`GetStaffingGap` takes `buildingId`/`shiftId` as query parameters**
-  (`GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`) because
-  `ShiftPlan` is keyed by building + shift, and a path's planned heads only
-  make sense within one committed plan.
+- **`GetStaffingGap` takes `siteCode`/`shiftId` as query parameters**
+  (`GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=`; `buildingId` is the
+  deprecated alias, ADR-0035) because `ShiftPlan` is keyed by site + shift, and
+  a path's planned heads only make sense within one committed plan.
 - **`PathPlan.plannedHours <= plannedHeads * maxHoursPerShift`** is how "sum
   of hours valid" is enforced on `ShiftPlan`.
 
@@ -91,12 +92,12 @@ raised and consumed in-process.
 
 1. `StartAssociateShift(associateId, certifications, siteCode?) -> AssociateShift`
 2. `CertifyAssociate(associateId, certification)` — adds a certification
-3. `ProposePathPlan(buildingId, charge-per-path, plannedRate) -> proposed heads`
+3. `ProposePathPlan(siteCode, charge-per-path, plannedRate) -> proposed heads`
    — pure computation: `heads = ceil(charge / resolvedRate)`; does not commit.
    `plannedRate` is optional — omit it (or send `<= 0`) to fall back to a
    real measured rate from labor-performance (ADR-0012); response includes
    `resolvedRate` + `rateSource` (`"caller"` or `"measured"`).
-4. `CommitShiftPlan(buildingId, pathPlans) -> ShiftPlan` — validates
+4. `CommitShiftPlan(siteCode, pathPlans) -> ShiftPlan` — validates
    `plannedHeads <= installedStations` AND `plannedHeads <= live installed
    capacity`; a human-initiated commit, not automatic.
 5. `AssignLabor(associateId, pathId) -> LaborAssignment` — validates
@@ -105,9 +106,14 @@ raised and consumed in-process.
 7. `GetStaffingGap(pathId, siteCode?) -> plannedHeads vs activeAssignments` read
    model; may raise `PathUnderstaffed`. With `siteCode` only assignments of
    associates whose active shift is at that Site count; without it, all do
-   (legacy rows with no site count only unscoped, ADR-0034). `buildingId` (the
-   ShiftPlan key) and `siteCode` are NOT yet mapped to each other: callers pass
-   a consistent pair.
+   (legacy rows with no site count only unscoped, ADR-0034). `siteCode` is both
+   the plan key and the scope (ADR-0035). A call giving only the legacy
+   `buildingId` is NOT auto-scoped. A differing `siteCode`+`buildingId` pair is
+   422 `conflicting-site-and-building` on every surface EXCEPT the three
+   staffing-gap reads, which keep ADR-0034's pair (`buildingId` = plan key,
+   `siteCode` = scope) for the whole deprecation window, because it is the only
+   way to site-scope plans still stored under a legacy id such as `bldg-1`.
+   Removing `buildingId` is a later, breaking ADR.
 8. `EndAssociateShift(associateId)` — closes all active assignments, raises
    `AssociateShiftEnded`.
 
@@ -123,7 +129,8 @@ raised and consumed in-process.
 | POST | `/associates/{id}/break/start` | StartBreak |
 | POST | `/associates/{id}/break/end` | EndBreak |
 | GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap (optional `siteCode`) |
-| GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029; optional `siteCode`) |
+| GET | `/sites/{siteCode}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029; canonical, ADR-0035) |
+| GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | DEPRECATED alias of the route above (answers `Deprecation: true`; removed only by a later ADR) |
 | POST | `/associates/{id}/end-shift` | EndAssociateShift |
 | GET | `/healthz` | liveness |
 | GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); declared in `apis/openapi.yaml` |
