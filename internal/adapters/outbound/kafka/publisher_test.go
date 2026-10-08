@@ -58,6 +58,11 @@ func assertCommittedLineEvent(t *testing.T, value []byte) (string, shiftPlanComm
 	if data.BuildingId != "BLD1" || data.ShiftId != "SHIFT1" {
 		t.Errorf("data building/shift = %q/%q, want BLD1/SHIFT1", data.BuildingId, data.ShiftId)
 	}
+	// site_code is the canonical name of the plan key, building_id its
+	// deprecated alias: always the SAME value (ADR 0035).
+	if data.SiteCode != "BLD1" || data.SiteCode != data.BuildingId {
+		t.Errorf("data site_code = %q, want BLD1 (== building_id %q)", data.SiteCode, data.BuildingId)
+	}
 	return e.ID(), data
 }
 
@@ -136,7 +141,7 @@ func TestPublish_GoldenCloudEvent(t *testing.T) {
 	if len(fw.msgs) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(fw.msgs))
 	}
-	const golden = `{"specversion":"1.0","id":"11111111-2222-4333-8444-555555555555","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted","subject":"BLD1/SHIFT1","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1","time":"2026-08-21T22:00:00Z","data":{"building_id":"BLD1","shift_id":"SHIFT1","path_id":"pack","planned_heads":3,"planned_rate":50,"planned_hours":24}}`
+	const golden = `{"specversion":"1.0","id":"11111111-2222-4333-8444-555555555555","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted","subject":"BLD1/SHIFT1","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1","time":"2026-08-21T22:00:00Z","data":{"site_code":"BLD1","building_id":"BLD1","shift_id":"SHIFT1","path_id":"pack","planned_heads":3,"planned_rate":50,"planned_hours":24}}`
 	if got := string(fw.msgs[0].Value); got != golden {
 		t.Errorf("value mismatch\n got: %s\nwant: %s", got, golden)
 	}
@@ -179,6 +184,7 @@ func TestPublish_DataCarriesPathPlanValues(t *testing.T) {
 		t.Fatalf("data: %v", err)
 	}
 	want := shiftPlanCommittedData{
+		SiteCode:     "BLD1",
 		BuildingId:   "BLD1",
 		ShiftId:      "SHIFT1",
 		PathId:       "pack",

@@ -21,7 +21,8 @@ info:
       Raises `AssociateShiftStarted`, `AssociateCertified`,
       `AssociateBreakStarted`, `AssociateBreakEnded`, `AssociateShiftEnded`.
     - `ShiftPlan` (package `internal/domain/shiftplan`) — the committed split
-      of headcount across paths for one building's shift, made of `PathPlan`
+      of headcount across paths for one site's shift (`siteCode`; `buildingId`
+      is its deprecated alias, ADR 0035), made of `PathPlan`
       lines. Raises `ShiftPlanProposed`, `ShiftPlanCommitted` and the
       staffing-gap flag `PathUnderstaffed`.
     - `LaborAssignment` (package `internal/domain/assignment`) — one
@@ -63,7 +64,18 @@ info:
     `associate`/`assignment` events, the path id for `PathUnderstaffed` and
     `ShiftPlanProposed`, and the ShiftPlan aggregate id
     `<buildingId>/<shiftId>` for `ShiftPlanCommitted` (the same value as the
-    integration message's Kafka key).
+    integration message's Kafka key). The first segment of that id IS the site
+    code (ADR 0035): the subject and the Kafka key are unchanged by the
+    siteCode convergence, so no consumer's partitioning or ordering moves.
+
+    **siteCode / buildingId (ADR 0035).** The ShiftPlan key has one canonical
+    name, `siteCode` (the facility-layout Site code), and one deprecated alias,
+    `buildingId`, with the SAME value. `ShiftPlanProposed` and
+    `ShiftPlanCommitted` (v1, both topics where published) therefore carry
+    `site_code` next to the unchanged, now deprecated, `building_id`. The
+    change is additive: no `.v2`, nothing removed, `site_code` is not
+    `required` in the schema because messages produced before the addition lack
+    it. Removing `building_id` is a future breaking change with its own ADR.
 
     **Which events leave the process on which topic.** The integration topic
     `warehouse.workforce.events` carries **only** `ShiftPlanCommitted`, fanned
@@ -177,10 +189,10 @@ components:
     ShiftPlanCommitted:
       name: ShiftPlanCommitted
       title: Shift plan committed
-      summary: A human committed a headcount split across process paths for a building's shift.
+      summary: A human committed a headcount split across process paths for a site's shift.
       description: |
         Raised by the `ShiftPlan` aggregate when a human commits the split of
-        headcount across process paths for one building's shift. The commit
+        headcount across process paths for one site's shift. The commit
         is validated in the domain: `plannedHeads(path)` must not exceed
         `installedStations(path)`, and planned hours must fit the shift's max
         hours.
@@ -193,7 +205,8 @@ components:
         with three path lines produces three messages on
         `warehouse.workforce.events`, each carrying that one line's
         `path_id`, `planned_heads`, `planned_rate` and `planned_hours`
-        alongside the plan's `building_id` and `shift_id`. Consumers must
+        alongside the plan's `site_code` (canonical) and `building_id`
+        (deprecated, same value) and `shift_id`. Consumers must
         therefore expect N messages per commit, not one, and must not assume
         a message carries the whole plan. Every line message has its own
         unique CloudEvents `id` (minted once and persisted with the outbox
@@ -218,6 +231,7 @@ components:
             datacontenttype: "application/json"
             dataschema: "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1"
             data:
+              site_code: "BLD1"
               building_id: "BLD1"
               shift_id: "SHIFT1"
               path_id: "pack"
@@ -254,6 +268,7 @@ components:
             datacontenttype: "application/json"
             dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1"
             data:
+              site_code: "BLD1"
               building_id: "BLD1"
               shift_id: "SHIFT1"
 
@@ -289,6 +304,7 @@ components:
             datacontenttype: "application/json"
             dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1"
             data:
+              site_code: "BLD1"
               building_id: "BLD1"
               path_id: "pack"
               planned_heads: 6
@@ -700,12 +716,26 @@ components:
                 - planned_rate
                 - planned_hours
               properties:
+                site_code:
+                  type: string
+                  description: |
+                    Canonical name of the shift-plan key (ADR 0035): the Site
+                    code the shift plan was committed for. Carries the SAME
+                    value as `building_id`. Added after v1 shipped, so it is
+                    deliberately not `required` -- messages produced before
+                    the addition lack it; consumers must fall back to
+                    `building_id` when it is absent. The first segment of
+                    `subject` and of the Kafka key is this value.
                 building_id:
                   type: string
-                  description: Building the shift plan was committed for.
+                  deprecated: true
+                  description: |
+                    DEPRECATED -- use `site_code`; same value. Kept, not
+                    removed (additive change, no `.v2`); removal needs a later
+                    breaking ADR. Site the shift plan was committed for.
                 shift_id:
                   type: string
-                  description: Shift the plan covers. One ShiftPlan exists per building per shift.
+                  description: Shift the plan covers. One ShiftPlan exists per site per shift.
                 path_id:
                   type: string
                   description: Process path this line plans headcount for, e.g. "pack".
@@ -746,9 +776,22 @@ components:
                 - building_id
                 - shift_id
               properties:
+                site_code:
+                  type: string
+                  description: |
+                    Canonical name of the shift-plan key (ADR 0035): the Site
+                    code the shift plan was committed for. Carries the SAME
+                    value as `building_id`. Added after v1 shipped, so it is
+                    deliberately not `required` -- messages produced before
+                    the addition lack it; consumers must fall back to
+                    `building_id` when it is absent.
                 building_id:
                   type: string
-                  description: Building the shift plan was committed for.
+                  deprecated: true
+                  description: |
+                    DEPRECATED -- use `site_code`; same value. Kept, not
+                    removed (additive change, no `.v2`); removal needs a later
+                    breaking ADR. Site the shift plan was committed for.
                 shift_id:
                   type: string
                   description: Shift the plan covers.
@@ -781,9 +824,21 @@ components:
                 - planned_heads
                 - planned_rate
               properties:
+                site_code:
+                  type: string
+                  description: |
+                    Canonical name of the shift-plan key (ADR 0035): the Site
+                    code the proposal was computed for. Carries the SAME
+                    value as `building_id`. Added after v1 shipped, so it is
+                    deliberately not `required`; consumers must fall back to
+                    `building_id` when it is absent.
                 building_id:
                   type: string
-                  description: Building the proposal was computed for.
+                  deprecated: true
+                  description: |
+                    DEPRECATED -- use `site_code`; same value. Kept, not
+                    removed (additive change, no `.v2`); removal needs a later
+                    breaking ADR. Site the proposal was computed for.
                 path_id:
                   type: string
                   description: Process path the heads were proposed for.

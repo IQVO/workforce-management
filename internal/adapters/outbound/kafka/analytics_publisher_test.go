@@ -98,13 +98,13 @@ var analyticsGoldenCases = []analyticsGoldenCase{
 		name:   "ShiftPlanProposed",
 		event:  shared.NewShiftPlanProposed(goldenAt, "b1", "pack", 4, 10.5),
 		key:    "pack",
-		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b1","path_id":"pack","planned_heads":4,"planned_rate":10.5}}`,
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed","subject":"pack","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b1","path_id":"pack","planned_heads":4,"planned_rate":10.5,"site_code":"b1"}}`,
 	},
 	{
 		name:   "ShiftPlanCommitted",
 		event:  shared.NewShiftPlanCommitted(goldenAt, "b2", "s2"),
 		key:    "b2",
-		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted","subject":"b2/s2","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b2","shift_id":"s2"}}`,
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted","subject":"b2/s2","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:ShiftPlanCommitted:v1","time":"2026-01-02T03:04:05Z","data":{"building_id":"b2","shift_id":"s2","site_code":"b2"}}`,
 	},
 }
 
