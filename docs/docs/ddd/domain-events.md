@@ -17,8 +17,8 @@ names are fixed vocabulary — they appear verbatim in the Go code, in
 
 | Event | Raised by | When | Payload |
 | --- | --- | --- | --- |
-| `ShiftPlanProposed` | `ProposePathPlan` use case | Heads were computed for a path, ahead of any commit | `buildingId`, `pathId`, `plannedHeads`, `plannedRate` |
-| `ShiftPlanCommitted` | `ShiftPlan` | A human committed the headcount split | `buildingId`, `shiftId` |
+| `ShiftPlanProposed` | `ProposePathPlan` use case | Heads were computed for a path, ahead of any commit | `siteCode` (deprecated alias `buildingId`, same value, [ADR 0035](../adr/0035-sitecode-converges-building-id.md)), `pathId`, `plannedHeads`, `plannedRate` |
+| `ShiftPlanCommitted` | `ShiftPlan` | A human committed the headcount split | `siteCode` (deprecated alias `buildingId`, same value), `shiftId` |
 | `AssociateShiftStarted` | `AssociateShift` | A roster entry opened | `associateId`, `certifications` |
 | `AssociateCertified` | `AssociateShift` | A certification was added | `associateId`, `certification` |
 | `AssociateBreakStarted` | `AssociateShift` | A logged break began | `associateId` |
@@ -40,9 +40,9 @@ fields from `internal/adapters/outbound/kafka/publisher.go` (integration) and
 
 | Full CloudEvents `type` | Topic | Kafka key / `subject` | `data` fields | Producer use case | Known consumers |
 | --- | --- | --- | --- | --- | --- |
-| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.events` (one message per `PathPlan` line) | `<buildingId>/<shiftId>` / same | `building_id`, `shift_id`, `path_id`, `planned_heads`, `planned_rate`, `planned_hours` | `CommitShiftPlan` | `wes-work-planning` (`LaborPlanObserved`), `warehouse-planning` (group `warehouse-planning-labor-capacity`) |
-| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.analytics` (one per commit) | `<buildingId>` / `<buildingId>/<shiftId>` | `building_id`, `shift_id` | `CommitShiftPlan` | acknowledged, not projected, by `cmd/workforce-projector` |
-| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed` | `warehouse.workforce.analytics` | `<pathId>` / same | `building_id`, `path_id`, `planned_heads`, `planned_rate` | `ProposePathPlan` | acknowledged, not projected |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.events` (one message per `PathPlan` line) | `<siteCode>/<shiftId>` (historically written `<buildingId>/<shiftId>`; **unchanged**, its first segment is the site code) / same | `site_code`, `building_id` (deprecated, same value), `shift_id`, `path_id`, `planned_heads`, `planned_rate`, `planned_hours` | `CommitShiftPlan` | `wes-work-planning` (`LaborPlanObserved`), `warehouse-planning` (group `warehouse-planning-labor-capacity`) |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | `warehouse.workforce.analytics` (one per commit) | `<siteCode>` / `<siteCode>/<shiftId>` (unchanged) | `site_code`, `building_id` (deprecated, same value), `shift_id` | `CommitShiftPlan` | acknowledged, not projected, by `cmd/workforce-projector` |
+| `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed` | `warehouse.workforce.analytics` | `<pathId>` / same | `site_code`, `building_id` (deprecated, same value), `path_id`, `planned_heads`, `planned_rate` | `ProposePathPlan` | acknowledged, not projected |
 | `com.warehouse.wes.workforce-management.shiftplan.PathUnderstaffed` | `warehouse.workforce.analytics` | `<pathId>` / same | `path_id`, `planned_heads`, `active_heads`, optional `site_code` (additive, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md): the canonical site the gap was computed for; **absent = unscoped/fleet-wide**, consumers must not read absence as a site; payload stays `v1`) | `GetStaffingGap` | `cmd/workforce-projector` → `labor_rollup.understaffing_events` |
 | `com.warehouse.wes.workforce-management.associate.AssociateShiftStarted` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id` | `StartAssociateShift` | projector → `shifts_started` |
 | `com.warehouse.wes.workforce-management.associate.AssociateCertified` | `warehouse.workforce.analytics` | `<associateId>` / same | `associate_id`, `certification` | `CertifyAssociate` | projector → `certifications` |
@@ -126,14 +126,18 @@ A `ShiftPlan` has multiple `PathPlan` lines, and the Kafka adapter publishes
 **one message per line**, not one per commit. A plan committed with three path
 lines produces **three** messages on `warehouse.workforce.events`, each
 carrying that single line's `path_id`, `planned_heads`, `planned_rate` and
-`planned_hours` alongside the plan's `building_id` and `shift_id`.
+`planned_hours` alongside the plan's `site_code` (and its deprecated alias
+`building_id`, same value) and `shift_id`. `site_code` is additive on `v1`
+([ADR 0035](../adr/0035-sitecode-converges-building-id.md)); it is not
+`required` in the schema because rows encoded before the change lack it.
 
 This matches how the downstream consumer keys its read model —
 `wes-work-planning`'s `LaborPlanObserved` is keyed by `path_id`, one row per
 path. Consumers must expect N messages per commit and must not assume a message
 carries the whole plan.
 
-The domain event itself carries only `buildingId` and `shiftId` (the
+The domain event itself carries only the plan key (`BuildingId` in code, the
+deprecated name of the site code) and `shiftId` (the
 `ShiftPlan`'s identity). The adapter loads the committed plan through the
 `ShiftPlanRepo` to do the fan-out, which keeps the fan-out an integration
 concern rather than a domain one.

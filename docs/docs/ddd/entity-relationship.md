@@ -21,11 +21,11 @@ through `MIGRATIONS_DATABASE_URL` ([ADR 0025](../adr/0025-migrations-direct-post
 ```mermaid
 erDiagram
     shift_plan {
-        TEXT building_id PK
+        TEXT building_id PK "holds the Site code (siteCode); legacy column name kept, ADR 0035"
         TEXT shift_id PK
     }
     path_plan {
-        TEXT building_id PK,FK
+        TEXT building_id PK,FK "the Site code (siteCode)"
         TEXT shift_id PK,FK
         TEXT path_id PK
         INTEGER planned_heads
@@ -158,7 +158,7 @@ There are no foreign keys in this schema at all.
 
 | Table | Kind | Aggregate / role |
 | --- | --- | --- |
-| `shift_plan` + `path_plan` | aggregate state | `ShiftPlan` with its `PathPlan` lines; `Save` deletes and re-inserts the lines |
+| `shift_plan` + `path_plan` | aggregate state | `ShiftPlan` with its `PathPlan` lines; `Save` deletes and re-inserts the lines. The key column `building_id` stores the **Site code** — `siteCode` is the canonical name and `buildingId` its deprecated alias, one value, one column, **no migration** ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)) |
 | `associate_shift` | aggregate state | `AssociateShift` (certifications as a `TEXT[]`, not a child table; optional canonical `site_code`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) |
 | `labor_assignment` + `labor_assignment_history` | aggregate state | `LaborAssignment`: active interval in the parent row, closed `Interval`s in the child |
 | `domain_event` | legacy, unused; retained | Decided 2026-10-06: **keep** — created by `000001_init`, no production code reads or writes it; retained because migrations are additive only (dropping a table is destructive and needs explicit approval) |

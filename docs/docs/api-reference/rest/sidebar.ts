@@ -100,9 +100,15 @@ const sidebar: SidebarsConfig = {
         },
         {
           type: "doc",
-          id: "api-reference/rest/list-staffing-gaps-for-shift",
-          label: "List the staffing gap for every path planned within one committed shift plan (fleet-wide, all-paths view)",
+          id: "api-reference/rest/list-staffing-gaps-for-site-shift",
+          label: "List the staffing gap for every path planned within one committed shift plan of a site (canonical route)",
           className: "api-method get",
+        },
+        {
+          type: "doc",
+          id: "api-reference/rest/list-staffing-gaps-for-shift",
+          label: "DEPRECATED -- use GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap. List the staffing gap for every path planned within one committed shift plan (fleet-wide, all-paths view)",
+          className: "menu__list-item--deprecated api-method get",
         },
       ],
     },

@@ -73,25 +73,26 @@ payload change gets a new `.v2` type and a new `dataschema` version.
 ### `ShiftPlanCommitted`
 
 **Type:** `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`
-· **Subject:** `{building_id}/{shift_id}` (= the Kafka key)
+· **Subject:** `{site_code}/{shift_id}` (= the Kafka key; written `{building_id}/{shift_id}` before [ADR 0035](../adr/0035-sitecode-converges-building-id.md), same value, unchanged)
 · **dataschema:** `urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1`
 
 A human committed the split of headcount across process paths for one
-building's shift. The commit is validated in the domain: `plannedHeads(path)`
+site's shift. The commit is validated in the domain: `plannedHeads(path)`
 must not exceed `installedStations(path)`, and planned hours must fit the
 shift's max hours.
 
 **This event is fanned out into one message per `PathPlan` line.** A plan
 committed with three path lines produces three messages, each carrying that one
 line's `path_id`, `planned_heads`, `planned_rate` and `planned_hours` alongside
-the plan's `building_id` and `shift_id`. Consumers must expect N messages per
+the plan's `site_code`, `building_id` and `shift_id`. Consumers must expect N messages per
 commit and must not assume a message carries the whole plan. Each line message
 has its **own unique `id`**; all of them share the `subject`/key of the
 ShiftPlan aggregate, so they land on one partition in order.
 
 | `data` field | Type | Meaning |
 | --- | --- | --- |
-| `building_id` | string | The building the plan was committed for |
+| `site_code` | string | The canonical Site code the plan was committed for. Additive on `v1` and not `required` (messages encoded before the change lack it): fall back to `building_id` when absent |
+| `building_id` | string | **Deprecated** — same value as `site_code`; kept, removal needs a later breaking ADR |
 | `shift_id` | string | The shift the plan was committed for |
 | `path_id` | string | The process path this message's line covers |
 | `planned_heads` | integer | Heads committed to this path |
@@ -109,6 +110,7 @@ ShiftPlan aggregate, so they land on one partition in order.
   "datacontenttype": "application/json",
   "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
   "data": {
+    "site_code": "BLD1",
     "building_id": "BLD1",
     "shift_id": "SHIFT1",
     "path_id": "pack",
@@ -126,14 +128,14 @@ feed it into its own `ShiftPlan` aggregate.
 ## Analytics topic — `warehouse.workforce.analytics`
 
 Every event below (and `ShiftPlanCommitted`, as one message per commit carrying
-only `building_id`/`shift_id`) is published to the internal analytics topic
+only `site_code`/`building_id`/`shift_id`) is published to the internal analytics topic
 with `dataschema` `urn:warehouse:workforce-management:analytics:<EventName>:v1`,
 for this service's own analytics projector. None of them is on the integration
 topic.
 
 ### `ShiftPlanProposed`
 
-**Type:** `...shiftplan.ShiftPlanProposed` · **Subject:** `{building_id}/{path_id}`
+**Type:** `...shiftplan.ShiftPlanProposed` · **Subject:** `{path_id}` (= the Kafka key)
 
 Heads for a path were computed as a pure computation —
 `heads = ceil(charge ÷ plannedRate)` — before a human committed anything. A
@@ -141,7 +143,8 @@ proposal is advisory: the software proposes, a human commits.
 
 | `data` field | Type |
 | --- | --- |
-| `building_id` | string |
+| `site_code` | string (canonical, additive, not `required`; same value as `building_id`) |
+| `building_id` | string (**deprecated**, same value as `site_code`) |
 | `path_id` | string |
 | `planned_heads` | integer |
 | `planned_rate` | number |

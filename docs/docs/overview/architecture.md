@@ -120,7 +120,7 @@ review comment. See [ADR 0007](../adr/0007-arch-go-architecture-fitness-tests.md
 
 Nine use-case structs; `StartBreak` and `EndBreak` share a row below.
 `GetStaffingGap` answers both the single-path lookup (`Execute`) and the
-all-paths list for one building/shift (`ExecuteAll`,
+all-paths list for one site/shift (`ExecuteAll`,
 [ADR 0029](../adr/0029-all-paths-staffing-gap-endpoint.md)).
 
 | Use case | What it does |
