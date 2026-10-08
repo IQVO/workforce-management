@@ -182,7 +182,15 @@ func siteFixtureAtSite(t *testing.T) http.Handler {
 // deprecation (Deprecation: true) and it stays unscoped (identical to before).
 func TestStaffingGapForShift_CanonicalSitesRouteAndDeprecatedBuildingsRoute(t *testing.T) {
 	router := siteFixtureAtSite(t)
+	assertCanonicalSitesRoute(t, router)
+	assertDeprecatedBuildingsRoute(t, router)
+	assertSiteRouteNotFounds(t, router)
+}
 
+// assertCanonicalSitesRoute: the canonical route is not deprecated and uses the
+// one siteCode as both plan lookup key and associate scope.
+func assertCanonicalSitesRoute(t *testing.T, router http.Handler) {
+	t.Helper()
 	canonical := doRequest(t, router, http.MethodGet, "/sites/WH1/shifts/shift-1/staffing-gap", nil)
 	if canonical.Code != http.StatusOK {
 		t.Fatalf("canonical route: %d %s", canonical.Code, canonical.Body.String())
@@ -197,7 +205,12 @@ func TestStaffingGapForShift_CanonicalSitesRouteAndDeprecatedBuildingsRoute(t *t
 	if len(sites) != 1 || sites[0]["activeHeads"] != float64(2) || sites[0]["siteCode"] != "WH1" || sites[0]["pathId"] != "pack" {
 		t.Fatalf("canonical route: plan lookup AND scope by the one siteCode, got %v", sites)
 	}
+}
 
+// assertDeprecatedBuildingsRoute: the legacy route keeps working, announces its
+// deprecation, and (buildingId only) is not auto-scoped by site.
+func assertDeprecatedBuildingsRoute(t *testing.T, router http.Handler) {
+	t.Helper()
 	legacy := doRequest(t, router, http.MethodGet, "/buildings/WH1/shifts/shift-1/staffing-gap", nil)
 	if legacy.Code != http.StatusOK {
 		t.Fatalf("deprecated route must keep working: %d %s", legacy.Code, legacy.Body.String())
@@ -215,14 +228,16 @@ func TestStaffingGapForShift_CanonicalSitesRouteAndDeprecatedBuildingsRoute(t *t
 	if _, scoped := buildings[0]["siteCode"]; scoped {
 		t.Fatalf("an unscoped entry must omit siteCode, got %v", buildings[0])
 	}
+}
 
-	// The deprecation header is also on its error responses.
+// assertSiteRouteNotFounds: the deprecation header is also on the legacy route's
+// error responses, and the canonical route's 404 is the same problem+json.
+func assertSiteRouteNotFounds(t *testing.T, router http.Handler) {
+	t.Helper()
 	missing := doRequest(t, router, http.MethodGet, "/buildings/nope/shifts/shift-1/staffing-gap", nil)
 	if missing.Code != http.StatusNotFound || missing.Header().Get("Deprecation") != "true" {
 		t.Fatalf("deprecated route 404 must still carry Deprecation: true, got %d %q", missing.Code, missing.Header().Get("Deprecation"))
 	}
-
-	// The canonical route's 404 is the same problem+json.
 	notFound := doRequest(t, router, http.MethodGet, "/sites/NOPE/shifts/shift-1/staffing-gap", nil)
 	assertProblemDetails(t, notFound, http.StatusNotFound, "resource-not-found", "/sites/NOPE/shifts/shift-1/staffing-gap")
 }

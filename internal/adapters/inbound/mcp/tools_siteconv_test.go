@@ -106,30 +106,46 @@ func TestTools_DescribeBuildingIdAsDeprecatedInFavourOfSiteCode(t *testing.T) {
 		if tool == nil {
 			t.Fatalf("tool %q not advertised", name)
 		}
-		if !strings.Contains(tool.Description, "buildingId") || !strings.Contains(tool.Description, "deprecated") || !strings.Contains(tool.Description, "siteCode") {
-			t.Errorf("%s description must say buildingId is deprecated in favour of siteCode, got %q", name, tool.Description)
-		}
-		schema, err := json.Marshal(tool.InputSchema)
-		if err != nil {
-			t.Fatalf("marshal schema: %v", err)
-		}
-		var in struct {
-			Required   []string                  `json:"required"`
-			Properties map[string]map[string]any `json:"properties"`
-		}
-		if err := json.Unmarshal(schema, &in); err != nil {
-			t.Fatalf("unmarshal schema: %v", err)
-		}
-		for _, r := range in.Required {
-			if r == "buildingId" || r == "siteCode" {
-				t.Errorf("%s: %s must not be individually required (one of the two is)", name, r)
-			}
-		}
-		if d, _ := in.Properties["buildingId"]["description"].(string); !strings.Contains(strings.ToLower(d), "deprecated") {
-			t.Errorf("%s: buildingId argument must be described as deprecated, got %q", name, d)
-		}
-		if _, ok := in.Properties["siteCode"]; !ok {
-			t.Errorf("%s: canonical siteCode argument missing", name)
+		assertToolDeprecatesBuildingId(t, name, tool)
+	}
+}
+
+// siteConvSchema is the slice of a tool's input schema this test reads.
+type siteConvSchema struct {
+	Required   []string                  `json:"required"`
+	Properties map[string]map[string]any `json:"properties"`
+}
+
+// assertToolDeprecatesBuildingId checks one tool's description and input schema:
+// buildingId is described as deprecated in favour of siteCode, neither is
+// individually required (one of the two is), and siteCode is present.
+func assertToolDeprecatesBuildingId(t *testing.T, name string, tool *sdk.Tool) {
+	t.Helper()
+	if !strings.Contains(tool.Description, "buildingId") || !strings.Contains(tool.Description, "deprecated") || !strings.Contains(tool.Description, "siteCode") {
+		t.Errorf("%s description must say buildingId is deprecated in favour of siteCode, got %q", name, tool.Description)
+	}
+	schema, err := json.Marshal(tool.InputSchema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	var in siteConvSchema
+	if err := json.Unmarshal(schema, &in); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	assertNeitherSiteKeyRequired(t, name, in)
+	if d, _ := in.Properties["buildingId"]["description"].(string); !strings.Contains(strings.ToLower(d), "deprecated") {
+		t.Errorf("%s: buildingId argument must be described as deprecated, got %q", name, d)
+	}
+	if _, ok := in.Properties["siteCode"]; !ok {
+		t.Errorf("%s: canonical siteCode argument missing", name)
+	}
+}
+
+func assertNeitherSiteKeyRequired(t *testing.T, name string, in siteConvSchema) {
+	t.Helper()
+	for _, r := range in.Required {
+		if r == "buildingId" || r == "siteCode" {
+			t.Errorf("%s: %s must not be individually required (one of the two is)", name, r)
 		}
 	}
 }
