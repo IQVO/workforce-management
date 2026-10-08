@@ -141,7 +141,13 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	r.Post("/associates/{id}/break/start", h.startBreak)
 	r.Post("/associates/{id}/break/end", h.endBreak)
 	r.Get("/paths/{pathId}/staffing-gap", h.staffingGap)
-	r.Get("/buildings/{buildingId}/shifts/{shiftId}/staffing-gap", h.staffingGapForShift)
+	// Canonical route (ADR 0035): the path segment is the Site code, both the
+	// plan lookup key and the associate scope.
+	r.Get("/sites/{siteCode}/shifts/{shiftId}/staffing-gap", h.staffingGapForSiteShift)
+	// Deprecated alias of the route above (same handler core and response
+	// shape): buildingId is the legacy name of the plan key. Kept working,
+	// announced with `Deprecation: true`, removed only by a later ADR.
+	r.With(deprecatedRoute).Get("/buildings/{buildingId}/shifts/{shiftId}/staffing-gap", h.staffingGapForShift)
 	r.Post("/associates/{id}/end-shift", h.endShift)
 
 	return r
@@ -235,8 +241,9 @@ func (h *Handler) proposePathPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if req.BuildingId == "" {
-		writeError(w, r, http.StatusBadRequest, errMissingBuildingId)
+	siteKey, err := shared.ResolveSiteKey(req.SiteCode, req.BuildingId)
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
 		return
 	}
 	// An omitted charge is a client mistake (explicit 0 is legitimate) —
@@ -247,7 +254,7 @@ func (h *Handler) proposePathPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	heads, resolvedRate, rateSource, trimReason, err := h.ProposePathPlan.Execute(r.Context(), req.BuildingId, pathId, *req.Charge, req.PlannedRate)
+	heads, resolvedRate, rateSource, trimReason, err := h.ProposePathPlan.Execute(r.Context(), siteKey, pathId, *req.Charge, req.PlannedRate)
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
@@ -267,8 +274,9 @@ func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	if req.BuildingId == "" {
-		writeError(w, r, http.StatusBadRequest, errMissingBuildingId)
+	siteKey, err := shared.ResolveSiteKey(req.SiteCode, req.BuildingId)
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
 		return
 	}
 	if req.ShiftId == "" {
@@ -297,7 +305,7 @@ func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
 		installed[pathId] = l.InstalledStations
 	}
 
-	sp, err := h.CommitShiftPlan.Execute(r.Context(), req.BuildingId, req.ShiftId, lines, installed)
+	sp, err := h.CommitShiftPlan.Execute(r.Context(), siteKey, req.ShiftId, lines, installed)
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
@@ -312,8 +320,9 @@ func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
 			PlannedHours: l.PlannedHours,
 		})
 	}
-	w.Header().Set("Location", fmt.Sprintf("/shift-plans/%s/%s", sp.BuildingId(), sp.ShiftId()))
+	w.Header().Set("Location", fmt.Sprintf("/shift-plans/%s/%s", sp.SiteCode(), sp.ShiftId()))
 	writeJSON(w, http.StatusCreated, shiftPlanResponse{
+		SiteCode:   sp.SiteCode(),
 		BuildingId: sp.BuildingId(),
 		ShiftId:    sp.ShiftId(),
 		Lines:      respLines,
@@ -383,11 +392,13 @@ func (h *Handler) endBreak(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// staffingGap answers GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=[&siteCode=].
-// ShiftPlan is keyed by building+shift, so this context requires those as
-// query parameters alongside the path in the URL. The optional siteCode
-// (ADR 0034) scopes ActiveHeads to associates at that canonical site; absent
-// or blank keeps the fleet-wide count.
+// staffingGap answers GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=[&buildingId=].
+// ShiftPlan is keyed by site+shift, so this context requires those as query
+// parameters alongside the path in the URL. siteCode is the canonical name:
+// plan lookup key AND associate scope (ADR 0034/0035). buildingId is the
+// deprecated alias of the plan lookup ONLY: a call that gives just buildingId
+// is not scoped (fleet-wide count, behaviour identical to before). One of the
+// two is required.
 func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 	pathId, err := shared.NewPathId(chi.URLParam(r, "pathId"))
 	if err != nil {
@@ -398,9 +409,9 @@ func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 		writeError(w, r, http.StatusBadRequest, err)
 		return
 	}
-	buildingId := r.URL.Query().Get("buildingId")
-	if buildingId == "" {
-		writeError(w, r, http.StatusBadRequest, errMissingBuildingId)
+	planKey, scope, err := shared.ResolveGapLookup(r.URL.Query().Get("siteCode"), r.URL.Query().Get("buildingId"))
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
 		return
 	}
 	shiftId := r.URL.Query().Get("shiftId")
@@ -409,7 +420,7 @@ func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	gap, err := h.GetStaffingGap.ExecuteForSite(r.Context(), buildingId, shiftId, pathId, shared.NewSiteCode(r.URL.Query().Get("siteCode")))
+	gap, err := h.GetStaffingGap.ExecuteForSite(r.Context(), planKey, shiftId, pathId, scope)
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
@@ -417,13 +428,48 @@ func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toStaffingGapResponse(gap))
 }
 
-// staffingGapForShift answers GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap
-// -- the fleet-wide "all paths, one building/shift" list ADR-0011 flagged
+// deprecatedRoute marks a route's every response `Deprecation: true` (the
+// IETF Deprecation header, RFC 9745) -- including its error responses -- so a
+// client of the legacy buildings route learns about the canonical sites route.
+func deprecatedRoute(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Deprecation", "true")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// staffingGapForSiteShift answers the canonical
+// GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap (ADR 0035): the same
+// fleet-wide "all paths, one site/shift" list as staffingGapForShift, with
+// the path siteCode as both the plan lookup key and the associate scope.
+// There is no second name on this route, so nothing can conflict.
+func (h *Handler) staffingGapForSiteShift(w http.ResponseWriter, r *http.Request) {
+	siteCode, err := shared.ResolveSiteKey(chi.URLParam(r, "siteCode"), "")
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
+		return
+	}
+	shiftId := chi.URLParam(r, "shiftId")
+
+	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), siteCode, shiftId, shared.NewSiteCode(siteCode))
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toStaffingGapResponses(gaps))
+}
+
+// staffingGapForShift answers the DEPRECATED
+// GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap (the canonical
+// route is /sites/{siteCode}/shifts/{shiftId}/staffing-gap, ADR 0035) --
+// the fleet-wide "all paths, one building/shift" list ADR-0011 flagged
 // as a deferred fast-follow ("the shipped screen exposes a real gap in
 // this context's own read-model surface (no list-by-building/shift
 // endpoint)"). It answers the staffing gap for EVERY path planned in the
 // committed shift plan, reusing the exact same per-path computation as
-// the single-path lookup above (GetStaffingGap.ExecuteAll).
+// the single-path lookup above (GetStaffingGap.ExecuteAll). buildingId is the
+// plan key only: the list is unscoped unless the optional siteCode query
+// parameter is given (ADR 0034).
 //
 // buildingId/shiftId are chi PATH parameters here (unlike the single-path
 // lookup's query parameters above): chi never matches a {param} route

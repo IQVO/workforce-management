@@ -14,7 +14,8 @@ info:
     1. **The shift-start planning horizon** — a human proposes and then
        commits a split of headcount across process paths (`ShiftPlan`, made
        of `PathPlan` lines: path, planned heads, planned rate, planned
-       hours), one plan per building per shift.
+       hours), one plan per site per shift (the plan key is the canonical
+       `siteCode`; `buildingId` is its deprecated alias, ADR 0035).
     2. **Intra-shift assignment tracking** — moving associates between paths
        as backlogs deviate from plan (`LaborAssignment`). The move itself is
        always a human call; this context makes the staffing gap legible
@@ -48,7 +49,8 @@ tags:
   - name: Shift Plans
     description: >-
       The ShiftPlan aggregate: proposing and committing the headcount split
-      across process paths for one building's shift.
+      across process paths for one site's shift (keyed by the canonical
+      `siteCode`; `buildingId` is the deprecated alias, ADR 0035).
   - name: Assignments
     description: >-
       The LaborAssignment aggregate: putting an associate on a path for an
@@ -255,7 +257,7 @@ paths:
             schema:
               $ref: "#/components/schemas/ProposePathPlanRequest"
             example:
-              buildingId: bldg-1
+              siteCode: WH1
               charge: 100
               plannedRate: 30
       responses:
@@ -272,6 +274,8 @@ paths:
                 rateSource: caller
         "400":
           $ref: "#/components/responses/BadRequest"
+        "422":
+          $ref: "#/components/responses/ConflictingSiteAndBuilding"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -299,7 +303,9 @@ paths:
         capability pick. A pathId the catalogue does not declare is rejected
         with 400 unknown-path-id. It also validates that plannedHours does not exceed
         plannedHeads * the configured max hours per shift. Naturally
-        idempotent by the client-supplied (buildingId, shiftId) key: the
+        idempotent by the client-supplied (siteCode, shiftId) key (siteCode
+        is the canonical name of the plan key, buildingId its deprecated
+        alias with the same value and the same stored column; ADR 0035): the
         underlying repository upserts on that key. A blind retry would
         nevertheless re-publish ShiftPlanCommitted, so this route is also
         protected by the Idempotency-Key header (ADR-0027): a retried
@@ -315,7 +321,7 @@ paths:
             schema:
               $ref: "#/components/schemas/CommitShiftPlanRequest"
             example:
-              buildingId: bldg-1
+              siteCode: WH1
               shiftId: shift-1
               lines:
                 - pathId: pack
@@ -336,13 +342,14 @@ paths:
               description: URI of the committed shift plan.
               schema:
                 type: string
-                example: /shift-plans/bldg-1/shift-1
+                example: /shift-plans/WH1/shift-1
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ShiftPlanResponse"
               example:
-                buildingId: bldg-1
+                siteCode: WH1
+                buildingId: WH1
                 shiftId: shift-1
                 lines:
                   - pathId: pack
@@ -351,7 +358,8 @@ paths:
                     plannedHours: 24
         "400":
           description: >-
-            Malformed body, an empty required field (buildingId, shiftId, or
+            Malformed body, an empty required field (siteCode or its
+            deprecated alias buildingId, shiftId, or
             a line's pathId), no path plan lines supplied
             (shift-plan-no-path-plans), a line references a path with no
             installedStations entry (shift-plan-missing-installed-stations),
@@ -390,7 +398,22 @@ paths:
                 detail: planned heads exceed installed stations for path
                 instance: /shift-plans
         "422":
-          $ref: "#/components/responses/IdempotencyKeyReused"
+          description: >-
+            Unprocessable — either siteCode and its deprecated alias
+            buildingId were both sent with DIFFERENT values
+            (conflicting-site-and-building, ADR 0035), or the
+            Idempotency-Key was already used with a request that had a
+            different body (idempotency-key-reused, ADR-0027).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.workforce-management.warehouse-systems.dev/conflicting-site-and-building
+                title: siteCode and its deprecated alias buildingId have different values
+                status: 422
+                detail: siteCode and buildingId (a deprecated alias of siteCode) are both present with different values
+                instance: /shift-plans
         "503":
           description: >-
             Service unavailable — fulfillment-execution could not be
@@ -583,34 +606,55 @@ paths:
       summary: Get the staffing gap for a path within a committed shift plan
       description: >-
         Read-model projection: plannedHeads (from the committed ShiftPlan
-        for buildingId+shiftId) vs. currently active LaborAssignment count
+        for siteCode+shiftId) vs. currently active LaborAssignment count
         for pathId. Raises PathUnderstaffed when active assignments fall
         short of plannedHeads. This surfaces the gap only — it never decides
         or performs a rebalance; that stays a human call recorded via
         POST /associates/{id}/assignments. ShiftPlan is keyed by
-        building+shift, so both are required as query parameters alongside
+        site+shift, so both are needed as query parameters alongside
         the path in the URL — a path's planned heads only make sense within
-        one committed plan. The optional siteCode query parameter scopes
-        activeHeads to one canonical site (ADR 0034); without it the count
-        is fleet-wide across every site, exactly as before.
+        one committed plan. `siteCode` is the canonical name (ADR 0035): it
+        is the plan lookup key AND the associate scope (activeHeads counts
+        only associates with an active shift at that site, ADR 0034).
+        `buildingId` is the DEPRECATED alias for the plan lookup ONLY: a call
+        that gives just buildingId is NOT scoped by site and counts
+        fleet-wide, exactly as before. One of the two is required (neither
+        is 400 missing-building-id). When both are given, buildingId is the
+        plan key and siteCode the scope, as ADR 0034 defined.
       tags: [Staffing]
       parameters:
         - $ref: "#/components/parameters/PathId"
+        - name: siteCode
+          in: query
+          required: false
+          description: >-
+            The canonical Site code (the facility-layout Site code, e.g.
+            WH1): plan lookup key AND associate scope. Required unless the
+            deprecated buildingId is given. Accepted as given, never
+            validated against facility-layout, so an unknown code simply
+            counts 0.
+          schema:
+            type: string
+          example: WH1
         - name: buildingId
           in: query
-          required: true
-          description: The building whose committed shift plan to read.
+          required: false
+          deprecated: true
+          description: >-
+            DEPRECATED -- use siteCode. The legacy name of the plan key:
+            alias for the plan lookup ONLY (same stored value). A call that
+            gives only buildingId is not scoped by site. Required unless
+            siteCode is given.
           schema:
             type: string
           example: bldg-1
         - name: shiftId
           in: query
           required: true
-          description: The shift (within buildingId) whose committed plan to read.
+          description: The shift (within the site) whose committed plan to read.
           schema:
             type: string
           example: shift-1
-        - $ref: "#/components/parameters/SiteCodeQuery"
       responses:
         "200":
           description: Staffing gap for this path within the committed plan.
@@ -625,12 +669,13 @@ paths:
                 understaffed: true
                 observedIdleShare: 0.42
                 observedIdlePct: 0.42
+                siteCode: WH1
         "400":
           $ref: "#/components/responses/BadRequest"
         "404":
           description: >-
-            No committed ShiftPlan exists for buildingId+shiftId
-            (resource-not-found).
+            No committed ShiftPlan exists for siteCode (or buildingId) +
+            shiftId (resource-not-found).
           content:
             application/problem+json:
               schema:
@@ -644,13 +689,84 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /sites/{siteCode}/shifts/{shiftId}/staffing-gap:
+    get:
+      operationId: listStaffingGapsForSiteShift
+      summary: >-
+        List the staffing gap for every path planned within one committed
+        shift plan of a site (canonical route)
+      description: >-
+        The canonical route of the all-paths staffing-gap list (ADR 0035;
+        supersedes GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap,
+        which stays as a deprecated alias). Same handler core and response
+        shape. The path siteCode is both the plan lookup key and the
+        associate scope: every path's activeHeads counts only associates
+        with an active shift at that site (ADR 0034). Reuses the exact same per-path
+        computation as GET /paths/{pathId}/staffing-gap and raises
+        PathUnderstaffed for every understaffed path in the plan. This
+        surfaces the gaps only — it never decides or performs a rebalance;
+        that stays a human call recorded via
+        POST /associates/{id}/assignments.
+      tags: [Staffing]
+      parameters:
+        - $ref: "#/components/parameters/SiteCodePath"
+        - $ref: "#/components/parameters/ShiftId"
+      responses:
+        "200":
+          description: >-
+            Staffing gap for every path planned in this site's committed
+            shift, one entry per path, scoped to the site.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StaffingGapResponse"
+              example:
+                - pathId: pack
+                  plannedHeads: 3
+                  activeHeads: 1
+                  understaffed: true
+                  observedIdleShare: 0.42
+                  observedIdlePct: 0.42
+                  siteCode: WH1
+                - pathId: pick
+                  plannedHeads: 1
+                  activeHeads: 1
+                  understaffed: false
+                  siteCode: WH1
+        "404":
+          description: >-
+            No committed ShiftPlan exists for siteCode+shiftId
+            (resource-not-found).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.workforce-management.warehouse-systems.dev/resource-not-found
+                title: Resource not found
+                status: 404
+                detail: not found
+                instance: /sites/WH1/shifts/shift-1/staffing-gap
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /buildings/{buildingId}/shifts/{shiftId}/staffing-gap:
     get:
       operationId: listStaffingGapsForShift
+      deprecated: true
       summary: >-
+        DEPRECATED -- use GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap.
         List the staffing gap for every path planned within one committed
         shift plan (fleet-wide, all-paths view)
       description: >-
+        DEPRECATED alias of GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap
+        (ADR 0035): buildingId is the legacy name of the plan key. Every
+        response carries the header `Deprecation: true`. It keeps working,
+        unchanged, until a later breaking ADR removes it; a call that gives
+        only the buildingId path segment is NOT scoped by site.
+
         ADR-0011's deferred fast-follow: a fleet-wide "all paths, one
         building/shift" list endpoint, for contexts that need every path's
         staffing gap for a building+shift in one call rather than one
@@ -672,6 +788,15 @@ paths:
           description: >-
             Staffing gap for every path planned in this building's
             committed shift, one entry per path.
+          headers:
+            Deprecation:
+              description: >-
+                `true` -- this route is deprecated in favour of
+                /sites/{siteCode}/shifts/{shiftId}/staffing-gap (ADR 0035).
+                Present on every response of this route, errors included.
+              schema:
+                type: string
+                example: "true"
           content:
             application/json:
               schema:
@@ -692,7 +817,13 @@ paths:
         "404":
           description: >-
             No committed ShiftPlan exists for buildingId+shiftId
-            (resource-not-found).
+            (resource-not-found). Also carries `Deprecation: true`.
+          headers:
+            Deprecation:
+              description: "`true` -- this route is deprecated (ADR 0035)."
+              schema:
+                type: string
+                example: "true"
           content:
             application/problem+json:
               schema:
@@ -774,17 +905,36 @@ components:
       name: buildingId
       in: path
       required: true
-      description: The building whose committed shift plan to read.
+      deprecated: true
+      description: >-
+        DEPRECATED -- the legacy name of the plan key; use the
+        /sites/{siteCode}/... route (ADR 0035). The building whose committed
+        shift plan to read. NOT auto-scoped by site.
       schema:
         type: string
         minLength: 1
       example: bldg-1
 
+    SiteCodePath:
+      name: siteCode
+      in: path
+      required: true
+      description: >-
+        The canonical Site code (the facility-layout Site code, e.g. WH1).
+        It is both the plan lookup key AND the associate scope: activeHeads
+        counts only assignments whose associate has an active (not-ended)
+        shift at that site (ADR 0034, ADR 0035). The code is accepted as
+        given, never validated against facility-layout.
+      schema:
+        type: string
+        minLength: 1
+      example: WH1
+
     ShiftId:
       name: shiftId
       in: path
       required: true
-      description: The shift (within buildingId) whose committed plan to read.
+      description: The shift (within the site) whose committed plan to read.
       schema:
         type: string
         minLength: 1
@@ -833,7 +983,8 @@ components:
       description: >-
         Malformed JSON body, or a required field was missing/empty
         (empty-associate-id, empty-path-id, empty-certification,
-        missing-building-id, missing-shift-id, missing-charge, or
+        missing-building-id -- neither siteCode nor its deprecated alias
+        buildingId was sent --, missing-shift-id, missing-charge, or
         malformed-request-body). On the two Idempotency-Key-protected routes
         (POST /shift-plans, POST /associates/{id}/assignments) a missing
         Idempotency-Key header is also a 400 (idempotency-key-required).
@@ -859,6 +1010,22 @@ components:
             status: 404
             detail: not found
             instance: /associates/ghost/certifications
+    ConflictingSiteAndBuilding:
+      description: >-
+        The request carried both the canonical siteCode and its deprecated
+        alias buildingId with DIFFERENT values
+        (conflicting-site-and-building, ADR 0035). They name the same
+        thing; send one, or send the same value in both.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: https://errors.workforce-management.warehouse-systems.dev/conflicting-site-and-building
+            title: siteCode and its deprecated alias buildingId have different values
+            status: 422
+            detail: siteCode and buildingId (a deprecated alias of siteCode) are both present with different values
+            instance: /paths/pack/plan/propose
     IdempotencyKeyReused:
       description: >-
         The Idempotency-Key was already used with a request that had a
@@ -994,12 +1161,32 @@ components:
 
     ProposePathPlanRequest:
       type: object
-      required: [buildingId, charge]
+      description: >-
+        The ShiftPlan key is the canonical `siteCode`; `buildingId` is its
+        DEPRECATED alias (same value; ADR 0035). Send at least one. Both
+        present with different values is rejected with 422
+        conflicting-site-and-building.
+      required: [charge]
+      anyOf:
+        - required: [siteCode]
+        - required: [buildingId]
       properties:
+        siteCode:
+          type: string
+          minLength: 1
+          description: >-
+            The canonical Site code (the facility-layout Site code, e.g.
+            WH1) the proposal is for. Required unless the deprecated
+            buildingId is sent.
+          example: WH1
         buildingId:
           type: string
           minLength: 1
-          example: bldg-1
+          deprecated: true
+          description: >-
+            DEPRECATED -- use siteCode. Alias of siteCode with the same
+            value. Required only when siteCode is not sent.
+          example: WH1
         charge:
           type: number
           format: double
@@ -1103,12 +1290,33 @@ components:
 
     CommitShiftPlanRequest:
       type: object
-      required: [buildingId, shiftId, lines]
+      description: >-
+        The ShiftPlan key is the canonical `siteCode`; `buildingId` is its
+        DEPRECATED alias (same value, same stored column; ADR 0035). Send
+        at least one. Sending both with the same value is fine; both with
+        different values is rejected with 422
+        conflicting-site-and-building.
+      required: [shiftId, lines]
+      anyOf:
+        - required: [siteCode]
+        - required: [buildingId]
       properties:
+        siteCode:
+          type: string
+          minLength: 1
+          description: >-
+            The canonical Site code (the facility-layout Site code, e.g.
+            WH1) the plan is for. Required unless the deprecated buildingId
+            is sent.
+          example: WH1
         buildingId:
           type: string
           minLength: 1
-          example: bldg-1
+          deprecated: true
+          description: >-
+            DEPRECATED -- use siteCode. Alias of siteCode with the same
+            value. Required only when siteCode is not sent.
+          example: WH1
         shiftId:
           type: string
           minLength: 1
@@ -1143,11 +1351,23 @@ components:
 
     ShiftPlanResponse:
       type: object
-      required: [buildingId, shiftId, lines]
+      required: [siteCode, buildingId, shiftId, lines]
       properties:
+        siteCode:
+          type: string
+          description: >-
+            The canonical Site code the plan is keyed by (ADR 0035). The
+            same value as the deprecated buildingId.
+          example: WH1
         buildingId:
           type: string
-          example: bldg-1
+          deprecated: true
+          description: >-
+            DEPRECATED -- use siteCode. The legacy name of the plan key,
+            kept with the SAME value as siteCode (same stored column) so
+            existing consumers do not break. Removed only by a later,
+            announced breaking ADR.
+          example: WH1
         shiftId:
           type: string
           example: shift-1
@@ -1227,9 +1447,10 @@ components:
         siteCode:
           type: string
           description: >-
-            ADDITIVE (ADR 0034). Echoed only when the request was scoped
-            with the siteCode query parameter: the canonical site the
-            activeHeads were counted at. Omitted when unscoped, i.e. the
-            gap is fleet-wide across every site -- consumers must treat
-            absence as "unscoped", never as a particular site.
+            ADDITIVE (ADR 0034, canonical since ADR 0035). Echoed only when
+            the request was scoped by site (siteCode given): the canonical
+            site the activeHeads were counted at. Omitted when unscoped --
+            a call that gives only the legacy buildingId is NOT scoped --
+            i.e. the gap is fleet-wide across every site; consumers must
+            treat absence as "unscoped", never as a particular site.
           example: WH1

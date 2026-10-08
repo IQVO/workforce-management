@@ -14,9 +14,9 @@ import (
 const coverStaffingGapsSOP = `You are helping cover staffing gaps in a warehouse shift. Use only the MCP tools; never assume state. This context surfaces the gap and enforces the invariants — the decision to move a person is a human call, so recommend, do not act autonomously beyond a clearly-safe assignment.
 
 Procedure:
-1. For each process path you care about, call get_staffing_gap(buildingId, shiftId, pathId). A path is understaffed when activeHeads < plannedHeads; the shortfall is plannedHeads - activeHeads.
+1. For each process path you care about, call get_staffing_gap(siteCode, shiftId, pathId). siteCode is the canonical site identifier (the plan key and the associate scope); buildingId is a deprecated alias of the plan key and is not scoped by site. A path is understaffed when activeHeads < plannedHeads; the shortfall is plannedHeads - activeHeads.
 2. Rank paths by shortfall, largest first — that is where coverage is most urgent.
-3. If you are sizing a plan rather than reading one, call propose_path_heads(buildingId, pathId, charge, plannedRate) to see how many heads a path needs at a given rate. This proposes only; it commits nothing.
+3. If you are sizing a plan rather than reading one, call propose_path_heads(siteCode, pathId, charge, plannedRate) to see how many heads a path needs at a given rate. This proposes only; it commits nothing.
 4. To actually move a certified, available associate onto an understaffed path, call assign_labor(associateId, pathId). This ends the associate's prior active assignment and starts the new one. It is rejected if the associate lacks the path's required certification, is on break, or their shift has ended — treat that rejection as a hard stop, not something to work around.
 
 Interpretation:
