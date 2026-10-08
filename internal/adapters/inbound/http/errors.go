@@ -13,13 +13,13 @@ import (
 )
 
 // Local validation sentinels for request fields that have no dedicated
-// domain value object (buildingId/shiftId are plain strings on ShiftPlan).
+// domain value object (shiftId is a plain string on ShiftPlan; the plan key's
+// own missing/conflict errors live in shared, ADR 0035).
 // These stay in the HTTP adapter: they gate malformed requests before a use
 // case is ever invoked, they do not change use-case or domain behavior.
 var (
-	errMissingBuildingId = errors.New("buildingId is required")
-	errMissingShiftId    = errors.New("shiftId is required")
-	errMissingCharge     = errors.New("charge is required")
+	errMissingShiftId = errors.New("shiftId is required")
+	errMissingCharge  = errors.New("charge is required")
 	// errNullBody rejects a literal JSON null request body (a no-op when
 	// decoded into a value struct). It intentionally has no dedicated
 	// categoryFor entry: categoryFor's 400-status fallback already maps
@@ -62,6 +62,13 @@ func statusFor(err error) int {
 		// caller can tell "re-fetch and retry" apart from a business
 		// rule rejection.
 		return http.StatusConflict
+	case errors.Is(err, shared.ErrMissingSiteKey):
+		return http.StatusBadRequest
+	case errors.Is(err, shared.ErrConflictingSiteAndBuilding):
+		// siteCode and its deprecated alias buildingId name the same value;
+		// two different values are a well-formed but unprocessable request
+		// (ADR 0035). 422, not 409: no resource state is in conflict.
+		return http.StatusUnprocessableEntity
 	case errors.Is(err, ports.ErrInstalledCapacityUnavailable):
 		// A dependency-reachability failure, not a client validation
 		// error: the request itself was well-formed, but this service
@@ -100,7 +107,10 @@ var problemCategoryCatalog = []struct {
 	{sentinel: shared.ErrEmptyCertification, category: problemCategory{"empty-certification", "Certification must not be empty"}},
 	{sentinel: shiftplan.ErrNoPathPlans, category: problemCategory{"shift-plan-no-path-plans", "Shift plan must have at least one path plan line"}},
 	{sentinel: shiftplan.ErrMissingInstalledStations, category: problemCategory{"shift-plan-missing-installed-stations", "Missing installed station count for path"}},
-	{sentinel: errMissingBuildingId, category: problemCategory{"missing-building-id", "buildingId is required"}},
+	// The slug stays `missing-building-id` (ADR 0035): clients that match it
+	// keep working; only the title/detail now name siteCode, the canonical key.
+	{sentinel: shared.ErrMissingSiteKey, category: problemCategory{"missing-building-id", "siteCode is required (buildingId is a deprecated alias)"}},
+	{sentinel: shared.ErrConflictingSiteAndBuilding, category: problemCategory{"conflicting-site-and-building", "siteCode and its deprecated alias buildingId have different values"}},
 	{sentinel: errMissingShiftId, category: problemCategory{"missing-shift-id", "shiftId is required"}},
 	{sentinel: errMissingCharge, category: problemCategory{"missing-charge", "charge is required"}},
 	{sentinel: associate.ErrAlreadyOnBreak, category: problemCategory{"associate-already-on-break", "Associate is already on break"}},

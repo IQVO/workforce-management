@@ -55,6 +55,7 @@ domain layer knows nothing about HTTP.
 | `400 Bad Request` | Malformed JSON, or a value object that refuses to construct (empty id, empty certification), or a missing required query/body field |
 | `404 Not Found` | `ports.ErrNotFound` — the associate or the committed plan does not exist |
 | `409 Conflict` | A domain invariant refused the operation. The request was well-formed; the domain said no |
+| `422 Unprocessable Entity` | `shared.ErrConflictingSiteAndBuilding` — the request named the ShiftPlan key twice (`siteCode` and the deprecated `buildingId`) with different values — and an Idempotency-Key reused with a different body |
 | `500 Internal Server Error` | Anything unmapped — a repository or publisher failure |
 | `503 Service Unavailable` | `CommitShiftPlan` could not verify installed capacity against `fulfillment-execution` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) — retry later |
 
@@ -76,7 +77,7 @@ Base URI: `https://errors.workforce-management.warehouse-systems.dev`
 | `/empty-path-id` | Path id must not be empty | `shared.ErrEmptyPathId` |
 | `/unknown-path-id` | Unrecognized process-path id | `pathcatalog.ErrUnknownPath` |
 | `/empty-certification` | Certification must not be empty | `shared.ErrEmptyCertification` |
-| `/missing-building-id` | buildingId is required | HTTP-layer sentinel |
+| `/missing-building-id` | siteCode is required (buildingId is a deprecated alias) | `shared.ErrMissingSiteKey` — neither `siteCode` nor `buildingId` was sent. The slug keeps its historic name so existing clients keep matching it ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)) |
 | `/missing-shift-id` | shiftId is required | HTTP-layer sentinel |
 | `/shift-plan-no-path-plans` | Shift plan must have at least one path plan line | `shiftplan.ErrNoPathPlans` |
 | `/shift-plan-missing-installed-stations` | Missing installed station count for path | `shiftplan.ErrMissingInstalledStations` |
@@ -101,6 +102,15 @@ Base URI: `https://errors.workforce-management.warehouse-systems.dev`
 | `/planned-heads-exceed-installed` | Planned heads exceed installed stations for path | `shiftplan.ErrPlannedHeadsExceedInstalled` |
 | `/exceeds-installed-capacity` | Planned heads exceed the live installed capacity reported by fulfillment-execution | `shiftplan.ErrExceedsInstalledCapacity` |
 | `/planned-hours-exceed-capacity` | Planned hours exceed capacity for planned heads within max hours per shift | `shiftplan.ErrPlannedHoursExceedCapacity` |
+
+### `422` — unprocessable
+
+| `type` suffix | `title` | Sentinel |
+| --- | --- | --- |
+| `/conflicting-site-and-building` | siteCode and its deprecated alias buildingId have different values | `shared.ErrConflictingSiteAndBuilding` — a request carried both names of the ShiftPlan key with different values ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)) |
+
+The `422 Unprocessable Entity` status is also used by the idempotency middleware
+(`/idempotency-key-reused`, [ADR 0027](../adr/0027-idempotency-key-middleware.md)).
 
 ### `500` — unmapped
 

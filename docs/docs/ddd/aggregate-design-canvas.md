@@ -15,7 +15,7 @@ has a status enum: state is held in booleans (`onBreak`, `ended`) or in the
 presence of an optional field (`active *Interval`), so each state diagram
 names the states those fields encode. Every transition label is a real method.
 
-Throughput and size figures are **estimates** for one building running
+Throughput and size figures are **estimates** for one site running
 roughly a hundred associates per shift; they are not measured.
 
 ## ShiftPlan
@@ -23,11 +23,13 @@ roughly a hundred associates per shift; they are not measured.
 ### 1. Name
 
 `ShiftPlan` — `internal/domain/shiftplan/shift_plan.go`. Identity: the pair
-`(buildingId, shiftId)`.
+`(siteCode, shiftId)`; `siteCode` is the canonical name of the key and
+`buildingId` its deprecated alias (same value, stored in `building_id`;
+[ADR 0035](../adr/0035-sitecode-converges-building-id.md)).
 
 ### 2. Description
 
-The headcount split a human committed across paths for one building's shift:
+The headcount split a human committed across paths for one site's shift:
 a list of `PathPlan` lines (`PathId`, `PlannedHeads`, `PlannedRate`,
 `PlannedHours`). It is the context's specification model — the number
 downstream planners consume.
@@ -37,7 +39,7 @@ downstream planners consume.
 ```mermaid
 stateDiagram-v2
     [*] --> Committed: CommitShiftPlan / ShiftPlanCommitted
-    Committed --> Committed: CommitShiftPlan again for the same building and shift
+    Committed --> Committed: CommitShiftPlan again for the same site and shift
     Committed --> [*]
 ```
 
@@ -82,7 +84,7 @@ aggregate (see [Domain events](./domain-events.md)).
 
 ### 8. Throughput
 
-Estimate: a handful of commits per building per shift (one at shift start,
+Estimate: a handful of commits per site per shift (one at shift start,
 occasional re-commits). Concurrency conflicts are not guarded: there is no
 `version` column, because each commit builds a fresh plan rather than
 mutating a loaded one ([ADR 0021](../adr/0021-optimistic-concurrency-version-column.md)).

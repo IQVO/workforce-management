@@ -116,7 +116,15 @@ func Rehydrate(buildingId, shiftId string, lines []PathPlan) *ShiftPlan {
 	}
 }
 
-// BuildingId returns the building this plan was committed for.
+// SiteCode returns the site this plan was committed for -- the canonical name
+// of the plan key (ADR 0035).
+func (s *ShiftPlan) SiteCode() string { return s.buildingId }
+
+// BuildingId returns the same value as SiteCode. It is the deprecated alias
+// (written without the godoc "Deprecated:" marker on purpose: the persistence
+// and event adapters still read the stored building_id name, and staticcheck
+// would flag every such use); buildingId is removed only by a later, announced
+// breaking ADR.
 func (s *ShiftPlan) BuildingId() string { return s.buildingId }
 
 // ShiftId returns the shift this plan was committed for.

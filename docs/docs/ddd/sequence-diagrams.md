@@ -64,7 +64,11 @@ sequenceDiagram
     alt unknown path
         H-->>IK: 400 unknown-path-id
     end
-    H->>UC: Execute buildingId, shiftId, lines, installedStations
+    H->>H: ResolveSiteKey siteCode or deprecated buildingId, same value
+    alt neither, or both with different values
+        H-->>IK: 400 missing-building-id or 422 conflicting-site-and-building
+    end
+    H->>UC: Execute siteCode (stored as building_id), shiftId, lines, installedStations
     loop each distinct path
         UC->>Cat: Lookup pathId
         loop each required capability not yet fetched
@@ -86,7 +90,7 @@ sequenceDiagram
     OB->>Repo: FindByBuildingAndShift to fan out one row per line
     OB->>OB: INSERT outbox_events, N integration rows and 1 analytics row
     UC-->>H: ShiftPlan
-    H-->>IK: 201 Created, Location /shift-plans/buildingId/shiftId
+    H-->>IK: 201 Created, Location /shift-plans/siteCode/shiftId, body carries siteCode and buildingId (same value)
     IK->>IK: RELEASE SAVEPOINT, UPDATE idempotency_keys with the response, COMMIT
     IK-->>Client: 201 Created
 ```
@@ -97,7 +101,10 @@ Source: `internal/adapters/inbound/http/idempotency.go`, `router.go`
 `internal/adapters/outbound/postgres/shift_plan_repo.go`, `outbox_publisher.go`,
 `internal/adapters/outbound/kafka/publisher.go`. Omits: request-body decoding
 errors, the `ErrCommitShiftPlanNoCatalogue` wiring error, and the circuit
-breaker around the capacity client. Every normal response, including a 4xx,
+breaker around the capacity client. The plan key is the canonical `siteCode`;
+`buildingId` is accepted as a deprecated alias (same value, same
+`building_id` column) and each published line message carries `site_code` next
+to `building_id` ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)). Every normal response, including a 4xx,
 is stored against the key; only a panic rolls the key back. The wrapped
 handler runs inside a savepoint: a 2xx releases it, any other status rolls
 back to it first, so a failed request's domain writes and outbox rows are
@@ -294,7 +301,11 @@ sequenceDiagram
     participant OB as EventPublisher
     Client->>In: charge, optional plannedRate
     In->>In: validatePathId
-    In->>UC: Execute buildingId, pathId, charge, plannedRate
+    In->>In: ResolveSiteKey siteCode or deprecated buildingId, same value
+    alt neither, or both with different values
+        In-->>Client: 400 missing-building-id or 422 conflicting-site-and-building
+    end
+    In->>UC: Execute siteCode (stored as building_id), pathId, charge, plannedRate
     opt plannedRate not positive and MeasuredRate wired
         UC->>MR: MeanActualSeconds pathId
         alt available and seconds positive
@@ -332,9 +343,10 @@ sequenceDiagram
     participant LR as AssignmentRepo
     participant IS as IdleShareClient
     participant OB as EventPublisher
-    Client->>In: buildingId, shiftId, pathId or all paths, optional siteCode
-    In->>UC: Execute or ExecuteAll, or ExecuteForSite or ExecuteAllForSite with siteCode
-    UC->>SR: FindByBuildingAndShift
+    Client->>In: siteCode (or deprecated buildingId), shiftId, pathId or all paths
+    In->>In: ResolveGapLookup, siteCode is plan key and scope, buildingId only is plan key and unscoped
+    In->>UC: Execute or ExecuteAll, or ExecuteForSite or ExecuteAllForSite with the scope
+    UC->>SR: FindByBuildingAndShift, the stored building_id column holds the site code
     alt no committed plan
         SR-->>UC: ErrNotFound, mapped to 404
     end
@@ -359,12 +371,20 @@ sequenceDiagram
 
 Source: `internal/application/usecases/get_staffing_gap.go`,
 `internal/adapters/inbound/http/router.go` (`staffingGap`,
-`staffingGapForShift`), `internal/adapters/inbound/mcp/tools.go`,
-`resources.go`. Omits: query-parameter validation (missing `buildingId` /
-`shiftId` → 400). **Resolved (Decided 2026-10-06, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)):**
+`staffingGapForSiteShift`, `staffingGapForShift`),
+`internal/adapters/inbound/mcp/tools.go`, `resources.go`. Omits:
+query-parameter validation (neither `siteCode` nor `buildingId`, or no `shiftId`
+→ 400). **Resolved (Decided 2026-10-06, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md),
+[ADR 0035](../adr/0035-sitecode-converges-building-id.md)):**
 `CountActiveByPath` still counts every active assignment on the path across
-sites and buildings — that is the **unscoped** answer, unchanged for callers
-that send no `siteCode`. With a `siteCode`, `CountActiveByPathAtSite` counts
+sites — that is the **unscoped** answer, which is what a call that sends only
+the legacy `buildingId` gets (callers use ids like `bldg-1`, not Site codes).
+With a `siteCode`, which is both the plan key and the scope,
+`CountActiveByPathAtSite` counts
 only assignments whose associate has a not-ended shift at that site
 (`labor_assignment` ⨝ `associate_shift`); legacy `NULL`-site rows never match a
-site. The MCP resource `staffing://…/gap` stays unscoped.
+site. Routes: `GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap` is
+canonical; `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap` is the
+deprecated alias (`Deprecation: true`, unscoped unless `?siteCode=`). MCP
+resource `staffing://sites/{siteCode}/{shiftId}/{pathId}/gap` is scoped;
+`staffing://{buildingId}/…/gap` stays unscoped and deprecated.

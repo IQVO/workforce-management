@@ -105,7 +105,8 @@ the only inbound topics are the two opt-in cache feeds above
 - **Fan-out**: a `ShiftPlan` has multiple `PathPlan` lines — `CommitShiftPlan`
   with 3 lines publishes 3 Kafka messages, one per line, each carrying that
   line's `planned_heads`/`planned_rate`/`planned_hours` plus the plan's
-  `building_id`/`shift_id`. Consumers must expect N messages per commit.
+  `site_code` (same value as the deprecated `building_id`, which is still
+  published) and `shift_id`. Consumers must expect N messages per commit.
 - **Envelope**: CloudEvents 1.0, MANDATORY, structured content mode, for
   every message produced or consumed (ADR-0026). No flat envelope, no
   dual-read/write, no envelope toggle. Build/decode only through
@@ -125,6 +126,7 @@ the only inbound topics are the two opt-in cache feeds above
   "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
   "time": "2026-08-21T22:00:00Z",
   "data": {
+    "site_code": "bldg-1",
     "building_id": "bldg-1",
     "shift_id": "shift-1",
     "path_id": "pack",
@@ -138,8 +140,9 @@ the only inbound topics are the two opt-in cache feeds above
 `id` is a UUID v4 minted once per message at Encode time (each fanned-out
 line gets its own) and persisted with the outbox row, so a relay retry
 republishes the same id. `subject` is the aggregate id — for
-`ShiftPlanCommitted` the ShiftPlan id `<buildingId>/<shiftId>`, identical to
-the Kafka key. `time` is the domain occurred-at, UTC. `dataschema` is
+`ShiftPlanCommitted` the ShiftPlan id `<siteCode>/<shiftId>` (unchanged on the
+wire: its first segment IS the site code, formerly called the building id),
+identical to the Kafka key. `time` is the domain occurred-at, UTC. `dataschema` is
 `...:events:...` on the integration topic and `...:analytics:...` on the
 analytics topic. Consumers dispatch on the FULL `type`, ignore unknown types,
 dedupe on `id`, and DLQ (analytics projector) or WARN-and-skip (catalogue /

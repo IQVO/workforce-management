@@ -32,9 +32,13 @@ const tracerName = "github.com/claudioed/workforce-management/internal/adapters/
 const integrationSchemaVersion = 1
 
 // shiftPlanCommittedData is the CloudEvents `data` payload of one
-// ShiftPlanCommitted PathPlan-line message — byte-for-byte the payload shape
-// this topic has always carried.
+// ShiftPlanCommitted PathPlan-line message. SiteCode is the canonical name of
+// the plan key; BuildingId is its deprecated alias and carries the SAME value
+// (ADR 0035, additive: building_id stays and is not removed). The Kafka key and
+// the CloudEvents subject (<buildingId>/<shiftId>, whose first segment is the
+// site code) are unchanged.
 type shiftPlanCommittedData struct {
+	SiteCode     string  `json:"site_code"`
 	BuildingId   string  `json:"building_id"`
 	ShiftId      string  `json:"shift_id"`
 	PathId       string  `json:"path_id"`
@@ -130,6 +134,7 @@ func (p *Publisher) Encode(ctx context.Context, events ...shared.DomainEvent) ([
 				Stream:    cloudevents.StreamEvents,
 				Version:   integrationSchemaVersion,
 				Data: shiftPlanCommittedData{
+					SiteCode:     committed.SiteCode(),
 					BuildingId:   committed.BuildingId,
 					ShiftId:      committed.ShiftId,
 					PathId:       string(line.PathId),

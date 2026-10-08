@@ -191,6 +191,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			key: string(ev.PathId), subject: string(ev.PathId),
 			data: mustMarshal(map[string]any{
 				"building_id":   ev.BuildingId,
+				"site_code":     ev.SiteCode(),
 				"path_id":       string(ev.PathId),
 				"planned_heads": ev.PlannedHeads,
 				"planned_rate":  ev.PlannedRate,
@@ -200,6 +201,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			key: ev.BuildingId, subject: shiftPlanKey(ev.BuildingId, ev.ShiftId),
 			data: mustMarshal(map[string]any{
 				"building_id": ev.BuildingId,
+				"site_code":   ev.SiteCode(),
 				"shift_id":    ev.ShiftId,
 			})}, true
 	default:

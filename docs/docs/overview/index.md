@@ -16,7 +16,7 @@ production system** and is **not affiliated with, endorsed by, or
 representative of any real-world company**.
 :::
 
-**Workforce Management** is one of the eleven Go backend bounded contexts that
+**Workforce Management** is one of the twelve Go backend bounded contexts that
 make up the `warehouse-systems` platform. It is a **Supporting** bounded
 context, and it owns exactly one question:
 
@@ -26,7 +26,7 @@ context, and it owns exactly one question:
 It covers two horizons that people often (wrongly) fuse into one:
 
 1. **The shift-start planning horizon.** A human commits a split of headcount
-   across process paths for a building's shift. The software *proposes*
+   across process paths for a site's shift. The software *proposes*
    (`heads = ceil(charge ÷ plannedRate)`); a human *commits*. That commitment
    is the `ShiftPlan` aggregate, made of `PathPlan` lines.
 2. **Intra-shift assignment tracking.** As backlogs deviate from plan,

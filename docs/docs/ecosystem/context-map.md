@@ -52,7 +52,8 @@ Source: `internal/adapters/outbound/kafka/publisher.go`,
 `internal/adapters/outbound/laborperformance/client.go`,
 `internal/adapters/inbound/mcp/tools.go`, `cmd/workforce/main.go`, and the
 sibling files named in the table. Omits: sibling-to-sibling edges,
-`facility-layout` and `inventory-storage` (no edge, see below), and this
+`facility-layout`, `inventory-storage` and `product-master` (no edge, see
+below), and this
 context's internal analytics topic.
 
 The `fulfillment-execution` edge is drawn solid because the reference
@@ -71,6 +72,7 @@ deployment sets `INSTALLED_CAPACITY_MODE=http`; the service default,
 | → `warehouse-console` | WFM upstream | Open Host Service (presentation composition, not a domain edge) | REST via the `workforce_mfe` remote; REST `GET /reports/labor` | live | there: `src/features/context-reports/workforceManagement.config.tsx`; here: `web/` ([ADR 0011](../adr/0011-adopt-fleet-mfe-console-architecture.md)) |
 | `fulfillment-execution` at the task level | — | **Separate Ways** | none | deliberately absent | [ADR 0002](../adr/0002-stop-at-the-path-boundary.md) |
 | `inventory-storage` | — | **Separate Ways** | none | deliberately absent | no adapter package; see "The WMS tier" below |
+| `product-master` | — | **Separate Ways** | none | deliberately absent | no adapter package and no consumer of `warehouse.product-master.events`; see "The WMS tier" below |
 | `facility-layout` | would be WFM downstream | Conformist, unexercised | none | deliberately absent | no adapter package; see below |
 
 Unused surface: the MCP tool `assign_labor` is registered, but no sibling
@@ -179,8 +181,9 @@ built, that is when this edge would become real.
 
 ### The WMS tier: **no relationship, correctly**
 
-`inventory-storage` owns stock truth. The platform DDD reference is emphatic
-that worker identity must stay *out* of the WMS tier:
+`inventory-storage` owns stock truth, and `product-master` owns SKU product
+master data (handling classification and physical profile). The platform DDD
+reference is emphatic that worker identity must stay *out* of the WMS tier:
 
 > WMS "has **zero** knowledge of individual workers, shifts, real-time
 > location, or travel distance. If it acquires that knowledge, a
@@ -188,8 +191,9 @@ that worker identity must stay *out* of the WMS tier:
 > domain (order fulfillment truth), and every labor policy change now forces a
 > WMS regression."
 
-The absence of an edge between this service and `inventory-storage` is that
-rule holding.
+The absence of an edge between this service and `inventory-storage` or
+`product-master` is that rule holding. Labor planning works per process path
+and never needs a SKU's attributes.
 
 ## Direction of dependency, summarised
 

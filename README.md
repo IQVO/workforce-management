@@ -115,10 +115,13 @@ migrations/analytics/         golang-migrate SQL files (analytical DB, owned by 
   registered with `pick`. A path requiring several capabilities is capped by
   the scarcest one (MIN); a path the catalogue does not declare is rejected
   `400 unknown-path-id` before fulfillment-execution is called.
-- **`GetStaffingGap` takes `buildingId`/`shiftId` as query parameters**
-  (`GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`) because
-  `ShiftPlan` is keyed by building + shift, and a path's planned heads only
-  make sense within one committed plan.
+- **`GetStaffingGap` takes `siteCode`/`shiftId` as query parameters**
+  (`GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=`) because
+  `ShiftPlan` is keyed by site + shift, and a path's planned heads only
+  make sense within one committed plan. **Site is the ubiquitous-language
+  term**: `siteCode` (the facility-layout Site code) is the canonical name of
+  the plan key and `buildingId` its deprecated alias — same value, same stored
+  column, nothing removed ([ADR 0035](docs/docs/adr/0035-sitecode-converges-building-id.md)).
 - **`PathPlan.plannedHours <= plannedHeads * maxHoursPerShift`** is how
   "sum of hours valid" is enforced on `ShiftPlan`: a path line can't commit
   more total hours than its planned heads could work within one shift's max.
@@ -263,11 +266,14 @@ curl -X POST localhost:8080/associates/assoc-1/certifications \
 # trimmed (floored at 1 head) and trimReason explains why
 # (idleness-as-staffing-signal, ADR-0020).
 curl -X POST localhost:8080/paths/pack/plan/propose \
-  -d '{"buildingId":"bldg-1","charge":100,"plannedRate":30}'
+  -d '{"siteCode":"WH1","charge":100,"plannedRate":30}'
 # -> {"pathId":"pack","proposedHeads":4,"resolvedRate":30,"rateSource":"caller"}
+# (siteCode is canonical; "buildingId" is a deprecated alias with the same
+#  value, and sending both with different values is 422
+#  conflicting-site-and-building -- ADR-0035)
 
 curl -X POST localhost:8080/paths/pack/plan/propose \
-  -d '{"buildingId":"bldg-1","charge":100}'
+  -d '{"siteCode":"WH1","charge":100}'
 # -> falls back to labor-performance's measured rate for PACK when
 #    LABOR_PERFORMANCE_MODE=http and data exists; otherwise 0 proposed heads.
 
@@ -281,8 +287,8 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 # idempotency-key-reused, and a retry with the same key + body replays the
 # stored response.
 curl -X POST localhost:8080/shift-plans \
-  -H 'Idempotency-Key: 6f1d2c3a-commit-bldg-1-shift-1' \
-  -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
+  -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
+  -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10}
       ]}'
 
@@ -300,17 +306,19 @@ curl -X POST localhost:8080/associates/assoc-1/break/end
 #    plus observedIdleShare (a 0..1 fraction; observedIdlePct is its deprecated
 #    alias, same value) when LABOR_PERFORMANCE_MODE=kafka-cache has a signal
 #    for the path (ADR-0020, ADR-0033). Unknown path ids are 400 unknown-path-id.
-curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
+curl "localhost:8080/paths/pack/staffing-gap?siteCode=WH1&shiftId=shift-1"
 
-# Same, counting only associates with an active shift at one site (ADR-0034;
-# optional siteCode, also on the list below and on the MCP get_staffing_gap
-# tool). The response then echoes "siteCode"; without it the count is
-# fleet-wide, exactly as before.
-curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1&siteCode=WH1"
+# siteCode is the plan key AND the associate scope: only associates with an
+# active shift at that site are counted (ADR-0034, ADR-0035); the response
+# echoes "siteCode". The deprecated buildingId alias finds the same plan but a
+# call giving ONLY buildingId is not scoped (fleet-wide count, exactly as
+# before). Also available on the MCP get_staffing_gap tool.
+curl "localhost:8080/paths/pack/staffing-gap?buildingId=WH1&shiftId=shift-1"
 
 # Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)
-# -> a JSON array of the same per-path objects
-curl localhost:8080/buildings/bldg-1/shifts/shift-1/staffing-gap
+# -> a JSON array of the same per-path objects (canonical route, ADR-0035)
+curl localhost:8080/sites/WH1/shifts/shift-1/staffing-gap
+# Deprecated alias (answers "Deprecation: true"): /buildings/WH1/shifts/shift-1/staffing-gap
 
 # End an associate's shift (closes any active assignment first)
 curl -X POST localhost:8080/associates/assoc-1/end-shift
@@ -396,12 +404,13 @@ the full edge list.
   "id": "uuid-v4",
   "source": "/warehouse/workforce-management",
   "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
-  "subject": "<building_id>/<shift_id>",
+  "subject": "<site_code>/<shift_id>",
   "datacontenttype": "application/json",
   "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
   "time": "2026-08-21T22:00:00Z",
   "data": {
-    "building_id": "...",
+    "site_code": "...",
+    "building_id": "... (deprecated, same value as site_code)",
     "shift_id": "...",
     "path_id": "...",
     "planned_heads": 3,
@@ -420,7 +429,7 @@ export KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce
 
 curl -X POST localhost:8080/shift-plans \
-  -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
+  -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10},
         {"pathId":"pick","plannedHeads":2,"plannedRate":25,"plannedHours":16,"installedStations":10}
       ]}'

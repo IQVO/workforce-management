@@ -61,17 +61,17 @@ and it never decides who moves — that is a human call it records.
 | --- | --- | --- | --- | --- |
 | Shift lead (console `workforce_mfe`, curl) | StartAssociateShift | Command | `POST /associates/{id}/start-shift` (optional `siteCode`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) | OHS (REST, OpenAPI) |
 | Shift lead | CertifyAssociate | Command | `POST /associates/{id}/certifications` | OHS |
-| Shift lead | ProposePathPlan | Command (pure computation; publishes `ShiftPlanProposed`) | `POST /paths/{pathId}/plan/propose` | OHS |
-| Shift lead | CommitShiftPlan | Command | `POST /shift-plans` (requires `Idempotency-Key`) | OHS |
+| Shift lead | ProposePathPlan | Command (pure computation; publishes `ShiftPlanProposed`) | `POST /paths/{pathId}/plan/propose` (body `siteCode`, deprecated alias `buildingId`; [ADR 0035](../adr/0035-sitecode-converges-building-id.md)) | OHS |
+| Shift lead | CommitShiftPlan | Command | `POST /shift-plans` (requires `Idempotency-Key`; body `siteCode`, deprecated alias `buildingId`) | OHS |
 | Shift lead | AssignLabor | Command | `POST /associates/{id}/assignments` (requires `Idempotency-Key`) | OHS |
 | Shift lead | StartBreak / EndBreak | Command | `POST /associates/{id}/break/start`, `POST /associates/{id}/break/end` | OHS |
 | Shift lead | EndAssociateShift | Command | `POST /associates/{id}/end-shift` | OHS |
-| Shift lead, console | GetStaffingGap | Query | `GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=[&siteCode=]`, `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap[?siteCode=]` | OHS |
-| `warehouse-ops-agent` | get_staffing_gap | Query | MCP tool `get_staffing_gap` (`cmd/mcp`; optional `siteCode`) | OHS (MCP) |
-| `warehouse-ops-agent` | propose_path_heads | Command (pure computation) | MCP tool `propose_path_heads` | OHS (MCP) |
+| Shift lead, console | GetStaffingGap | Query | `GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=` (deprecated alias `buildingId`: plan lookup only, not scoped), canonical `GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap`, deprecated `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap[?siteCode=]` | OHS |
+| `warehouse-ops-agent` | get_staffing_gap | Query | MCP tool `get_staffing_gap` (`cmd/mcp`; `siteCode`, deprecated alias `buildingId`) | OHS (MCP) |
+| `warehouse-ops-agent` | propose_path_heads | Command (pure computation) | MCP tool `propose_path_heads` (`siteCode`, deprecated alias `buildingId`) | OHS (MCP) |
 | MCP host / model | assign_labor | Command | MCP tool `assign_labor` (registered; no sibling calls it in code today) | OHS (MCP) |
 | MCP host / model | get_workforce_labor_report | Query | MCP tool `get_workforce_labor_report` (only when `REPORTS_BASE_URL` is set) | OHS (MCP) |
-| MCP host / model | staffing gap | Query | MCP resource `staffing://{buildingId}/{shiftId}/{pathId}/gap` | OHS (MCP) |
+| MCP host / model | staffing gap | Query | MCP resources `staffing://sites/{siteCode}/{shiftId}/{pathId}/gap` (canonical, scoped) and deprecated `staffing://{buildingId}/{shiftId}/{pathId}/gap` (unscoped) | OHS (MCP) |
 | `warehouse-ops-agent`, `warehouse-console` | Labor report | Query | `GET /reports/labor`, `GET /reports/labor/freshness` (`cmd/workforce-reports`) | OHS (REST) |
 | `process-path-management` | ProcessPathCreated / Updated / Deactivated | Event | `warehouse.process-path-management.events`, `com.warehouse.wes.process-path-management.processpath.ProcessPath{Created,Updated,Deactivated}` (only when `PATH_CATALOGUE_SOURCE=kafka`) | CF on its Published Language |
 | `labor-performance` | TaskPerformanceRecorded | Event | `warehouse.labor-performance.events`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` (only when `LABOR_PERFORMANCE_MODE=kafka-cache`) | CF + ACL (`taskTypeForPathId`) |
@@ -81,7 +81,7 @@ and it never decides who moves — that is a human call it records.
 
 | Collaborator | Message | Type | Channel | Relationship |
 | --- | --- | --- | --- | --- |
-| `wes-work-planning`, `warehouse-planning` | ShiftPlanCommitted (one per `PathPlan` line) | Event | `warehouse.workforce.events`, `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`, key `<buildingId>/<shiftId>` | C/S, PL (customers translate) |
+| `wes-work-planning`, `warehouse-planning` | ShiftPlanCommitted (one per `PathPlan` line) | Event | `warehouse.workforce.events`, `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted`, key `<siteCode>/<shiftId>` (unchanged; payload carries `site_code` and the deprecated `building_id`) | C/S, PL (customers translate) |
 | this context's analytics projector | all 10 domain events | Event | `warehouse.workforce.analytics` | internal |
 | `fulfillment-execution` | InstalledCapacity | Query | `GET /capacity/{capability}` (only when `INSTALLED_CAPACITY_MODE=http`; fail-loud) | CF |
 | `labor-performance` | MeanActualSeconds | Query | `GET /task-types/{taskType}/performance` (only when `LABOR_PERFORMANCE_MODE=http`; fail-open) | CF + ACL |
@@ -159,6 +159,14 @@ Top terms: **ShiftPlan**, **PathPlan**, **AssociateShift**,
   the gap used to count active assignments across every building. It is now
   optionally scoped to a canonical site (`siteCode`); unscoped callers and
   legacy rows behave as before.
+- **Decided 2026-10-06 — `siteCode` converges `buildingId` (resolved, [ADR 0035](../adr/0035-sitecode-converges-building-id.md)):**
+  two identifiers for one concept is a ubiquitous-language defect. `siteCode`
+  is now the canonical name of the ShiftPlan key on every REST, MCP and event
+  surface; `buildingId` is a deprecated alias with the same value and the same
+  stored column (no migration, no Kafka key change, nothing removed). A call
+  that gives only the legacy `buildingId` is not scoped by site. Removing
+  `buildingId` is a later breaking ADR. This replaces the former "buildingId vs
+  siteCode are not mapped" note.
 - **Decided 2026-10-06 — `domain_event` table:** legacy, unused; retained
   (additive migrations only; dropping needs explicit approval).
 - `PathDefinition.DestinationLocationRole` is carried from

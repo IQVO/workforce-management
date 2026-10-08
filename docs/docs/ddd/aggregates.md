@@ -33,6 +33,8 @@ classDiagram
     -shiftId: string
     -lines: PathPlan[]
     +CommitShiftPlan(...)$ error
+    +SiteCode() string
+    +BuildingId() string
     +PlannedHeadsFor(pathId) int
     +Lines() PathPlan[]
   }
@@ -91,10 +93,14 @@ through an assignment-shaped door.
 
 ## ShiftPlan
 
-**Package:** `internal/domain/shiftplan` · **Identity:** `(buildingId, shiftId)`
+**Package:** `internal/domain/shiftplan` · **Identity:** `(siteCode, shiftId)` —
+`siteCode` is the canonical name of the key; `buildingId` is its deprecated
+alias (same value, stored in the `building_id` column; the field and
+`BuildingId()` accessor keep the legacy name, `SiteCode()` is the canonical
+accessor — [ADR 0035](../adr/0035-sitecode-converges-building-id.md))
 
-The committed split of headcount across paths for one building's shift, made of
-`PathPlan` lines. Exactly one per building per shift.
+The committed split of headcount across paths for one site's shift, made of
+`PathPlan` lines. Exactly one per site per shift.
 
 **Consistency boundary.** The whole plan. `CommitShiftPlan` validates every line
 before constructing anything, and returns an error rather than a partially

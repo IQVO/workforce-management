@@ -77,7 +77,7 @@ The README's env table lists the remaining knobs (`LABOR_PERFORMANCE_BASE_URL`,
 ```bash
 # 1. Someone clocks on, certified to pack
 curl -X POST localhost:8080/associates/assoc-1/start-shift \
-  -d '{"certifications":["pack"]}'
+  -d '{"certifications":["pack"],"siteCode":"WH1"}'
 
 # 2. Give them a second qualification
 curl -X POST localhost:8080/associates/assoc-1/certifications \
@@ -85,7 +85,7 @@ curl -X POST localhost:8080/associates/assoc-1/certifications \
 
 # 3. The software proposes: 100 units of charge at 30 units/hour needs 4 heads
 curl -X POST localhost:8080/paths/pack/plan/propose \
-  -d '{"buildingId":"bldg-1","charge":100,"plannedRate":30}'
+  -d '{"siteCode":"WH1","charge":100,"plannedRate":30}'
 
 # 4. A human commits the split (this is the ShiftPlan). Needs
 #    INSTALLED_CAPACITY_MODE=http and reported capacity >= 3 for pack;
@@ -93,8 +93,8 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 #    The two creation POSTs require an Idempotency-Key header (ADR 0027):
 #    without one the service answers 400 idempotency-key-required.
 curl -X POST localhost:8080/shift-plans \
-  -H 'Idempotency-Key: 6f1d2c3a-commit-bldg-1-shift-1' \
-  -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
+  -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
+  -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10}
       ]}'
 
@@ -108,7 +108,10 @@ curl -X POST localhost:8080/associates/assoc-1/break/start
 curl -X POST localhost:8080/associates/assoc-1/break/end
 
 # 7. Is the pack path short of its committed heads?
-curl "localhost:8080/paths/pack/staffing-gap?buildingId=bldg-1&shiftId=shift-1"
+curl "localhost:8080/paths/pack/staffing-gap?siteCode=WH1&shiftId=shift-1"
+# (siteCode is the canonical name of the plan key and also scopes the count to
+# associates started at that site; the deprecated buildingId alias finds the same
+# plan but is not scoped — ADR 0035)
 
 # 8. Clock off — closes any active assignment first
 curl -X POST localhost:8080/associates/assoc-1/end-shift
