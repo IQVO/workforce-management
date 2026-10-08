@@ -46,6 +46,7 @@ this documentation. Synonyms are not accepted: there is no "worker," no
 | **Station** (as an occupiable position) | `fulfillment-execution` | Here, `installedStations` is only a **count** used as a capacity ceiling — never an entity with an occupant. |
 | **Work unit / release** | `wes-work-planning` | What work exists and when it is released is a different context entirely. |
 | **Bin, SKU, reservation** | `inventory-storage` | Stock truth. |
+| **Handling classification, product dimensions** | `product-master` | SKU product master data (Hazmat, TemperatureSensitive, declared vs measured size and weight). |
 | **Zone, aisle, location code** | `facility-layout` | Physical geography. |
 
 ## Same word, different model

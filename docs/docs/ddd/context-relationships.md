@@ -25,6 +25,7 @@ wiring-level detail (topics, envelopes, env vars) see
 | `labor-performance` | **Conformist** on measured rates and idle share | Consume `warehouse.labor-performance.events` (`kafka-cache`) or `GET /task-types/{taskType}/performance` (`http`) | **Yes, opt-in** — [ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [0019](../adr/0019-labor-performance-cache-consumer.md), [0020](../adr/0020-idle-share-staffing-signal.md) |
 | `process-path-management` | **Conformist** on the process-path catalogue | Consume `warehouse.process-path-management.events` | **Yes, opt-in** (`PATH_CATALOGUE_SOURCE=kafka`); otherwise a file |
 | `inventory-storage` | None | — | No |
+| `product-master` | None | — | No |
 | `facility-layout` | Would be **Conformist** if physical location ever mattered here; it does not | — | No |
 
 ## `wes-work-planning` — Customer/Supplier, one way
@@ -99,11 +100,20 @@ The platform DDD reference states the general rule:
 > via integration events/published APIs — enforce this with an explicit
 > Anti-Corruption Layer at each boundary.
 
-## `inventory-storage` and `facility-layout` — genuinely unrelated
+## `inventory-storage`, `product-master` and `facility-layout` — genuinely unrelated
 
 `inventory-storage` owns stock truth: SKUs, bins, reservations, usable
 inventory. Nothing in the labor model depends on it, and nothing in it depends
 on labor. There is no edge and there is no reason to add one.
+
+`product-master` owns SKU product master data: the handling classification
+(Hazmat, Fragile, TemperatureSensitive, Oversized, HighValue, temperature
+class, DOT hazard class) and the physical profile. It publishes
+`ProductClassified` on `warehouse.product-master.events`; this context does
+not consume that topic. Labor planning is per process path, and a hazmat
+certification gates a path, not a SKU
+([ADR 0009](../adr/0009-hazmat-certification-via-existing-path-gating.md)).
+No edge.
 
 `facility-layout` is a Generic subdomain and an **Open Host Service** for
 physical-location truth: `Site → Area → Zone → Aisle → Bay → Level →

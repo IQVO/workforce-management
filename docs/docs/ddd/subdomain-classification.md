@@ -96,7 +96,7 @@ path/task line is a deliberate departure from it, for cadence reasons argued in
 
 ## The original five contexts, for comparison
 
-The fleet has since grown to eleven backend contexts (see
+The fleet has since grown to twelve backend contexts (see
 [Sibling services](../ecosystem/siblings.md)); this table keeps the original
 five, whose classifications this page's reasoning is argued against.
 
