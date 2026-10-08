@@ -112,12 +112,22 @@ Aggregates: `Site`, `Zone`, `Aisle`, `LocationSlot`, `PlacementRule`.
   consumer reads `ShiftPlanCommitted` from `warehouse.workforce.events` under
   the group `warehouse-planning-labor-capacity` and registers it as a labor
   capacity constraint. It never calls this service.
+- **network-inventory-planning** — network-level inventory planning and
+  inter-site transfers. No edge to this service.
+- **product-master** — WMS tier, Supporting: the single source of truth for
+  SKU product master data (handling classification such as Hazmat or
+  TemperatureSensitive, temperature class, DOT hazard class, and the declared
+  vs measured physical profile). It took classification over from
+  `inventory-storage` and publishes it on `warehouse.product-master.events`,
+  which `inventory-storage`, `order-management`, `wes-work-planning` and
+  `fulfillment-execution` consume. Labor planning needs no SKU attributes, so
+  there is no edge to this service.
 
 ## The tiering, at a glance
 
 | | Horizon | Answers | Services |
 | --- | --- | --- | --- |
-| **WMS** | minutes → days | What needs to happen, and why | `inventory-storage` |
+| **WMS** | minutes → days | What needs to happen, and why | `inventory-storage`, `product-master` |
 | **WES** | seconds → minutes | Who does it, right now, in what order | `wes-work-planning`, `fulfillment-execution`, and this service on the "who" half |
 | **WCS** | ms → seconds | How the machine performs the next physical step | *not modelled in this platform* |
 | **Generic** | — | Shared, non-differentiating truth | `facility-layout` |
