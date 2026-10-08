@@ -16,7 +16,7 @@ production system** and is **not affiliated with, endorsed by, or
 representative of any real-world company**.
 :::
 
-**Workforce Management** is one of the eleven Go backend bounded contexts that
+**Workforce Management** is one of the twelve Go backend bounded contexts that
 make up the `warehouse-systems` platform. It is a **Supporting** bounded
 context, and it owns exactly one question:
 
