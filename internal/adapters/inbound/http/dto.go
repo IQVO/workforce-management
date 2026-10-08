@@ -18,7 +18,11 @@ type certifyRequest struct {
 	Certification string `json:"certification"`
 }
 
-// proposePathPlanRequest's plannedRate is OPTIONAL: omit it (or send <= 0)
+// proposePathPlanRequest names the ShiftPlan key by the canonical SiteCode or
+// by its deprecated alias BuildingId (same value, ADR 0035): at least one is
+// required, both present must be equal.
+//
+// plannedRate is OPTIONAL: omit it (or send <= 0)
 // to let ProposePathPlan fall back to a measured rate fed back from
 // labor-performance when one is available for this path (ADR-0012).
 //
@@ -28,7 +32,8 @@ type certifyRequest struct {
 // pointer, encoding/json silently coerced an omitted charge to 0 and the
 // request was accepted).
 type proposePathPlanRequest struct {
-	BuildingId  string   `json:"buildingId"`
+	SiteCode    string   `json:"siteCode,omitempty"`
+	BuildingId  string   `json:"buildingId,omitempty"`
 	Charge      *float64 `json:"charge,omitempty"`
 	PlannedRate float64  `json:"plannedRate,omitempty"`
 }
@@ -56,13 +61,20 @@ type pathPlanLineRequest struct {
 	InstalledStations int     `json:"installedStations"`
 }
 
+// commitShiftPlanRequest names the ShiftPlan key by the canonical SiteCode or
+// by its deprecated alias BuildingId (same value, same stored column; ADR
+// 0035): at least one is required, both present must be equal.
 type commitShiftPlanRequest struct {
-	BuildingId string                `json:"buildingId"`
+	SiteCode   string                `json:"siteCode,omitempty"`
+	BuildingId string                `json:"buildingId,omitempty"`
 	ShiftId    string                `json:"shiftId"`
 	Lines      []pathPlanLineRequest `json:"lines"`
 }
 
+// shiftPlanResponse carries the plan key under both names with the SAME
+// value: siteCode is canonical, buildingId is the deprecated alias (ADR 0035).
 type shiftPlanResponse struct {
+	SiteCode   string             `json:"siteCode"`
 	BuildingId string             `json:"buildingId"`
 	ShiftId    string             `json:"shiftId"`
 	Lines      []pathPlanLineResp `json:"lines"`

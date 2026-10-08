@@ -58,14 +58,15 @@ dependency.
 A `ShiftPlan` has multiple `PathPlan` lines. `CommitShiftPlan` with three path
 lines publishes **three** Kafka messages, one per line, each carrying that
 single line's `planned_heads`/`planned_rate`/`planned_hours` alongside the
-plan's `building_id` and `shift_id`.
+plan's `site_code` (canonical) and `building_id` (deprecated alias, same value;
+[ADR 0035](../adr/0035-sitecode-converges-building-id.md)) and `shift_id`.
 
 This matches how the consumer keys its read model: `LaborPlanObserved` is one
 row per path. Consumers must expect N messages per commit and must not assume a
 message carries the whole plan.
 
-The domain event carries only the `ShiftPlan`'s identity (`buildingId`,
-`shiftId`). The adapter loads the committed plan through the `ShiftPlanRepo` to
+The domain event carries only the `ShiftPlan`'s identity (the site code —
+`BuildingId` in code — and `shiftId`). The adapter loads the committed plan through the `ShiftPlanRepo` to
 expand it. That keeps fan-out an integration concern: the domain has no opinion
 about message granularity.
 
@@ -84,12 +85,13 @@ trace headers. One line of a committed plan, byte for byte:
   "id": "9f1c2b7e-4c3a-4a1d-9f0b-6c2b8a7d1e33",
   "source": "/warehouse/workforce-management",
   "type": "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted",
-  "subject": "bldg-1/shift-1",
+  "subject": "WH1/shift-1",
   "datacontenttype": "application/json",
   "dataschema": "urn:warehouse:workforce-management:events:ShiftPlanCommitted:v1",
   "time": "2026-08-21T22:00:00Z",
   "data": {
-    "building_id": "bldg-1",
+    "site_code": "WH1",
+    "building_id": "WH1",
     "shift_id": "shift-1",
     "path_id": "pack",
     "planned_heads": 3,
@@ -102,7 +104,9 @@ trace headers. One line of a committed plan, byte for byte:
 - `id` is a UUID v4 minted once per line message when the event is encoded and
   persisted with the outbox row, so a relay retry republishes the same id.
   Every line of a fan-out has its own id.
-- `subject` is the ShiftPlan aggregate id `<buildingId>/<shiftId>` — the same
+- `subject` is the ShiftPlan aggregate id `<siteCode>/<shiftId>` (written
+  `<buildingId>/<shiftId>` before ADR 0035; the value and the Kafka key are
+  unchanged) — the same
   value as the Kafka key, so every line of a plan lands on one partition.
 - `time` is the domain occurred-at, RFC 3339 UTC.
 - `dataschema` is `...:events:...` on this topic and `...:analytics:...` on
@@ -127,7 +131,7 @@ go run ./cmd/workforce
 
 # two path lines -> expect two messages
 curl -X POST localhost:8080/shift-plans \
-  -d '{"buildingId":"bldg-1","shiftId":"shift-1","lines":[
+  -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
         {"pathId":"pack","plannedHeads":3,"plannedRate":30,"plannedHours":24,"installedStations":10},
         {"pathId":"pick","plannedHeads":2,"plannedRate":25,"plannedHours":16,"installedStations":10}
       ]}'

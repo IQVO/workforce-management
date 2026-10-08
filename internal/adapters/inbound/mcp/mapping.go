@@ -17,6 +17,11 @@ import (
 // staffingGap is the tool-boundary DTO for a staffing-gap read. It mirrors
 // the fields of the usecases.StaffingGap read model but is a plain, JSON-safe
 // view: nothing but this file's DTOs crosses the tool boundary.
+//
+// BuildingId is the DEPRECATED name of the plan key (ADR 0035); it carries the
+// same value the plan was looked up by, which is the canonical site code when
+// the caller used siteCode. SiteCode is the associate scope, echoed only when
+// the gap was scoped by site; a legacy buildingId-only call is unscoped.
 type staffingGap struct {
 	BuildingId   string `json:"buildingId"`
 	ShiftId      string `json:"shiftId"`
@@ -29,7 +34,7 @@ type staffingGap struct {
 }
 
 // toStaffingGap maps the application read model into the tool-boundary DTO,
-// carrying the request's building and shift back to the caller for context.
+// carrying the request's plan key and shift back to the caller for context.
 func toStaffingGap(buildingId, shiftId string, gap usecases.StaffingGap) staffingGap {
 	return staffingGap{
 		BuildingId:   buildingId,

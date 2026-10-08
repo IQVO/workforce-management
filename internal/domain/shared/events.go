@@ -30,6 +30,11 @@ type ShiftPlanProposed struct {
 // EventName implements DomainEvent.
 func (ShiftPlanProposed) EventName() string { return "ShiftPlanProposed" }
 
+// SiteCode is the canonical name of the plan key carried as BuildingId
+// (ADR 0035): the same value, so the published payload's `site_code` and its
+// deprecated `building_id` can never differ.
+func (e ShiftPlanProposed) SiteCode() string { return e.BuildingId }
+
 // NewShiftPlanProposed constructs a ShiftPlanProposed event.
 func NewShiftPlanProposed(at time.Time, buildingId string, pathId PathId, plannedHeads int, plannedRate float64) ShiftPlanProposed {
 	return ShiftPlanProposed{baseEvent{at}, buildingId, pathId, plannedHeads, plannedRate}
@@ -45,6 +50,10 @@ type ShiftPlanCommitted struct {
 
 // EventName implements DomainEvent.
 func (ShiftPlanCommitted) EventName() string { return "ShiftPlanCommitted" }
+
+// SiteCode is the canonical name of the plan key carried as BuildingId
+// (ADR 0035): the same value.
+func (e ShiftPlanCommitted) SiteCode() string { return e.BuildingId }
 
 // NewShiftPlanCommitted constructs a ShiftPlanCommitted event.
 func NewShiftPlanCommitted(at time.Time, buildingId, shiftId string) ShiftPlanCommitted {

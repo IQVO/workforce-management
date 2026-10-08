@@ -44,10 +44,11 @@ certifications they hold, whether they are currently on a logged break, and how
 many hours they have logged against the shift's cap. Every other context that
 needs to know whether someone is qualified reads this — none of them write it.
 
-**2. What the plan is.** `ShiftPlan` is one building's committed split of
+**2. What the plan is.** `ShiftPlan` is one site's committed split of
 headcount across paths for one shift, expressed as `PathPlan` lines: path,
-planned heads, planned rate, planned hours. There is exactly one per building
-per shift.
+planned heads, planned rate, planned hours. There is exactly one per site
+per shift (the site is named by `siteCode`; "building" is a deprecated name for
+the same thing, [ADR 0035](../adr/0035-sitecode-converges-building-id.md)).
 
 **3. Where people actually are.** `LaborAssignment` records one associate on
 one path for an interval. Comparing (2) against (3) yields the staffing gap,

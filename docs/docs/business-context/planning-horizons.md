@@ -37,7 +37,7 @@ no aggregate identity. Calling it twice with the same inputs is the same as
 calling it once.
 
 **The commitment is not trivial and a human makes it.** `CommitShiftPlan`
-takes the full set of `PathPlan` lines for a building's shift and validates
+takes the full set of `PathPlan` lines for a site's shift and validates
 them as one atomic decision:
 
 - every line's `plannedHeads` must be at most the path's `installedStations`;
@@ -99,9 +99,10 @@ models are derived, never redundantly persisted on the write model.
 
 ## Design decisions that fall out of this
 
-- **`GetStaffingGap` takes `buildingId` and `shiftId` as query parameters**
-  (`GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=`) because `ShiftPlan`
-  is keyed by building plus shift. A path's planned heads are meaningless
+- **`GetStaffingGap` takes `siteCode` and `shiftId` as query parameters**
+  (`GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=`; `buildingId` is the
+  deprecated alias of `siteCode`, [ADR 0035](../adr/0035-sitecode-converges-building-id.md))
+  because `ShiftPlan` is keyed by site plus shift. A path's planned heads are meaningless
   outside a specific committed plan.
 - **A path's required certification is the certification with the same name.**
   Path `pack` requires certification `pack`. This is a naming convention, not a

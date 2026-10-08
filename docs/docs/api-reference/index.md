@@ -39,7 +39,8 @@ so the generated REST pages do not show it. Cross-checked route by route:
 | `POST` | `/associates/{id}/break/start` | `startAssociateBreak` | `StartBreak` | `204` |
 | `POST` | `/associates/{id}/break/end` | `endAssociateBreak` | `EndBreak` | `204` |
 | `GET` | `/paths/{pathId}/staffing-gap` | `getStaffingGap` | `GetStaffingGap.Execute` | `200` |
-| `GET` | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | `listStaffingGapsForShift` | `GetStaffingGap.ExecuteAll` | `200` (array) |
+| `GET` | `/sites/{siteCode}/shifts/{shiftId}/staffing-gap` | `listStaffingGapsForSiteShift` | `GetStaffingGap.ExecuteAllForSite` | `200` (array) — canonical ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)) |
+| `GET` | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | `listStaffingGapsForShift` | `GetStaffingGap.ExecuteAll` | `200` (array) — **deprecated**, answers `Deprecation: true` |
 | `POST` | `/associates/{id}/end-shift` | `endAssociateShift` | `EndAssociateShift` | `204` |
 | `GET` | `/healthz` | `healthz` | — | `200` |
 | `GET` | `/readyz` | `readyz` | — | `200` ready / `503` not ready |
@@ -72,7 +73,8 @@ it, and the ubiquitous language wins. They are Level 2 on the Richardson
 maturity model — correct verbs, correct status codes, resource-scoped URLs —
 which is where this API deliberately sits.
 
-**Identifiers are opaque strings.** `associateId`, `pathId`, `buildingId` and
+**Identifiers are opaque strings.** `associateId`, `pathId`, `siteCode` (the
+deprecated alias `buildingId` is the same value) and
 `shiftId` are validated as non-empty and otherwise uninterpreted. `pathId` is a
 *process path* name — `pack`, `pick`, `stow` — never a physical location.
 

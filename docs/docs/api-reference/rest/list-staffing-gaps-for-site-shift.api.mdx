@@ -1,0 +1,69 @@
+---
+id: list-staffing-gaps-for-site-shift
+title: "List the staffing gap for every path planned within one committed shift plan of a site (canonical route)"
+description: "The canonical route of the all-paths staffing-gap list (ADR 0035; supersedes GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap, which stays as a deprecated alias). Same handler core and response shape. The path siteCode is both the plan lookup key and the associate scope: every path's activeHeads counts only associates with an active shift at that site (ADR 0034). Reuses the exact same per-path computation as GET /paths/{pathId}/staffing-gap and raises PathUnderstaffed for every understaffed path in the plan. This surfaces the gaps only — it never decides or performs a rebalance; that stays a human call recorded via POST /associates/{id}/assignments."
+sidebar_label: "List the staffing gap for every path planned within one committed shift plan of a site (canonical route)"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest/workforce-management-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"List the staffing gap for every path planned within one committed shift plan of a site (canonical route)"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/sites/{siteCode}/shifts/{shiftId}/staffing-gap"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+The canonical route of the all-paths staffing-gap list (ADR 0035; supersedes GET /buildings/\{buildingId\}/shifts/\{shiftId\}/staffing-gap, which stays as a deprecated alias). Same handler core and response shape. The path siteCode is both the plan lookup key and the associate scope: every path's activeHeads counts only associates with an active shift at that site (ADR 0034). Reuses the exact same per-path computation as GET /paths/\{pathId\}/staffing-gap and raises PathUnderstaffed for every understaffed path in the plan. This surfaces the gaps only — it never decides or performs a rebalance; that stays a human call recorded via POST /associates/\{id\}/assignments.
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./list-staffing-gaps-for-site-shift.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./list-staffing-gaps-for-site-shift.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./list-staffing-gaps-for-site-shift.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

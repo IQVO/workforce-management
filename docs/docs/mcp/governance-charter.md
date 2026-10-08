@@ -196,9 +196,16 @@ Jaeger and Grafana alongside HTTP.
   / not understaffed. An unknown **building or shift** is a clean
   `not found` tool error; an unknown **path** inside a committed plan is
   zeros, not an error. Pinned as the visible contract.
-- `get_staffing_gap` takes an **optional** `siteCode` ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md)):
-  absent = the fleet-wide count (unchanged); given = only associates with an
-  active shift at that site. The result echoes `siteCode` only when scoped.
+- `get_staffing_gap` and `propose_path_heads` take `siteCode` as the
+  **canonical** site argument ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)):
+  `buildingId` is a deprecated alias with the same value (at least one is
+  required). For `get_staffing_gap`, `siteCode` is the plan key **and** the
+  associate scope ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md): only
+  associates with an active shift at that site; the result echoes `siteCode`
+  only when scoped); a call giving only `buildingId` is not scoped (the
+  fleet-wide count, unchanged). For `propose_path_heads`, both present with
+  different values is rejected. Nothing was removed; the tool names, hints and
+  the registry/fleet-snapshot goldens are unchanged.
 - Reading an understaffed path via `get_staffing_gap` **publishes
   `PathUnderstaffed`** — a read with a domain-event side effect (the
   analytics audit trail). Likewise `propose_path_heads` publishes
@@ -222,8 +229,9 @@ Jaeger and Grafana alongside HTTP.
 
 `workforce-management-mcp` exposes 3 tools (`get_staffing_gap`,
 `propose_path_heads`, `assign_labor`) plus `get_workforce_labor_report`
-when a reports client is configured, one resource template
-(`staffing://{buildingId}/{shiftId}/{pathId}/gap`) and one prompt
+when a reports client is configured, two resource templates
+(`staffing://sites/{siteCode}/{shiftId}/{pathId}/gap`, canonical, and the
+deprecated `staffing://{buildingId}/{shiftId}/{pathId}/gap`) and one prompt
 (`cover_staffing_gaps`). Each tool call gets an OTel span
 (`mcp.tool <name>`). Not yet implemented here: write-tool rate limiting
 (§8.2) and a dedicated audit record per call (§9).

@@ -81,7 +81,8 @@ Source: `internal/adapters/inbound/mcp/tools.go`,
 `warehouse-ops-agent/internal/adapters/outbound/mcpclient/workforce_management.go`.
 Omits: the MCP `assign_labor` tool (registered, but no sibling calls it in
 code), the all-paths REST variant
-`GET /buildings/buildingId/shifts/shiftId/staffing-gap`, and the rejection
+`GET /sites/siteCode/shifts/shiftId/staffing-gap` (and its deprecated alias
+`GET /buildings/buildingId/shifts/shiftId/staffing-gap`), and the rejection
 branches (uncertified, on break, shift ended, max hours).
 
 ## 3. Associate day: roster, breaks, end of shift, reporting

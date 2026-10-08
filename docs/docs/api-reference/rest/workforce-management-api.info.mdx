@@ -43,7 +43,8 @@ It covers two things:
 1. **The shift-start planning horizon** — a human proposes and then
    commits a split of headcount across process paths (`ShiftPlan`, made
    of `PathPlan` lines: path, planned heads, planned rate, planned
-   hours), one plan per building per shift.
+   hours), one plan per site per shift (the plan key is the canonical
+   `siteCode`; `buildingId` is its deprecated alias, ADR 0035).
 2. **Intra-shift assignment tracking** — moving associates between paths
    as backlogs deviate from plan (`LaborAssignment`). The move itself is
    always a human call; this context makes the staffing gap legible

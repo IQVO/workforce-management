@@ -61,36 +61,42 @@ func (d Deps) validatePathId(pathId string) error {
 // --- get_staffing_gap ---------------------------------------------------------
 
 type staffingGapInput struct {
-	BuildingId string `json:"buildingId" jsonschema:"the building whose committed shift plan holds this path"`
+	SiteCode   string `json:"siteCode,omitempty" jsonschema:"the canonical site code (the facility-layout Site code, e.g. WH1): the key of the committed shift plan AND the associate scope; when given, count only associates with an active shift at that site. Required unless the deprecated buildingId is given"`
+	BuildingId string `json:"buildingId,omitempty" jsonschema:"DEPRECATED, use siteCode. The legacy name of the plan key (same value); a call giving only buildingId is not scoped by site and counts across every site"`
 	ShiftId    string `json:"shiftId" jsonschema:"the shift whose committed plan to read the gap from"`
 	PathId     string `json:"pathId" jsonschema:"the process path to measure planned-vs-active heads for (e.g. pack, pick, stow)"`
-	SiteCode   string `json:"siteCode,omitempty" jsonschema:"optional canonical site code (the facility-layout Site code, e.g. WH1); when given, count only associates with an active shift at that site, otherwise count across every site"`
 }
 
 func (d Deps) getStaffingGap(ctx context.Context, in staffingGapInput) (staffingGap, error) {
-	if in.BuildingId == "" || in.ShiftId == "" || in.PathId == "" {
-		return staffingGap{}, fmt.Errorf("buildingId, shiftId and pathId are required")
+	planKey, scope, err := shared.ResolveGapLookup(in.SiteCode, in.BuildingId)
+	if err != nil {
+		return staffingGap{}, err
+	}
+	if in.ShiftId == "" || in.PathId == "" {
+		return staffingGap{}, fmt.Errorf("siteCode (or the deprecated buildingId), shiftId and pathId are required")
 	}
 	if err := d.validatePathId(in.PathId); err != nil {
 		return staffingGap{}, err
 	}
-	gap, err := d.GetStaffingGap.ExecuteForSite(ctx, in.BuildingId, in.ShiftId, shared.PathId(in.PathId), shared.NewSiteCode(in.SiteCode))
+	gap, err := d.GetStaffingGap.ExecuteForSite(ctx, planKey, in.ShiftId, shared.PathId(in.PathId), scope)
 	if err != nil {
 		return staffingGap{}, err
 	}
-	return toStaffingGap(in.BuildingId, in.ShiftId, gap), nil
+	return toStaffingGap(planKey, in.ShiftId, gap), nil
 }
 
 // --- propose_path_heads -------------------------------------------------------
 
 type proposeHeadsInput struct {
-	BuildingId  string  `json:"buildingId" jsonschema:"the building the proposal is for"`
+	SiteCode    string  `json:"siteCode,omitempty" jsonschema:"the canonical site code (the facility-layout Site code, e.g. WH1) the proposal is for. Required unless the deprecated buildingId is given"`
+	BuildingId  string  `json:"buildingId,omitempty" jsonschema:"DEPRECATED, use siteCode. Alias of siteCode with the same value; sending both with different values is rejected"`
 	PathId      string  `json:"pathId" jsonschema:"the process path to size (e.g. pack, pick, stow)"`
 	Charge      float64 `json:"charge" jsonschema:"the work charge (units) the path must clear this shift"`
 	PlannedRate float64 `json:"plannedRate" jsonschema:"the planned rate (units per head) used to size headcount; must be greater than zero"`
 }
 
 type proposeHeadsOutput struct {
+	SiteCode      string  `json:"siteCode"`
 	BuildingId    string  `json:"buildingId"`
 	PathId        string  `json:"pathId"`
 	Charge        float64 `json:"charge"`
@@ -99,8 +105,12 @@ type proposeHeadsOutput struct {
 }
 
 func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (proposeHeadsOutput, error) {
-	if in.BuildingId == "" || in.PathId == "" {
-		return proposeHeadsOutput{}, fmt.Errorf("buildingId and pathId are required")
+	siteKey, err := shared.ResolveSiteKey(in.SiteCode, in.BuildingId)
+	if err != nil {
+		return proposeHeadsOutput{}, err
+	}
+	if in.PathId == "" {
+		return proposeHeadsOutput{}, fmt.Errorf("siteCode (or the deprecated buildingId) and pathId are required")
 	}
 	if err := d.validatePathId(in.PathId); err != nil {
 		return proposeHeadsOutput{}, err
@@ -114,12 +124,13 @@ func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (propo
 	// This tool requires plannedRate > 0 above, so ProposePathPlan never
 	// consults the measured-rate fallback here; only rate-agnostic values
 	// (heads) are relevant to this MCP tool's existing output contract.
-	heads, _, _, _, err := d.ProposePathPlan.Execute(ctx, in.BuildingId, shared.PathId(in.PathId), in.Charge, in.PlannedRate)
+	heads, _, _, _, err := d.ProposePathPlan.Execute(ctx, siteKey, shared.PathId(in.PathId), in.Charge, in.PlannedRate)
 	if err != nil {
 		return proposeHeadsOutput{}, err
 	}
 	return proposeHeadsOutput{
-		BuildingId:    in.BuildingId,
+		SiteCode:      siteKey,
+		BuildingId:    siteKey,
 		PathId:        in.PathId,
 		Charge:        in.Charge,
 		PlannedRate:   in.PlannedRate,
@@ -169,13 +180,13 @@ func (d Deps) registerTools(server *mcp.Server) {
 
 	addTool(server, &mcp.Tool{
 		Name:        "get_staffing_gap",
-		Description: "Return planned vs active heads for a process path within a building's committed shift plan, and whether it is understaffed. Read-only; surfaces the gap, it does not move anyone.",
+		Description: "Return planned vs active heads for a process path within a site's committed shift plan, and whether it is understaffed. Identify the site with siteCode (the canonical argument: it is both the plan key and the associate scope); buildingId is deprecated in favour of siteCode, accepted as an alias for the plan key only and not scoped by site. Read-only; surfaces the gap, it does not move anyone.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.getStaffingGap)
 
 	addTool(server, &mcp.Tool{
 		Name:        "propose_path_heads",
-		Description: "Compute the headcount needed to cover a path's charge at a planned rate (ceil(charge/rate)). A pure proposal; it commits nothing and a human still commits the shift plan.",
+		Description: "Compute the headcount needed to cover a path's charge at a planned rate (ceil(charge/rate)) for a site (siteCode; buildingId is deprecated in favour of siteCode and is an alias with the same value). A pure proposal; it commits nothing and a human still commits the shift plan.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
 	}, d.proposePathHeads)
 
