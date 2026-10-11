@@ -92,11 +92,12 @@ func (r stationRegistry) InstalledCapacity(_ context.Context, capability shared.
 // installedCapacity is the live fulfillment-execution ceiling (nil means
 // unlimitedInstalledCapacity). The process-path catalogue is always the
 // fleet's real one, exactly as cmd/workforce wires it.
-func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient) *httptest.Server {
+func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient) (*httptest.Server, *harness) {
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
 	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
-	pub := events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	pub := &recordingPublisher{inner: events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil)))}
+	readiness := &inboundhttp.Readiness{}
 	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
 	catalogue := fleetCatalogue()
 	if installedCapacity == nil {
@@ -114,9 +115,10 @@ func newServer(idleShare ports.IdleShareClient, installedCapacity ports.Installe
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: pub, Clock: clock, IdleShare: idleShare},
 		EndAssociateShift:   &usecases.EndAssociateShift{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
 		Catalogue:           catalogue,
+		Readiness:           readiness,
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), ""))
+	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), "")), &harness{published: pub, readiness: readiness}
 }
 
 // fixedIdleShareClient is a BDD-suite test double for
@@ -133,6 +135,11 @@ func (f fixedIdleShareClient) IdleSharePct(_ context.Context, _ shared.PathId) (
 type world struct {
 	server *httptest.Server
 	client *http.Client
+	h      *harness
+
+	// capacityDown makes the live installed-capacity lookup fail the way an
+	// unreachable fulfillment-execution does; reset per scenario.
+	capacityDown bool
 
 	// idleShare and stations configure the next server rebuild; both
 	// are reset per scenario.
@@ -141,12 +148,14 @@ type world struct {
 
 	lastStatus      int
 	lastContentType string
+	lastHeader      http.Header
 	lastBody        []byte
 }
 
 func (w *world) reset() {
 	w.idleShare = nil
 	w.stations = nil
+	w.capacityDown = false
 	w.rebuild()
 	w.lastStatus = 0
 	w.lastContentType = ""
@@ -161,7 +170,10 @@ func (w *world) rebuild() {
 	if w.stations != nil {
 		capacity = w.stations
 	}
-	w.server = newServer(w.idleShare, capacity)
+	if w.capacityDown {
+		capacity = unreachableCapacity{}
+	}
+	w.server, w.h = newServer(w.idleShare, capacity)
 	w.client = w.server.Client()
 }
 
@@ -203,6 +215,7 @@ func (w *world) do(ctx context.Context, method, path string, body any) error {
 
 	w.lastStatus = resp.StatusCode
 	w.lastContentType = resp.Header.Get("Content-Type")
+	w.lastHeader = resp.Header
 	w.lastBody = raw
 	return nil
 }
@@ -693,6 +706,8 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^path "([^"]*)" reports (\d+) planned heads and (\d+) active heads and is not understaffed$`, w.pathIsNotFlaggedUnderstaffed)
 	sc.Step(`^the proposal suggests (\d+) heads at resolved rate (\d+) from source "([^"]*)"$`, w.proposalSuggestsHeads)
 	sc.Step(`^the proposed heads are trimmed to (\d+) with a non-empty trim reason$`, w.proposedHeadsAreTrimmedWithNonEmptyTrimReason)
+
+	registerWave2(sc, w) // features_wave2_test.go
 }
 
 // TestFeatures runs every Gherkin feature under features/ as a Go test.
@@ -700,8 +715,11 @@ func TestFeatures(t *testing.T) {
 	suite := godog.TestSuite{
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
-			Format:   "pretty",
-			Paths:    []string{"features"},
+			Format: "pretty",
+			Paths:  []string{"features"},
+			// Strict makes an undefined or pending step fail the suite
+			// instead of silently passing.
+			Strict:   true,
 			TestingT: t,
 		},
 	}
