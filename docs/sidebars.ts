@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
       link: {type: 'doc', id: 'ddd/index'},
       items: [
         'ddd/subdomain-classification',
+        'ddd/use-cases',
         'ddd/aggregates',
         'ddd/invariants',
         'ddd/domain-events',
@@ -105,6 +106,14 @@ const sidebars: SidebarsConfig = {
         'operations/runbook',
         'operations/observability',
         'operations/troubleshooting',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Development',
+      collapsed: false,
+      items: [
+        'development/testing',
       ],
     },
     {
