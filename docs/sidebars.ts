@@ -36,6 +36,7 @@ const sidebars: SidebarsConfig = {
       link: {type: 'doc', id: 'ddd/index'},
       items: [
         'ddd/subdomain-classification',
+        'ddd/use-cases',
         'ddd/aggregates',
         'ddd/invariants',
         'ddd/domain-events',
@@ -88,13 +89,32 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'AI Ecosystem (MCP)',
       collapsed: false,
-      items: ['mcp/governance-charter'],
+      items: ['mcp/governance-charter', 'mcp/tools'],
     },
     {
       type: 'category',
       label: 'Analytics (Data Product)',
       collapsed: false,
       items: ['analytics/labor-report'],
+    },
+    {
+      type: 'category',
+      label: 'Operations',
+      collapsed: false,
+      items: [
+        'operations/configuration',
+        'operations/runbook',
+        'operations/observability',
+        'operations/troubleshooting',
+      ],
+    },
+    {
+      type: 'category',
+      label: 'Development',
+      collapsed: false,
+      items: [
+        'development/testing',
+      ],
     },
     {
       type: 'category',

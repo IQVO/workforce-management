@@ -1,0 +1,170 @@
+---
+id: testing
+title: Testing
+sidebar_label: Testing
+description: The test pyramid as it exists in workforce-management. Covers unit, BDD, integration (testcontainers), contract, MCP evals, architecture fitness and mutation tests, the make targets, and what every CI job runs.
+---
+
+# Testing
+
+Every `make` target mirrors a CI job in `.github/workflows/ci.yml`, so a
+local pass predicts a CI pass. The commands below are copied from the
+`Makefile` and `ci.yml`.
+
+## The pyramid
+
+| Layer | What | Where | Command | Needs |
+|---|---|---|---|---|
+| Unit | Domain aggregates, use cases (fakes for every port), HTTP handlers through `httptest`, MCP server in memory, Kafka encoders and decoders, composition wiring | `*_test.go` next to the code | `make test` (`go test ./... -race`) | nothing |
+| Coverage gate | Unit tests with `-coverpkg=./internal/domain/...,./internal/application/...` | same | `make coverage` | nothing. Fails below **90 %**. |
+| BDD acceptance | godog/Gherkin scenarios driven through the real HTTP router with in-memory adapters ([ADR 0006](../adr/0006-godog-bdd-acceptance-tests.md)) | `features/*.feature`, runners `features_test.go` and `features_wave2_test.go` | `make bdd` (`go test ./... -run TestFeatures -v`) | nothing |
+| Architecture fitness | Hexagonal and fleet rules as tests ([ADR 0007](../adr/0007-arch-go-architecture-fitness-tests.md)) | `internal/architecture/` | `make arch-test` | nothing |
+| MCP evals | Tool schemas, wire conformance, behaviour | `internal/adapters/inbound/mcp/eval_*_test.go`, `evalsuite_test.go` | `go test ./internal/adapters/inbound/mcp/... -race -run '^TestEval\|^TestMCPEvalSuite' -v` | nothing |
+| Integration | Real Postgres and real Kafka through testcontainers-go | 18 files with `//go:build integration` | `make integration` (`go test -tags=integration ./... -race -count=1`) | Docker |
+| Contract | Schemathesis property-based tests of the running binary against `apis/openapi.yaml` | `scripts/contract-test.sh` | `make contract` | Postgres in `DATABASE_URL` and `st` (Schemathesis 4.28.0) |
+| Mutation | gremlins on the domain | `.gremlins.yaml` | `make mutation` (fast) / `make mutation-full` | gremlins v0.6.0 |
+
+Bundles: `make check` = `fmt-check vet build lint test`, the fast
+pre-commit loop. `make check-all` = `check` + `coverage arch-test bdd`, to run
+before pushing. Neither bundle includes `integration`, `contract` or
+`mutation`. `make check-fast` (fmt-check, vet, arch-test, and the tests of the
+packages changed against HEAD) is the agent stop-hook gate.
+
+## BDD features
+
+16 feature files hold **85** `Scenario`/`Scenario Outline` blocks (8 of them
+outlines, which expand to more runs):
+
+| Feature file | Scenarios |
+|---|---|
+| `associate_roster.feature` | 11 |
+| `associate_shift_lifecycle.feature` | 3 |
+| `break_rules.feature` | 8 |
+| `break_state_transitions.feature` | 2 |
+| `breaks.feature` | 1 |
+| `labor_assignment.feature` | 4 |
+| `labor_assignment_rules.feature` | 6 |
+| `path_plan_proposal.feature` | 1 |
+| `path_plan_proposal_rules.feature` | 11 |
+| `probes.feature` | 2 |
+| `shift_plan.feature` | 5 |
+| `shift_plan_commit_rules.feature` | 14 |
+| `shift_plan_hours_capacity.feature` | 1 |
+| `staffing_gap.feature` | 3 |
+| `staffing_gap_read_model.feature` | 2 |
+| `staffing_gap_views.feature` | 11 |
+
+A separate godog suite, `internal/adapters/inbound/mcp/testdata/features/mcp_tools.feature`
+(17 scenarios), drives the MCP tools. It runs as part of the MCP evals
+(`TestMCPEvalSuite`), not `make bdd`.
+
+## Integration tests (testcontainers)
+
+Every integration test starts its own containers, so no `DATABASE_URL` or
+`KAFKA_BROKERS` is read. Two fitness tests enforce this:
+`TestPostgresIntegrationTestsUseTestcontainers` and
+`TestKafkaIntegrationTestsUseTestcontainers`.
+
+| Area | Files |
+|---|---|
+| Postgres repositories, `version` concurrency, site code | `internal/adapters/outbound/postgres/integration_test.go`, `version_integration_test.go`, `site_integration_test.go` |
+| Outbox: atomicity, relay, lag gauge | `outbox_integration_test.go`, `outbox_lag_integration_test.go` (postgres package) |
+| Pool limits (`MaxConns`, `statement_timeout`) | `pool_limits_integration_test.go` |
+| Housekeeping | `internal/adapters/outbound/postgres/sweeper_integration_test.go`, `cmd/workforce/housekeeping_integration_test.go` |
+| Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `siteconv_integration_test.go` |
+| Use-case wiring over real Postgres | `internal/application/usecases/usecases_wiring_integration_test.go` |
+| MCP over Streamable HTTP | `internal/adapters/inbound/mcp/streamable_http_integration_test.go` |
+| MCP writes land in the outbox | `cmd/mcp/outbox_integration_test.go` |
+| Kafka producer partition key | `internal/adapters/outbound/kafka/publisher_partition_integration_test.go` |
+| Kafka replay consumers | `internal/adapters/outbound/kafkacatalog/consumer_integration_test.go`, `internal/adapters/outbound/laborperformancecache/consumer_integration_test.go` |
+| Analytics projection and DLQ | `internal/adapters/outbound/analyticsstore/postgres_integration_test.go`, `internal/adapters/inbound/kafka/analytics_dlq_integration_test.go` |
+
+The `integration` CI job and `make integration` both run
+`go test -tags=integration ./...`, so every file above runs in CI.
+
+## Contract tests
+
+`scripts/contract-test.sh` builds `cmd/workforce` and starts it on
+`127.0.0.1:18087` (`CONTRACT_PORT`) against `DATABASE_URL`, with a temporary
+two-path catalogue (`PACK`, `PICK`). It waits for `/healthz` and then runs
+`st run apis/openapi.yaml --max-examples 100 --workers 4 --generation-allow-x00=false`.
+`CONTRACT_MAX_EXAMPLES` overrides the example count. Four operations are
+excluded, and the script says where each is tested instead:
+
+- `proposePathPlan`, `assignLabor`, `getStaffingGap`: Schemathesis generates path ids that the catalogue rightly rejects (`400 unknown-path-id`). That gate is tested per endpoint in `internal/adapters/inbound/http/router_test.go`.
+- `commitShiftPlan`: the same reason, plus `INSTALLED_CAPACITY_MODE=permissive` returns `503` for every valid commit.
+
+To run it locally:
+
+```bash
+docker run -d --rm --name wf-contract-pg -p 18097:5432 \
+  -e POSTGRES_USER=workforce -e POSTGRES_PASSWORD=workforce \
+  -e POSTGRES_DB=workforce postgres:16
+export DATABASE_URL='postgres://workforce:workforce@localhost:18097/workforce?sslmode=disable'
+make contract
+```
+
+## Architecture fitness tests
+
+`internal/architecture/`:
+
+| Test | Rule |
+|---|---|
+| `TestHexagonalDependencyRule` | Dependencies point inward only. `domain` depends on nothing outside `domain`, and adapters never depend on each other directly. |
+| `TestPortsPackageIsInterfacesOnly` | `internal/application/ports` declares the out-ports and never accumulates structs or helper functions. |
+| `TestMCPAdapterDependencyRule` | The MCP adapter depends only on `application` and `domain` (never on outbound adapters or `cmd`), and nothing else depends on it ([ADR 0008](../adr/0008-mcp-inbound-adapter.md)). |
+| `TestNoAuthMiddlewareReintroduced` | REST and MCP stay unauthenticated (bearer auth was removed, [ADR 0018](../adr/0018-remove-fleet-rest-identity.md)). |
+| `TestEventCatalogueMatchesContract` / `TestEventCatalogueDetector` | The CloudEvents types the code publishes match `apis/asyncapi.yaml`. |
+| `TestCloudEventsOnly` | Every Kafka message goes through the CloudEvents envelope ([ADR 0026](../adr/0026-cloudevents-mandatory-event-envelope.md)). |
+| `TestReplayConsumersSetCommitInterval` | Replay consumers configure their commit interval. |
+| `TestKafkaConsumerGroupNeverHardcodedInline` | No `GroupID: "literal"`. Groups are named constants or per-process generators. |
+| `TestKafkaIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationSensorFailsOnBadFixtures` | Integration tests never skip on an environment variable and never hard-code `localhost:9092`. The sensor proves it catches bad fixtures. |
+
+## MCP evals
+
+The `evals-tests` CI job runs
+`go test ./internal/adapters/inbound/mcp/... -race -run '^TestEval|^TestMCPEvalSuite' -v`:
+
+- **E1 governance** (`eval_governance_test.go`): input schemas resolve and constrain, and every parameter is described. The tool registry matches `testdata/tool_registry.golden`. Tool names are unique fleet-wide (`testdata/fleet_tool_snapshot.golden`). `get_workforce_labor_report` registers only with a reports client.
+- **E2 wire conformance** (`eval_conformance_test.go`): the initialize handshake. Unknown tools, wrongly typed arguments and extra arguments are rejected. Resource templates, unknown resources and prompts are checked, and closing the session ends calls.
+- **E3 behaviour** (`evalsuite_test.go`): the godog `mcp_tools.feature` suite.
+
+## Mutation testing
+
+`.gremlins.yaml`: `workers: 1`, `timeout-coefficient: 30`, thresholds
+**`efficacy: 99`** and **`mutant-coverage: 99`**. gremlins fails when a value is
+at or below its threshold, so a single surviving mutant fails the run. On
+2026-08-23 the file records 100 % on both the fast subset
+(`./internal/domain/shiftplan`, 10 mutants) and the full domain (23 mutants).
+
+## CI jobs (`.github/workflows/ci.yml`)
+
+Triggers: push and pull_request on `main` and `develop`, a weekly cron
+(Monday 06:00 UTC), and `workflow_dispatch`.
+
+| Job | Runs | When |
+|---|---|---|
+| `lint` | golangci-lint v2.13.1 | every run |
+| `guide-lint` | `scripts/harness/guide_lint.py`, `repo_lint.py`, and the harness self-tests | every run |
+| `complexity` | golangci-lint with only `gocyclo,gocognit,cyclop,funlen,nestif` (gocyclo gate 15), plus an informational `gocyclo -over 10` report | every run |
+| `test` | `go build`, `go vet`, `go test ./... -race` with coverage, 90 % gate | every run |
+| `bdd` | `go test ./... -run TestFeatures -v` | every run |
+| `contract` | Schemathesis 4.28.0 through `scripts/contract-test.sh` against a `postgres:16` service container | every run |
+| `evals-tests` | MCP E1, E2, E3 evals | every run |
+| `integration` | `go test -tags=integration ./... -race -count=1` (testcontainers) | every run |
+| `mutation-fast` | `gremlins unleash ./internal/domain/shiftplan` | every run |
+| `mutation` | `gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30`. Opens or closes a `harness:red` issue. | schedule / dispatch only |
+| `drift` | `deadcode -test`, `go mod tidy -diff`, knip on `web/`, a coverage-quality mutant report (all informational) | schedule / dispatch only |
+| `api-lint` | Spectral on `apis/openapi.yaml` and `apis/asyncapi.yaml` (`--fail-severity=warn`) | every run |
+| `vuln` | govulncheck v1.8.0 | every run |
+| `arch-test` | `go test ./internal/architecture/... -v` | every run |
+| `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/`, then `git diff --exit-code` on the generated REST reference | every run |
+| `web` | `npm ci`, lint, `tsc -b`, `npm test`, `npm run build` for the `web/` remote | every run |
+| `helm-lint` | `ct lint` on `charts/workforce-management` | PRs into `main` only |
+| `trivy-scan` | image vulnerability scan | PRs into `main` only |
+| `docker-publish` | build, push to GHCR, cosign sign and SBOM attest. Needs all gating jobs. | push to `main` only |
+| `release` | semver tag, image retag, Helm chart package and publish | push to `main` only, after `docker-publish` |
+
+The docs site is built by `.github/workflows/docs.yml`, which runs **only on
+push to `main`**. A docs PR into `develop` is not built by CI, apart from
+`docs-api-drift`. Run `npm ci && npm run build` in `docs/` yourself.
