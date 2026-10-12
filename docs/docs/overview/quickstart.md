@@ -67,10 +67,12 @@ Everything is environment-driven — there is no config file.
 | `EVENT_PUBLISHER` | no | `log` | `log` or `kafka` — see [Integration](../ecosystem/integration.md) |
 | `KAFKA_BROKERS` | no | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
 
-The README's env table lists the remaining knobs (`LABOR_PERFORMANCE_BASE_URL`,
-`IDLE_SHARE_TRIM_THRESHOLD`, `OUTBOX_RELAY_INTERVAL`, `MIGRATIONS_DATABASE_URL`,
-`HOUSEKEEPING_INTERVAL`, `IDEMPOTENCY_KEY_TTL`, `OUTBOX_RETENTION`,
-`SHUTDOWN_DRAIN_DELAY`, `CORS_ALLOWED_ORIGINS`, OTel variables).
+[Configuration](../operations/configuration.md) lists every remaining knob
+per binary (`LABOR_PERFORMANCE_BASE_URL`, `IDLE_SHARE_TRIM_THRESHOLD`,
+`OUTBOX_RELAY_INTERVAL`, `MIGRATIONS_DATABASE_URL`, `HOUSEKEEPING_INTERVAL`,
+`IDEMPOTENCY_KEY_TTL`, `OUTBOX_RETENTION`, `SHUTDOWN_DRAIN_DELAY`,
+`CORS_ALLOWED_ORIGINS`, the OTel variables, and the `cmd/mcp`,
+`cmd/workforce-projector` and `cmd/workforce-reports` settings).
 
 ## 3. Walk one shift end to end
 

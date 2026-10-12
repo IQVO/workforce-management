@@ -89,7 +89,7 @@ const sidebars: SidebarsConfig = {
       type: 'category',
       label: 'AI Ecosystem (MCP)',
       collapsed: false,
-      items: ['mcp/governance-charter'],
+      items: ['mcp/governance-charter', 'mcp/tools'],
     },
     {
       type: 'category',

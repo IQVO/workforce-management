@@ -28,6 +28,17 @@ CloudEvents catalog from `apis/asyncapi.yaml`, the ecosystem context map, and
 the Architecture Decision Records. Source lives in [`docs/`](docs/) and deploys
 on every push to `main`.
 
+| Area | Pages |
+| --- | --- |
+| Overview | [Introduction](docs/docs/overview/index.md), [Architecture](docs/docs/overview/architecture.md), [Quickstart](docs/docs/overview/quickstart.md) |
+| Operations | [Configuration](docs/docs/operations/configuration.md) (every env var, per binary), [Runbook](docs/docs/operations/runbook.md), [Observability](docs/docs/operations/observability.md), [Troubleshooting](docs/docs/operations/troubleshooting.md) |
+| Development | [Testing](docs/docs/development/testing.md) (test pyramid, make targets, CI jobs) |
+| DDD | [Use cases](docs/docs/ddd/use-cases.md), [Subdomain classification](docs/docs/ddd/subdomain-classification.md), [DDD artifact pack](docs/docs/ddd/ddd-artifacts.md) |
+| Ecosystem | [Integration](docs/docs/ecosystem/integration.md), [Context map](docs/docs/ecosystem/context-map.md) |
+| MCP | [Tools, resources and prompts](docs/docs/mcp/tools.md), [Governance charter](docs/docs/mcp/governance-charter.md) |
+| Analytics | [Labor report](docs/docs/analytics/labor-report.md) |
+| Decisions | [ADR index](docs/docs/adr/index.md) |
+
 ## Why this context stops at the path boundary
 
 Workforce Management never links an associate to a specific task — it only
