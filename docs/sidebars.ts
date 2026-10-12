@@ -98,6 +98,14 @@ const sidebars: SidebarsConfig = {
     },
     {
       type: 'category',
+      label: 'Operations',
+      collapsed: false,
+      items: [
+        'operations/configuration',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Architecture Decision Records',
       collapsed: false,
       link: {type: 'doc', id: 'adr/index'},
