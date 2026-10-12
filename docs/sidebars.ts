@@ -102,6 +102,9 @@ const sidebars: SidebarsConfig = {
       collapsed: false,
       items: [
         'operations/configuration',
+        'operations/runbook',
+        'operations/observability',
+        'operations/troubleshooting',
       ],
     },
     {
