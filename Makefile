@@ -26,7 +26,7 @@ MUTATION_FULL_PKG  := ./internal/domain
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build vet fmt fmt-check lint test coverage integration bdd contract arch-test mutation mutation-full vuln check check-all
+.PHONY: help build vet fmt fmt-check lint test coverage integration bdd contract arch-test chart-test mutation mutation-full vuln check check-all
 
 help:
 	@echo "workforce-management — local quality gate (targets mirror .github/workflows/ci.yml)"
@@ -111,6 +111,12 @@ contract:
 
 arch-test:
 	$(GO) test ./internal/architecture/... -v
+
+# Helm chart behaviour tests -- mirrors the `chart-tests` CI job. Needs helm
+# and PyYAML (python3 -m pip install pyyaml) on PATH.
+chart-test:
+	bash charts/workforce-management/tests/render_test.sh
+	python3 charts/workforce-management/tests/test_service_selectors.py
 
 mutation:
 	@if ! command -v $(GREMLINS) >/dev/null 2>&1; then \

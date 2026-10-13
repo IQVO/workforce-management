@@ -149,11 +149,28 @@ autoscaling:
     maxReplicas: 3
     targetCPUUtilizationPercentage: 70
 
+# Every key below is rendered into templates/configmap.yaml and reaches
+# cmd/workforce through the api Deployment's `envFrom: configMapRef` (gap fix
+# D14); explicit env/extraEnv entries win for the same key.
 config:
   httpAddr: ":8080"
   eventPublisher: "log"   # "log" or "kafka"
   migrationsPath: "migrations"
   maxHoursPerShift: "8.0"
+  # OUTBOX_RELAY_INTERVAL: how long the outbox relay sleeps after a pass that
+  # found nothing to publish (Go duration, ADR-0016).
+  outboxRelayInterval: "1s"
+  # Installed-capacity ceiling for CommitShiftPlan (ADR-0014, gap fix D24).
+  # INSTALLED_CAPACITY_MODE: the BINARY defaults to "permissive", which fails
+  # EVERY shift-plan commit with 503 installed-capacity-unavailable (fail-loud
+  # by design). A chart install runs next to fulfillment-execution, so the
+  # chart defaults to "http". Set "permissive" only to block commits on purpose.
+  installedCapacityMode: "http"
+  # FULFILLMENT_EXECUTION_BASE_URL: fulfillment-execution's REST base URL.
+  # Empty = its in-cluster Service in this release's namespace,
+  # http://fulfillment-execution.<release namespace>.svc.cluster.local:80
+  # (the fulfillment-execution chart's ClusterIP Service on port 80).
+  fulfillmentExecutionBaseUrl: ""
   # Housekeeping sweeper (ADR-0028). Go durations; "0" disables that part.
   # idempotencyKeyTtl is also the REPLAY WINDOW of the Idempotency-Key
   # contract (ADR-0027): a retry older than this is a brand-new request.

@@ -4,9 +4,25 @@ metadata:
   name: {{ include "workforce-management.fullname" . }}
   labels:
     {{- include "workforce-management.labels" . | nindent 4 }}
+# Mounted by the api Deployment (cmd/workforce) with envFrom (gap fix D14).
+# Every key here is read by cmd/workforce; explicit env/extraEnv entries in
+# deployment.yaml win for the same key.
 data:
   HTTP_ADDR: {{ .Values.config.httpAddr | quote }}
   EVENT_PUBLISHER: {{ .Values.config.eventPublisher | quote }}
+  MIGRATIONS_PATH: {{ .Values.config.migrationsPath | quote }}
+  MAX_HOURS_PER_SHIFT: {{ .Values.config.maxHoursPerShift | quote }}
+  OUTBOX_RELAY_INTERVAL: {{ .Values.config.outboxRelayInterval | quote }}
+  HOUSEKEEPING_INTERVAL: {{ .Values.config.housekeepingInterval | quote }}
+  IDEMPOTENCY_KEY_TTL: {{ .Values.config.idempotencyKeyTtl | quote }}
+  OUTBOX_RETENTION: {{ .Values.config.outboxRetention | quote }}
+  SHUTDOWN_DRAIN_DELAY: {{ .Values.config.shutdownDrainDelay | quote }}
+  # Installed-capacity ceiling for CommitShiftPlan (ADR-0014, gap fix D24).
+  # Only in the ConfigMap, never an explicit env entry, so an extraEnv entry
+  # for the same name (warehouse-infra sets one) wins without rendering a
+  # duplicate env key.
+  INSTALLED_CAPACITY_MODE: {{ .Values.config.installedCapacityMode | quote }}
+  FULFILLMENT_EXECUTION_BASE_URL: {{ .Values.config.fulfillmentExecutionBaseUrl | default (printf "http://fulfillment-execution.%s.svc.cluster.local:80" .Release.Namespace) | quote }}
   {{- if .Values.kafka.enabled }}
   KAFKA_BROKERS: {{ .Values.kafka.brokers | quote }}
   {{- end }}

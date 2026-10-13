@@ -88,7 +88,7 @@ Messages worth searching for:
 | `readiness flipped to not-ready; draining before closing the listener` | workforce | SIGTERM received. |
 | `… skipping message that is not a valid CloudEvents 1.0 event` | workforce, mcp | Catalogue or labor-performance cache skipped a message. |
 | `analytics: exhausted retries, sending to dead-letter topic` (`topic`, `dlq_topic`, `attempts`, `error`) | projector | A message went to `warehouse.workforce.analytics.dlq`. |
-| `analytics consumer stopped` | projector | The consumer loop exited (commit or DLQ write failure). The process keeps serving `/healthz`. |
+| `analytics consumer stopped; exiting so the pod restarts` | projector | The consumer loop exited (commit or DLQ write failure, or any return without a shutdown signal). The process shuts its admin server down and exits non-zero, so Kubernetes restarts it (gap fix D13). |
 
 ## Dashboard
 
@@ -118,6 +118,6 @@ There are no panels yet for `workforce.outbox.lag_seconds`,
 | Breaker open | `max by (dependency) (circuit_breaker_state) == 2` for 2 m | labor-performance open: proposals lose the measured rate (fail-open). fulfillment-execution open: every shift-plan commit fails. |
 | Assignment rejections climbing | `sum(rate(workforce_labor_assignments_total{outcome="rejected"}[15m])) / sum(rate(workforce_labor_assignments_total[15m])) > 0.5` | The floor is being asked to staff paths it cannot. |
 | Analytics DLQ growth | broker-side end offset of `warehouse.workforce.analytics.dlq` increasing | Poison events are being skipped. The report under-counts. |
-| Analytics consumer lag | consumer-group lag of `workforce-analytics` on `warehouse.workforce.analytics` | The projector is slow or its consumer loop stopped (`/healthz` stays 200). |
+| Analytics consumer lag | consumer-group lag of `workforce-analytics` on `warehouse.workforce.analytics` | The projector is slow, or restarting: a stopped consumer loop ends the process (pod restarts count up). |
 | Report staleness | poll `GET /reports/labor/freshness` → `lagSeconds` above your SLO | Same symptom, seen from the read side. |
 | Slow API | `histogram_quantile(0.95, sum by (le, http_route) (rate(http_server_request_duration_seconds_bucket{service_name="workforce-management"}[5m]))) > 0.5` | Latency SLO. |

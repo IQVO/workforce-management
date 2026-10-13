@@ -161,10 +161,12 @@ Triggers: push and pull_request on `main` and `develop`, a weekly cron
 | `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/`, then `git diff --exit-code` on the generated REST reference | every run |
 | `web` | `npm ci`, lint, `tsc -b`, `npm test`, `npm run build` for the `web/` remote | every run |
 | `helm-lint` | `ct lint` on `charts/workforce-management` | PRs into `main` only |
+| `chart-tests` | `bash charts/workforce-management/tests/render_test.sh` (ConfigMap `envFrom` mount, `config.*` values, installed-capacity defaults) and `python3 charts/workforce-management/tests/test_service_selectors.py` (each Service selects exactly one Deployment; PyYAML pinned, the script fails without it). Locally: `make chart-test`. | every run |
 | `trivy-scan` | image vulnerability scan | PRs into `main` only |
 | `docker-publish` | build, push to GHCR, cosign sign and SBOM attest. Needs all gating jobs. | push to `main` only |
 | `release` | semver tag, image retag, Helm chart package and publish | push to `main` only, after `docker-publish` |
 
-The docs site is built by `.github/workflows/docs.yml`, which runs **only on
-push to `main`**. A docs PR into `develop` is not built by CI, apart from
-`docs-api-drift`. Run `npm ci && npm run build` in `docs/` yourself.
+The docs site is built by `.github/workflows/docs.yml` on every pull request
+that touches `docs/**`, `apis/**` or the workflow (build only, no Pages
+artifact, no deploy; gap fix D25), and on push to `main`, which also
+publishes. Run `npm ci && npm run build` in `docs/` to reproduce it locally.

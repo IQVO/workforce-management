@@ -17,13 +17,16 @@ and off by default. The table below lists every edge in
 | --- | --- | --- | --- | --- |
 | Out | `wes-work-planning`, `warehouse-planning` | Kafka `warehouse.workforce.events` (`ShiftPlanCommitted`) | `EVENT_PUBLISHER=kafka` | `log` (no broker) |
 | Out | own analytics projector | Kafka `warehouse.workforce.analytics` (every domain event) | `EVENT_PUBLISHER=kafka` | `log` |
-| In (sync) | `fulfillment-execution` | `GET /capacity/{capability}` on every `CommitShiftPlan` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) | `INSTALLED_CAPACITY_MODE=http` + `FULFILLMENT_EXECUTION_BASE_URL` | `permissive` = **every commit fails with 503** |
+| In (sync) | `fulfillment-execution` | `GET /capacity/{capability}` on every `CommitShiftPlan` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) | `INSTALLED_CAPACITY_MODE=http` + `FULFILLMENT_EXECUTION_BASE_URL` | binary: `permissive` = **every commit fails with 503**; Helm chart: `http` against `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` (gap fix D24) |
 | In (sync) | `labor-performance` | `GET /task-types/{taskType}/performance` when `ProposePathPlan` has no caller rate ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)) | `LABOR_PERFORMANCE_MODE=http` + `LABOR_PERFORMANCE_BASE_URL` | `permissive` = no measured rate (fail-open) |
 | In (async) | `labor-performance` | Kafka `warehouse.labor-performance.events` (`TaskPerformanceRecorded`) into an in-memory cache ([ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)) | `LABOR_PERFORMANCE_MODE=kafka-cache` + `KAFKA_BROKERS` | off |
 | In (async) | `process-path-management` | Kafka `warehouse.process-path-management.events` (`ProcessPathCreated`/`Updated`/`Deactivated`) into the in-memory process-path catalogue | `PATH_CATALOGUE_SOURCE=kafka` + `KAFKA_BROKERS` | `file` (`PATH_CATALOGUE_FILE`) |
 
-The `warehouse-infra` kind cluster sets `INSTALLED_CAPACITY_MODE=http` and
-`LABOR_PERFORMANCE_MODE=kafka-cache`, and sets `PATH_CATALOGUE_SOURCE=kafka`
+The Helm chart defaults the installed-capacity edge to `http` against
+fulfillment-execution's in-cluster Service (`config.installedCapacityMode`,
+`config.fulfillmentExecutionBaseUrl`). The `warehouse-infra` kind cluster also
+sets `INSTALLED_CAPACITY_MODE=http` (through `extraEnv`, which wins over the
+chart ConfigMap) and `LABOR_PERFORMANCE_MODE=kafka-cache`, and sets `PATH_CATALOGUE_SOURCE=kafka`
 when its `deploy_process_path_kafka_source` flag is on. All of these edges are
 therefore live there.
 
