@@ -66,7 +66,11 @@ instrumentation.
 In outbox mode the W3C trace context is captured when the use case raises the
 event and stored in the row's `headers`. The relay forwards it untouched, so
 the projector's `kafka.consume` span becomes a child of the **originating HTTP
-or MCP request**, not of the relay pass.
+or MCP request**, not of the relay pass. A row written without an active span
+relays with no `traceparent`. Gap fix D27 pins both halves end to end (real
+Postgres and Kafka): `TestOutboxTrace_TraceparentCrossesTheOutboxToKafka` and
+`TestOutboxTrace_RowWithoutTraceHeadersRelaysUnchanged` in
+`internal/adapters/outbound/postgres/outbox_trace_integration_test.go`.
 
 ## Logs
 

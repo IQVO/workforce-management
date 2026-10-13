@@ -20,7 +20,7 @@ local pass predicts a CI pass. The commands below are copied from the
 | BDD acceptance | godog/Gherkin scenarios driven through the real HTTP router with in-memory adapters ([ADR 0006](../adr/0006-godog-bdd-acceptance-tests.md)) | `features/*.feature`, runners `features_test.go` and `features_wave2_test.go` | `make bdd` (`go test ./... -run TestFeatures -v`) | nothing |
 | Architecture fitness | Hexagonal and fleet rules as tests ([ADR 0007](../adr/0007-arch-go-architecture-fitness-tests.md)) | `internal/architecture/` | `make arch-test` | nothing |
 | MCP evals | Tool schemas, wire conformance, behaviour | `internal/adapters/inbound/mcp/eval_*_test.go`, `evalsuite_test.go` | `go test ./internal/adapters/inbound/mcp/... -race -run '^TestEval\|^TestMCPEvalSuite' -v` | nothing |
-| Integration | Real Postgres and real Kafka through testcontainers-go | 18 files with `//go:build integration` | `make integration` (`go test -tags=integration ./... -race -count=1`) | Docker |
+| Integration | Real Postgres and real Kafka through testcontainers-go | 19 files with `//go:build integration` | `make integration` (`go test -tags=integration ./... -race -count=1`) | Docker |
 | Contract | Schemathesis property-based tests of the running binary against `apis/openapi.yaml` | `scripts/contract-test.sh` | `make contract` | Postgres in `DATABASE_URL` and `st` (Schemathesis 4.28.0) |
 | Mutation | gremlins on the domain | `.gremlins.yaml` | `make mutation` (fast) / `make mutation-full` | gremlins v0.6.0 |
 
@@ -68,7 +68,8 @@ Every integration test starts its own containers, so no `DATABASE_URL` or
 | Area | Files |
 |---|---|
 | Postgres repositories, `version` concurrency, site code | `internal/adapters/outbound/postgres/integration_test.go`, `version_integration_test.go`, `site_integration_test.go` |
-| Outbox: atomicity, relay, lag gauge | `outbox_integration_test.go`, `outbox_lag_integration_test.go` (postgres package) |
+| Outbox: atomicity, relay, attempt cap ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)), lag gauge | `outbox_integration_test.go`, `outbox_lag_integration_test.go` (postgres package) |
+| Outbox trace continuity (D27): the request's `traceparent` reaches Kafka through the outbox; an untraced row relays unchanged | `outbox_trace_integration_test.go` (postgres package, real Postgres and Kafka) |
 | Pool limits (`MaxConns`, `statement_timeout`) | `pool_limits_integration_test.go` |
 | Housekeeping | `internal/adapters/outbound/postgres/sweeper_integration_test.go`, `cmd/workforce/housekeeping_integration_test.go` |
 | Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `siteconv_integration_test.go` |
