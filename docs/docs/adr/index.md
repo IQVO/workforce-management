@@ -95,7 +95,7 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0013](./0013-process-path-catalogue-validation.md) | Process-path catalogue validation, mirroring fulfillment-execution's ADR-0017 | Accepted |
 | [0014](./0014-installed-capacity-ceiling.md) | Live installed-capacity ceiling on CommitShiftPlan, sourced from fulfillment-execution | Accepted |
 | [0015](./0015-standard-metrics-convention.md) | Standard metrics convention across the fleet | Accepted |
-| [0016](./0016-transactional-outbox.md) | Transactional outbox feeding both Kafka topics from one table | Accepted |
+| [0016](./0016-transactional-outbox.md) | Transactional outbox feeding both Kafka topics from one table | Accepted; relay retry amended by [0036](./0036-outbox-relay-attempt-cap.md) |
 | [0017](./0017-adopt-fleet-rest-identity.md) | Adopt the fleet REST identity — static bearer keys with read/read-write scopes | Superseded by [0018](./0018-remove-fleet-rest-identity.md) |
 | [0018](./0018-remove-fleet-rest-identity.md) | Remove the fleet REST identity layer (revert ADR-0017) | Accepted |
 | [0019](./0019-labor-performance-cache-consumer.md) | Replace the synchronous labor-performance MeasuredRateClient with an event-fed local cache | Accepted |
@@ -115,3 +115,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0033](./0033-docs-audit-corrections-2026-10.md) | Corrections from the 2026-10-05 docs audit (idempotent-request atomicity, measured-rate unit, idle-share naming, /readyz) | Accepted |
 | [0034](./0034-site-scoped-staffing-gap.md) | Site-scoped staffing gap (optional canonical siteCode) | Accepted |
 | [0035](./0035-sitecode-converges-building-id.md) | siteCode is the canonical name of the ShiftPlan key; buildingId is a deprecated alias | Accepted |
+| [0036](./0036-outbox-relay-attempt-cap.md) | The outbox relay stops claiming a row after OUTBOX_MAX_ATTEMPTS failures | Accepted |

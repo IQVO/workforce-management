@@ -34,8 +34,11 @@ grep -A3 'envFrom:' <<<"$api_deployment" | grep -q "name: $configmap_name" \
   || fail "api Deployment envFrom does not reference ConfigMap $configmap_name"
 
 # A tuned config.* value reaches the ConfigMap the api mounts.
-tuned="$(render --set config.outboxRelayInterval=7s --show-only templates/configmap.yaml)"
+tuned="$(render --set config.outboxRelayInterval=7s --set config.outboxMaxAttempts=5 --show-only templates/configmap.yaml)"
 grep -q 'OUTBOX_RELAY_INTERVAL: "7s"' <<<"$tuned" || fail "config.outboxRelayInterval is not rendered into the ConfigMap"
+grep -q 'OUTBOX_MAX_ATTEMPTS: "5"' <<<"$tuned" || fail "config.outboxMaxAttempts is not rendered into the ConfigMap"
+# D12 (2026-10-12): the outbox relay attempt cap defaults to the fleet's 20.
+grep -q 'OUTBOX_MAX_ATTEMPTS: "20"' <<<"$configmap" || fail "OUTBOX_MAX_ATTEMPTS must default to 20 (ADR-0036)"
 
 # D24 (2026-10-12): the chart wires the installed-capacity edge by default.
 # The binary defaults INSTALLED_CAPACITY_MODE to "permissive", which fails

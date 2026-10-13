@@ -157,6 +157,7 @@ const sidebars: SidebarsConfig = {
         'adr/0033-docs-audit-corrections-2026-10',
         'adr/0034-site-scoped-staffing-gap',
         'adr/0035-sitecode-converges-building-id',
+        'adr/0036-outbox-relay-attempt-cap',
       ],
     },
   ],

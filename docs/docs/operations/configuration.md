@@ -24,6 +24,7 @@ from the two adapters that read the environment themselves
 | `envOrDefault` / `getenv` | every string setting | An empty string counts as unset, so the default applies. |
 | `envFloatOrDefault` | `MAX_HOURS_PER_SHIFT`, `IDLE_SHARE_TRIM_THRESHOLD` | A value that is not a number logs `invalid float env var` and exits 1. |
 | `envDurationOrDefault` (`cmd/workforce/main.go`) | `OUTBOX_RELAY_INTERVAL` | A malformed, zero or negative value logs a warning and falls back to the default. It never stops the boot. |
+| `envNonNegativeIntOrDefault` (`cmd/workforce/main.go`) | `OUTBOX_MAX_ATTEMPTS` | `0` is valid ("unlimited"). A non-numeric or negative value logs a warning and falls back to the default. It never stops the boot. |
 | `envDurationAllowZero` (`cmd/workforce/housekeeping.go`) | `HOUSEKEEPING_INTERVAL`, `IDEMPOTENCY_KEY_TTL`, `OUTBOX_RETENTION`, `SHUTDOWN_DRAIN_DELAY` | `0` is valid and means "disabled" or "keep forever". A malformed or negative value logs a warning and falls back to the default. |
 
 Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
@@ -40,6 +41,7 @@ Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
 | `EVENT_PUBLISHER` | `log` | no | `log` writes domain events to the JSON log only. `kafka` writes each event into `outbox_events` in the use case's transaction (two rows: integration and analytics topic), and this process's outbox relay forwards them ([ADR 0016](../adr/0016-transactional-outbox.md)). Any other value stops the boot with `unknown EVENT_PUBLISHER`. | `cmd/workforce/main.go` (`publisherConfigFromEnv`), `internal/composition/publisher.go` |
 | `KAFKA_BROKERS` | `localhost:9092` for the publisher; no default for the consumers | when a Kafka mode is on | Comma-separated bootstrap brokers. The publisher falls back to `localhost:9092`. `PATH_CATALOGUE_SOURCE=kafka` and `LABOR_PERFORMANCE_MODE=kafka-cache` read the raw value and stop the boot when it is empty. | `cmd/workforce/main.go` (three reads) |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | no | Poll interval of the outbox relay. Used only when `EVENT_PUBLISHER=kafka`. | `cmd/workforce/main.go` |
+| `OUTBOX_MAX_ATTEMPTS` | `20` | no | Failed sends after which the outbox relay stops claiming a row, so one poison row cannot block the relay forever. The row stays in `outbox_events` with `attempts`/`last_error` and is logged once at ERROR; re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = ...`. `0` = unlimited. A negative or non-numeric value logs a warning and uses `20` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)). Used only when `EVENT_PUBLISHER=kafka`. | `cmd/workforce/main.go` (`publisherConfigFromEnv`), `internal/composition/publisher.go` |
 | `PATH_CATALOGUE_SOURCE` | `file` | no | Where the process-path catalogue comes from. `kafka` replays the compacted process-path topic before the service accepts traffic (60 s `WaitReady` timeout). Any other value selects the file ([ADR 0013](../adr/0013-process-path-catalogue-validation.md), [ADR 0030](../adr/0030-kafka-sourced-process-path-catalogue.md)). | `cmd/workforce/main.go` (`catalogueConfigFromEnv`), `internal/composition/catalogue.go` |
 | `PATH_CATALOGUE_FILE` | `/etc/workforce-management/process-paths.yaml` | when the source is `file` | YAML catalogue of valid path ids. A missing or malformed file stops the boot; there is no empty-catalogue fallback. | `cmd/workforce/main.go` |
 | `LABOR_PERFORMANCE_MODE` | `permissive` | no | Measured-rate feed for `ProposePathPlan`. `permissive` returns no measured rate (fail-open). `http` calls labor-performance behind a circuit breaker with retry. `kafka-cache` builds an in-memory read model from the labor-performance integration topic, waits up to 60 s for it to replay, and is also the only mode that supplies the idle-share signal ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)). | `cmd/workforce/main.go` (`newMeasuredRateClients`) |
@@ -83,7 +85,7 @@ state is separate from any other process.
 | `SERVICE_VERSION` | `dev` | no | OTel `service.version`, unless ldflags set it. | `cmd/mcp/main.go` |
 | `ENVIRONMENT` | `local` | no | `deployment.environment.name`. | `internal/adapters/outbound/telemetry/telemetry.go` |
 
-`cmd/mcp` does not read `OUTBOX_RELAY_INTERVAL`, the `LABOR_PERFORMANCE_*` or
+`cmd/mcp` does not read `OUTBOX_RELAY_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`, the `LABOR_PERFORMANCE_*` or
 `INSTALLED_CAPACITY_*` variables, `IDLE_SHARE_TRIM_THRESHOLD`, the
 housekeeping variables or `CORS_ALLOWED_ORIGINS`. Its `ProposePathPlan` has no
 measured-rate client, and it builds no `CommitShiftPlan`.
@@ -148,6 +150,7 @@ Helm chart sets both by default). See the
 | `MIGRATIONS_PATH` | `config.migrationsPath` | `migrations` |
 | `MAX_HOURS_PER_SHIFT` | `config.maxHoursPerShift` | `8.0` |
 | `OUTBOX_RELAY_INTERVAL` | `config.outboxRelayInterval` | `1s` |
+| `OUTBOX_MAX_ATTEMPTS` | `config.outboxMaxAttempts` | `20` |
 | `HOUSEKEEPING_INTERVAL` | `config.housekeepingInterval` | `1h` |
 | `IDEMPOTENCY_KEY_TTL` | `config.idempotencyKeyTtl` | `24h` |
 | `OUTBOX_RETENTION` | `config.outboxRetention` | `168h` |

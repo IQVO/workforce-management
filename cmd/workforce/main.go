@@ -248,15 +248,25 @@ func wireRepos(pool *pgxpool.Pool, logger *slog.Logger) (*workforceRepos, func()
 	}, built.Close, nil
 }
 
-// publisherConfigFromEnv resolves EVENT_PUBLISHER, KAFKA_BROKERS and
-// OUTBOX_RELAY_INTERVAL for the shared composition.BuildEventPublisher.
-// This process owns the outbox relay (RunRelay): cmd/mcp only inserts.
+// OUTBOX_MAX_ATTEMPTS caps how many failed sends an outbox row may
+// accumulate before the relay stops claiming it (gap fix D12, ADR 0036).
+// 0 = unlimited.
+const (
+	outboxMaxAttemptsEnv     = "OUTBOX_MAX_ATTEMPTS"
+	defaultOutboxMaxAttempts = 20
+)
+
+// publisherConfigFromEnv resolves EVENT_PUBLISHER, KAFKA_BROKERS,
+// OUTBOX_RELAY_INTERVAL and OUTBOX_MAX_ATTEMPTS for the shared
+// composition.BuildEventPublisher. This process owns the outbox relay
+// (RunRelay): cmd/mcp only inserts.
 func publisherConfigFromEnv() composition.PublisherConfig {
 	return composition.PublisherConfig{
 		Kind:          envOrDefault("EVENT_PUBLISHER", composition.LogPublisher),
 		Brokers:       strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
 		RunRelay:      true,
 		RelayInterval: envDurationOrDefault("OUTBOX_RELAY_INTERVAL", time.Second),
+		MaxAttempts:   envNonNegativeIntOrDefault(outboxMaxAttemptsEnv, defaultOutboxMaxAttempts),
 	}
 }
 
@@ -551,6 +561,24 @@ func envFloatOrDefault(key string, def float64) float64 {
 		os.Exit(1)
 	}
 	return f
+}
+
+// envNonNegativeIntOrDefault parses key as a non-negative integer, falling
+// back to def when it is unset and, with a warning, when it is malformed or
+// negative: like the relay interval it is a tuning knob, so it never fails
+// the boot. 0 is a valid value (OUTBOX_MAX_ATTEMPTS uses it for
+// "unlimited").
+func envNonNegativeIntOrDefault(key string, def int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return def
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || n < 0 {
+		slog.Warn("invalid integer env var, using default", "key", key, "value", v, "default", def)
+		return def
+	}
+	return n
 }
 
 // envDurationOrDefault parses key as a time.Duration, falling back on

@@ -160,6 +160,12 @@ config:
   # OUTBOX_RELAY_INTERVAL: how long the outbox relay sleeps after a pass that
   # found nothing to publish (Go duration, ADR-0016).
   outboxRelayInterval: "1s"
+  # OUTBOX_MAX_ATTEMPTS: failed sends after which the relay stops claiming an
+  # outbox row, so one poison row cannot block the relay forever (ADR-0036,
+  # gap fix D12). The row stays in outbox_events with attempts/last_error;
+  # re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = ...`.
+  # "0" = unlimited (a poison row then blocks every later row).
+  outboxMaxAttempts: "20"
   # Installed-capacity ceiling for CommitShiftPlan (ADR-0014, gap fix D24).
   # INSTALLED_CAPACITY_MODE: the BINARY defaults to "permissive", which fails
   # EVERY shift-plan commit with 503 installed-capacity-unavailable (fail-loud
