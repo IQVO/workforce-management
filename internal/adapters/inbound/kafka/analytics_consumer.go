@@ -198,6 +198,10 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 // handleFetchedMessage) before its offset is committed, so one poison message
 // can never wedge the partition. Only a commit failure or a DLQ publish
 // failure aborts the loop.
+//
+// Cancelling ctx while a message is mid-handle is a clean stop (nil): the
+// offset of that message was not committed, so it is redelivered on the next
+// start and the processed-events dedupe absorbs the replay.
 func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 	for {
 		msg, err := c.Reader.FetchMessage(ctx)
@@ -208,6 +212,9 @@ func (c *AnalyticsConsumer) Run(ctx context.Context) error {
 			return err
 		}
 		if err := c.handleFetchedMessage(ctx, msg); err != nil {
+			if ctx.Err() != nil && errors.Is(err, context.Canceled) {
+				return nil
+			}
 			return err
 		}
 	}
@@ -268,6 +275,9 @@ func (c *AnalyticsConsumer) handleFetchedMessage(ctx context.Context, msg segmen
 
 	isNew, markErr := c.markProcessedWithRetry(ctx, env.ID)
 	if markErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err() // shutting down: never dead-letter a message only cancellation interrupted
+		}
 		return c.deadLetterAndCommit(ctx, span, msg, markErr)
 	}
 	if !isNew {
@@ -275,6 +285,9 @@ func (c *AnalyticsConsumer) handleFetchedMessage(ctx context.Context, msg segmen
 	}
 
 	if applyErr := c.applyWithRetry(ctx, env); applyErr != nil {
+		if ctx.Err() != nil {
+			return ctx.Err() // shutting down: never dead-letter a message only cancellation interrupted
+		}
 		return c.deadLetterAndCommit(ctx, span, msg, applyErr)
 	}
 	return c.commit(ctx, msg)
