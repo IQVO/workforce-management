@@ -116,3 +116,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0034](./0034-site-scoped-staffing-gap.md) | Site-scoped staffing gap (optional canonical siteCode) | Accepted |
 | [0035](./0035-sitecode-converges-building-id.md) | siteCode is the canonical name of the ShiftPlan key; buildingId is a deprecated alias | Accepted |
 | [0036](./0036-outbox-relay-attempt-cap.md) | The outbox relay stops claiming a row after OUTBOX_MAX_ATTEMPTS failures | Accepted |
+| [0037](./0037-reports-api-openapi-contract.md) | The reports binary's routes are specified in apis/openapi-reports.yaml | Accepted |

@@ -104,6 +104,15 @@ export DATABASE_URL='postgres://workforce:workforce@localhost:18097/workforce?ss
 make contract
 ```
 
+The reports binary (`cmd/workforce-reports`) has its own spec,
+`apis/openapi-reports.yaml` ([ADR 0037](../adr/0037-reports-api-openapi-contract.md)).
+It is contract-tested in Go against the real router, without a database:
+`TestReportsContract_RoutesMatchSpec` (every served route is in the spec and
+vice versa) and `TestReportsContract_ResponsesMatchSpec` (every documented
+status of every operation: status, media type, required and undocumented
+properties) in `internal/adapters/inbound/http/reports_contract_test.go`.
+They run in the `test` job.
+
 ## Architecture fitness tests
 
 `internal/architecture/`:
@@ -156,10 +165,10 @@ Triggers: push and pull_request on `main` and `develop`, a weekly cron
 | `mutation-fast` | `gremlins unleash ./internal/domain/shiftplan` | every run |
 | `mutation` | `gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30`. Opens or closes a `harness:red` issue. | schedule / dispatch only |
 | `drift` | `deadcode -test`, `go mod tidy -diff`, knip on `web/`, a coverage-quality mutant report (all informational) | schedule / dispatch only |
-| `api-lint` | Spectral on `apis/openapi.yaml` and `apis/asyncapi.yaml` (`--fail-severity=warn`) | every run |
+| `api-lint` | Spectral on `apis/openapi.yaml`, `apis/openapi-reports.yaml` and `apis/asyncapi.yaml` (`--fail-severity=warn`) | every run |
 | `vuln` | govulncheck v1.8.0 | every run |
 | `arch-test` | `go test ./internal/architecture/... -v` | every run |
-| `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/`, then `git diff --exit-code` on the generated REST reference | every run |
+| `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/` (both specs), then `git status --porcelain` on `docs/api-reference/rest` and `rest-reports` (untracked pages fail too) | every run |
 | `web` | `npm ci`, lint, `tsc -b`, `npm test`, `npm run build` for the `web/` remote | every run |
 | `helm-lint` | `ct lint` on `charts/workforce-management` | PRs into `main` only |
 | `chart-tests` | `bash charts/workforce-management/tests/render_test.sh` (ConfigMap `envFrom` mount, `config.*` values, installed-capacity defaults) and `python3 charts/workforce-management/tests/test_service_selectors.py` (each Service selects exactly one Deployment; PyYAML pinned, the script fails without it). Locally: `make chart-test`. | every run |
