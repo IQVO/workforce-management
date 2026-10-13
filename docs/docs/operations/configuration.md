@@ -134,3 +134,32 @@ For a local `cmd/workforce` run you need `DATABASE_URL` and a
 `PATH_CATALOGUE_FILE` that exists. Add `INSTALLED_CAPACITY_MODE=http` plus
 `FULFILLMENT_EXECUTION_BASE_URL` before you try to commit a shift plan. See the
 [Quickstart](../overview/quickstart.md) for the walk-through.
+
+## How the Helm chart delivers `cmd/workforce`'s variables
+
+`charts/workforce-management/templates/configmap.yaml` renders `config.*` (plus
+`kafka.brokers` when `kafka.enabled`) into a ConfigMap named after the release:
+
+| ConfigMap key | Chart value | Chart default |
+|---|---|---|
+| `HTTP_ADDR` | `config.httpAddr` | `:8080` |
+| `EVENT_PUBLISHER` | `config.eventPublisher` | `log` |
+| `MIGRATIONS_PATH` | `config.migrationsPath` | `migrations` |
+| `MAX_HOURS_PER_SHIFT` | `config.maxHoursPerShift` | `8.0` |
+| `OUTBOX_RELAY_INTERVAL` | `config.outboxRelayInterval` | `1s` |
+| `HOUSEKEEPING_INTERVAL` | `config.housekeepingInterval` | `1h` |
+| `IDEMPOTENCY_KEY_TTL` | `config.idempotencyKeyTtl` | `24h` |
+| `OUTBOX_RETENTION` | `config.outboxRetention` | `168h` |
+| `SHUTDOWN_DRAIN_DELAY` | `config.shutdownDrainDelay` | `10s` |
+| `KAFKA_BROKERS` | `kafka.brokers` (only with `kafka.enabled`) | `kafka:9092` |
+
+The api Deployment mounts it with `envFrom: configMapRef` (gap fix D14,
+2026-10-12), so every `config.*` value reaches `cmd/workforce`. Explicit `env`
+entries in `deployment.yaml` (the same values, plus the Secret-backed DSNs, the
+OTel variables and `PATH_CATALOGUE_FILE`) and `extraEnv` win over the ConfigMap
+for the same key. The projector, reports and MCP Deployments do not mount the
+ConfigMap: their variables are set explicitly in their own templates (the
+reports binary would otherwise inherit `HTTP_ADDR=:8080`).
+`charts/workforce-management/tests/render_test.sh` fails when the mount
+disappears, when a tuned value is not rendered, or when another workload mounts
+the ConfigMap.

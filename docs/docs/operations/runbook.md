@@ -35,19 +35,30 @@ The chart refuses to render without `database.url` or
 `database.existingSecret` (`workforce-management.requireDatabase`), because
 `cmd/workforce` exits at once without `DATABASE_URL`.
 
-### Values the chart does not template
+### What the chart templates, and what needs `extraEnv`
 
-`deployment.yaml` sets `HTTP_ADDR`, `EVENT_PUBLISHER`, `MIGRATIONS_PATH`,
-`MAX_HOURS_PER_SHIFT`, the housekeeping variables, `SHUTDOWN_DRAIN_DELAY`,
-`DATABASE_URL`, `MIGRATIONS_DATABASE_URL` (secret key, `optional: true`),
-`LOG_LEVEL`, `KAFKA_BROKERS` (only when `kafka.enabled`), the OTel variables
-(when `otel.enabled`) and `PATH_CATALOGUE_FILE` (when `pathCatalogue.enabled`).
-These must come through `extraEnv`:
+`templates/configmap.yaml` renders `HTTP_ADDR`, `EVENT_PUBLISHER`,
+`MIGRATIONS_PATH`, `MAX_HOURS_PER_SHIFT`, `OUTBOX_RELAY_INTERVAL`, the
+housekeeping variables, `SHUTDOWN_DRAIN_DELAY` and (with `kafka.enabled`)
+`KAFKA_BROKERS` from `config.*`, and the api Deployment mounts it with
+`envFrom` (gap fix D14, 2026-10-12; the full key table is in
+[Configuration](./configuration.md#how-the-helm-chart-delivers-cmdworkforces-variables)).
+Changing a `config.*` value takes effect on the next rollout: the
+`checksum/config` annotation rolls the pods. `deployment.yaml` also sets
+`HTTP_ADDR`, `EVENT_PUBLISHER`, `MIGRATIONS_PATH`, `MAX_HOURS_PER_SHIFT`, the
+housekeeping variables, `SHUTDOWN_DRAIN_DELAY`, `DATABASE_URL`,
+`MIGRATIONS_DATABASE_URL` (secret key, `optional: true`), `LOG_LEVEL`,
+`KAFKA_BROKERS` (only when `kafka.enabled`), the OTel variables (when
+`otel.enabled`) and `PATH_CATALOGUE_FILE` (when `pathCatalogue.enabled`) as
+explicit `env`, which wins over the ConfigMap for the same key. The projector,
+reports and MCP Deployments do not mount the ConfigMap.
+`charts/workforce-management/tests/render_test.sh` (CI job `chart-tests`)
+fails if the mount disappears. These must come through `extraEnv`:
 
 - `INSTALLED_CAPACITY_MODE=http` and `FULFILLMENT_EXECUTION_BASE_URL`. Without them **every `CommitShiftPlan` fails** with `503 installed-capacity-unavailable`.
 - `LABOR_PERFORMANCE_MODE` and `LABOR_PERFORMANCE_BASE_URL`, when you want a measured-rate feed.
 - `PATH_CATALOGUE_SOURCE=kafka`, to replay the catalogue from Kafka instead of the mounted file.
-- `OUTBOX_RELAY_INTERVAL`, `IDLE_SHARE_TRIM_THRESHOLD` and `CORS_ALLOWED_ORIGINS`.
+- `IDLE_SHARE_TRIM_THRESHOLD` and `CORS_ALLOWED_ORIGINS`.
 
 `extraEnv` is also rendered into the MCP Deployment.
 

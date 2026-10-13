@@ -149,11 +149,17 @@ autoscaling:
     maxReplicas: 3
     targetCPUUtilizationPercentage: 70
 
+# Every key below is rendered into templates/configmap.yaml and reaches
+# cmd/workforce through the api Deployment's `envFrom: configMapRef` (gap fix
+# D14); explicit env/extraEnv entries win for the same key.
 config:
   httpAddr: ":8080"
   eventPublisher: "log"   # "log" or "kafka"
   migrationsPath: "migrations"
   maxHoursPerShift: "8.0"
+  # OUTBOX_RELAY_INTERVAL: how long the outbox relay sleeps after a pass that
+  # found nothing to publish (Go duration, ADR-0016).
+  outboxRelayInterval: "1s"
   # Housekeeping sweeper (ADR-0028). Go durations; "0" disables that part.
   # idempotencyKeyTtl is also the REPLAY WINDOW of the Idempotency-Key
   # contract (ADR-0027): a retry older than this is a brand-new request.
