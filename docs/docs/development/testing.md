@@ -129,6 +129,7 @@ They run in the `test` job.
 | `TestReplayConsumersSetCommitInterval` | Replay consumers configure their commit interval. |
 | `TestKafkaConsumerGroupNeverHardcodedInline` | No `GroupID: "literal"`. Groups are named constants or per-process generators. |
 | `TestKafkaIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationSensorFailsOnBadFixtures` | Integration tests never skip on an environment variable and never hard-code `localhost:9092`. The sensor proves it catches bad fixtures. |
+| `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | Every MCP tool input field whose `jsonschema` description says "optional" carries `omitempty`, or the SDK marks it required and calls without it fail (gap fix D16). |
 | `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test `NewOutboxRelay` call under `cmd/` or `internal/composition/` passes `WithMaxAttempts` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)), so one poison row cannot block the relay forever. |
 
 ## MCP evals

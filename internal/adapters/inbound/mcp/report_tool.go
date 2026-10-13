@@ -134,8 +134,8 @@ var _ ReportsClient = (*ReportsRESTClient)(nil)
 type LaborToolInput struct {
 	From        string `json:"from" jsonschema:"start of the window, inclusive, RFC3339 (required)"`
 	To          string `json:"to" jsonschema:"end of the window, exclusive, RFC3339 (required)"`
-	PathId      string `json:"pathId" jsonschema:"optional process-path filter (e.g. pack, pick, stow); empty rows are the building-wide associate-scoped bucket"`
-	Granularity string `json:"granularity" jsonschema:"time bucket granularity; only 'hour' is supported"`
+	PathId      string `json:"pathId,omitempty" jsonschema:"optional process-path filter (e.g. pack, pick, stow); empty rows are the building-wide associate-scoped bucket"`
+	Granularity string `json:"granularity,omitempty" jsonschema:"optional time bucket granularity; only 'hour' is supported, and omitting it means hour"`
 }
 
 // getLaborReport is the tool handler: it validates the required window,
