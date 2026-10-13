@@ -179,17 +179,31 @@ func NewAnalyticsConsumer(brokers []string, topic string, projection report.Proj
 		Projection: projection,
 		Processed:  processed,
 		Logger:     logger,
+		dlqWriter:  newAnalyticsDLQWriter(brokers, topic+analyticsDLQTopicSuffix),
+	}
+}
+
+// dlqRequiredAcks makes a dead-letter write wait for every in-sync replica
+// (ADR-0031).
+const dlqRequiredAcks = segmentio.RequireAll
+
+// newAnalyticsDLQWriter builds the synchronous writer for the analytics
+// dead-letter topic.
+func newAnalyticsDLQWriter(brokers []string, topic string) *segmentio.Writer {
+	return &segmentio.Writer{
+		Addr:  segmentio.TCP(brokers...),
+		Topic: topic,
 		// AllowAutoTopicCreation: the ".dlq" topic is only written on the
 		// rare poison path, so it usually does not exist yet; without the
 		// flag the first dead-letter write fails and stops the projector.
+		AllowAutoTopicCreation: true,
 		// BatchTimeout: kafka-go's 1s default caps a synchronous DLQ write at
 		// ~1 msg/s. Same fix as every other fleet DLQ writer.
-		dlqWriter: &segmentio.Writer{
-			Addr:                   segmentio.TCP(brokers...),
-			Topic:                  topic + analyticsDLQTopicSuffix,
-			AllowAutoTopicCreation: true,
-			BatchTimeout:           10 * time.Millisecond,
-		},
+		BatchTimeout: 10 * time.Millisecond,
+		// RequiredAcks: kafka-go defaults to RequireNone (acks=0), so the
+		// broker never confirms the write and a broker blip silently drops
+		// the poison message while the consumer commits past it (ADR-0031).
+		RequiredAcks: dlqRequiredAcks,
 	}
 }
 
