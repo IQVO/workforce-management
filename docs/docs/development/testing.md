@@ -20,7 +20,7 @@ local pass predicts a CI pass. The commands below are copied from the
 | BDD acceptance | godog/Gherkin scenarios driven through the real HTTP router with in-memory adapters ([ADR 0006](../adr/0006-godog-bdd-acceptance-tests.md)) | `features/*.feature`, runners `features_test.go` and `features_wave2_test.go` | `make bdd` (`go test ./... -run TestFeatures -v`) | nothing |
 | Architecture fitness | Hexagonal and fleet rules as tests ([ADR 0007](../adr/0007-arch-go-architecture-fitness-tests.md)) | `internal/architecture/` | `make arch-test` | nothing |
 | MCP evals | Tool schemas, wire conformance, behaviour | `internal/adapters/inbound/mcp/eval_*_test.go`, `evalsuite_test.go` | `go test ./internal/adapters/inbound/mcp/... -race -run '^TestEval\|^TestMCPEvalSuite' -v` | nothing |
-| Integration | Real Postgres and real Kafka through testcontainers-go | 18 files with `//go:build integration` | `make integration` (`go test -tags=integration ./... -race -count=1`) | Docker |
+| Integration | Real Postgres and real Kafka through testcontainers-go | 19 files with `//go:build integration` | `make integration` (`go test -tags=integration ./... -race -count=1`) | Docker |
 | Contract | Schemathesis property-based tests of the running binary against `apis/openapi.yaml` | `scripts/contract-test.sh` | `make contract` | Postgres in `DATABASE_URL` and `st` (Schemathesis 4.28.0) |
 | Mutation | gremlins on the domain | `.gremlins.yaml` | `make mutation` (fast) / `make mutation-full` | gremlins v0.6.0 |
 
@@ -68,7 +68,8 @@ Every integration test starts its own containers, so no `DATABASE_URL` or
 | Area | Files |
 |---|---|
 | Postgres repositories, `version` concurrency, site code | `internal/adapters/outbound/postgres/integration_test.go`, `version_integration_test.go`, `site_integration_test.go` |
-| Outbox: atomicity, relay, lag gauge | `outbox_integration_test.go`, `outbox_lag_integration_test.go` (postgres package) |
+| Outbox: atomicity, relay, attempt cap ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)), lag gauge | `outbox_integration_test.go`, `outbox_lag_integration_test.go` (postgres package) |
+| Outbox trace continuity (D27): the request's `traceparent` reaches Kafka through the outbox; an untraced row relays unchanged | `outbox_trace_integration_test.go` (postgres package, real Postgres and Kafka) |
 | Pool limits (`MaxConns`, `statement_timeout`) | `pool_limits_integration_test.go` |
 | Housekeeping | `internal/adapters/outbound/postgres/sweeper_integration_test.go`, `cmd/workforce/housekeeping_integration_test.go` |
 | Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `siteconv_integration_test.go` |
@@ -104,6 +105,15 @@ export DATABASE_URL='postgres://workforce:workforce@localhost:18097/workforce?ss
 make contract
 ```
 
+The reports binary (`cmd/workforce-reports`) has its own spec,
+`apis/openapi-reports.yaml` ([ADR 0037](../adr/0037-reports-api-openapi-contract.md)).
+It is contract-tested in Go against the real router, without a database:
+`TestReportsContract_RoutesMatchSpec` (every served route is in the spec and
+vice versa) and `TestReportsContract_ResponsesMatchSpec` (every documented
+status of every operation: status, media type, required and undocumented
+properties) in `internal/adapters/inbound/http/reports_contract_test.go`.
+They run in the `test` job.
+
 ## Architecture fitness tests
 
 `internal/architecture/`:
@@ -119,6 +129,8 @@ make contract
 | `TestReplayConsumersSetCommitInterval` | Replay consumers configure their commit interval. |
 | `TestKafkaConsumerGroupNeverHardcodedInline` | No `GroupID: "literal"`. Groups are named constants or per-process generators. |
 | `TestKafkaIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationSensorFailsOnBadFixtures` | Integration tests never skip on an environment variable and never hard-code `localhost:9092`. The sensor proves it catches bad fixtures. |
+| `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | Every MCP tool input field whose `jsonschema` description says "optional" carries `omitempty`, or the SDK marks it required and calls without it fail (gap fix D16). |
+| `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test `NewOutboxRelay` call under `cmd/` or `internal/composition/` passes `WithMaxAttempts` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)), so one poison row cannot block the relay forever. |
 
 ## MCP evals
 
@@ -155,10 +167,10 @@ Triggers: push and pull_request on `main` and `develop`, a weekly cron
 | `mutation-fast` | `gremlins unleash ./internal/domain/shiftplan` | every run |
 | `mutation` | `gremlins unleash ./internal/domain --workers 1 --timeout-coefficient 30`. Opens or closes a `harness:red` issue. | schedule / dispatch only |
 | `drift` | `deadcode -test`, `go mod tidy -diff`, knip on `web/`, a coverage-quality mutant report (all informational) | schedule / dispatch only |
-| `api-lint` | Spectral on `apis/openapi.yaml` and `apis/asyncapi.yaml` (`--fail-severity=warn`) | every run |
+| `api-lint` | Spectral on `apis/openapi.yaml`, `apis/openapi-reports.yaml` and `apis/asyncapi.yaml` (`--fail-severity=warn`) | every run |
 | `vuln` | govulncheck v1.8.0 | every run |
 | `arch-test` | `go test ./internal/architecture/... -v` | every run |
-| `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/`, then `git diff --exit-code` on the generated REST reference | every run |
+| `docs-api-drift` | `npm run clean-api-docs && npm run gen-api-docs` in `docs/` (both specs), then `git status --porcelain` on `docs/api-reference/rest` and `rest-reports` (untracked pages fail too) | every run |
 | `web` | `npm ci`, lint, `tsc -b`, `npm test`, `npm run build` for the `web/` remote | every run |
 | `helm-lint` | `ct lint` on `charts/workforce-management` | PRs into `main` only |
 | `chart-tests` | `bash charts/workforce-management/tests/render_test.sh` (ConfigMap `envFrom` mount, `config.*` values, installed-capacity defaults) and `python3 charts/workforce-management/tests/test_service_selectors.py` (each Service selects exactly one Deployment; PyYAML pinned, the script fails without it). Locally: `make chart-test`. | every run |

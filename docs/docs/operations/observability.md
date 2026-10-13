@@ -66,7 +66,11 @@ instrumentation.
 In outbox mode the W3C trace context is captured when the use case raises the
 event and stored in the row's `headers`. The relay forwards it untouched, so
 the projector's `kafka.consume` span becomes a child of the **originating HTTP
-or MCP request**, not of the relay pass.
+or MCP request**, not of the relay pass. A row written without an active span
+relays with no `traceparent`. Gap fix D27 pins both halves end to end (real
+Postgres and Kafka): `TestOutboxTrace_TraceparentCrossesTheOutboxToKafka` and
+`TestOutboxTrace_RowWithoutTraceHeadersRelaysUnchanged` in
+`internal/adapters/outbound/postgres/outbox_trace_integration_test.go`.
 
 ## Logs
 
@@ -88,6 +92,7 @@ Messages worth searching for:
 | `readiness flipped to not-ready; draining before closing the listener` | workforce | SIGTERM received. |
 | `… skipping message that is not a valid CloudEvents 1.0 event` | workforce, mcp | Catalogue or labor-performance cache skipped a message. |
 | `analytics: exhausted retries, sending to dead-letter topic` (`topic`, `dlq_topic`, `attempts`, `error`) | projector | A message went to `warehouse.workforce.analytics.dlq`. |
+| `outbox relay: row reached the attempt cap and is no longer claimed` (`outbox_id`, `topic`, `event_type`, `key`, `attempts`, `max_attempts`, `error`) | workforce | An outbox row failed `OUTBOX_MAX_ATTEMPTS` times and is parked; later rows overtake it. Re-arm after the fix ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)). Alert on it. |
 | `analytics consumer stopped; exiting so the pod restarts` | projector | The consumer loop exited (commit or DLQ write failure, or any return without a shutdown signal). The process shuts its admin server down and exits non-zero, so Kubernetes restarts it (gap fix D13). |
 
 ## Dashboard

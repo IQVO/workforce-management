@@ -154,7 +154,8 @@ Only `cmd/workforce` runs the relay (`internal/adapters/outbound/postgres/outbox
 
 - Each pass claims up to 100 unpublished rows (`FOR UPDATE SKIP LOCKED`, so overlapping pods during a rollout never double-send) and sends them one at a time in `id` order.
 - After a full batch the next pass starts at once. After a partial or empty one the relay sleeps `OUTBOX_RELAY_INTERVAL` (1 s).
-- On the first send failure the pass stops, the row gets `attempts`/`last_error`, rows already sent stay published, and the next pass retries the failed row. Ordering per key is preserved, so one stuck row holds back everything behind it.
+- On the first send failure the pass stops, the row gets `attempts`/`last_error`, rows already sent stay published, and the next pass retries the failed row. Ordering per key is preserved, so one stuck row holds back everything behind it, until the row has failed `OUTBOX_MAX_ATTEMPTS` times (default `20`, about 20 s of continuous failure at the default interval; [ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)).
+- At the cap the relay stops claiming the row and logs it once at ERROR (`outbox relay: row reached the attempt cap and is no longer claimed`, with `outbox_id`, `topic`, `event_type`, `key`, `attempts`). The rows behind it publish, so later events with the same key overtake it. The row stays in `outbox_events` (`published_at IS NULL`) with its `attempts` and `last_error`; the sweeper never deletes it. After fixing the cause, re-arm it: `UPDATE outbox_events SET attempts = 0 WHERE id = <outbox_id>;` (after a broker outage, all parked rows: `UPDATE outbox_events SET attempts = 0 WHERE published_at IS NULL AND attempts >= 20;`). `OUTBOX_MAX_ATTEMPTS=0` restores unlimited retries.
 - Lag is visible as `workforce.outbox.lag_seconds` (see [Observability](./observability.md)).
 
 ### Analytics DLQ
@@ -204,7 +205,7 @@ the replica maximum when you size PgBouncer or `max_connections`.
 
 | Task | How |
 |---|---|
-| Re-publish stuck outbox rows | Fix the broker or topic. The relay retries the oldest unpublished row on every pass, so nothing else is needed. Inspect the row with `SELECT id, topic, event_type, attempts, last_error FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;`. |
+| Re-publish stuck outbox rows | Fix the broker or topic. Inspect with `SELECT id, topic, event_type, key, attempts, last_error FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;`. A row below `OUTBOX_MAX_ATTEMPTS` is retried on every pass, so nothing else is needed. A row at the cap is parked: re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = <id>;` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)). |
 | Re-send already-published events | `UPDATE outbox_events SET published_at = NULL WHERE id BETWEEN … ;` while the rows are still inside `OUTBOX_RETENTION`. Consumers must dedupe on the CloudEvents `id`; the projector does. |
 | Replay the analytics projection | Stop the projector, reset group `workforce-analytics` on `warehouse.workforce.analytics` (`kafka-consumer-groups.sh --reset-offsets --to-earliest --execute`), restart. Already-applied ids are skipped through `analytics_consumed_events`. To rebuild from scratch, truncate the analytical tables first. |
 | Reprocess the analytics DLQ | Read `warehouse.workforce.analytics.dlq`, fix the cause, and produce the original payload back onto `warehouse.workforce.analytics`. There is no tooling in this repo for it. |

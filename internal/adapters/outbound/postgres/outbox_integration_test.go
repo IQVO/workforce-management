@@ -3,12 +3,14 @@
 package postgres_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -489,5 +491,112 @@ func TestOutboxRelay_RunDrainsUntilCancelled(t *testing.T) {
 	}
 	if len(sink.sent) != 3 || countOutbox(t, pool, "published_at IS NULL") != 0 {
 		t.Fatalf("expected Run to drain all 3 rows, sent=%d", len(sink.sent))
+	}
+}
+
+// seedPoisonThenGood writes two outbox rows in id order: AssociateShiftStarted
+// (the row the test sink rejects, the "poison") and then AssociateCertified
+// for the same associate (same key), a row that publishes fine.
+func seedPoisonThenGood(t *testing.T, pool *pgxpool.Pool) {
+	t.Helper()
+	ctx := context.Background()
+	d := newDeps(pool)
+	now := time.Now().UTC()
+	start := &usecases.StartAssociateShift{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now}, UnitOfWork: d.uow}
+	certify := &usecases.CertifyAssociate{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: now}, UnitOfWork: d.uow}
+	if _, err := start.Execute(ctx, "A1", nil); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := certify.Execute(ctx, "A1", "pack"); err != nil {
+		t.Fatalf("certify: %v", err)
+	}
+}
+
+func poisonAttempts(t *testing.T, pool *pgxpool.Pool) (int, string) {
+	t.Helper()
+	var attempts int
+	var lastErr string
+	if err := pool.QueryRow(context.Background(),
+		"SELECT attempts, coalesce(last_error,'') FROM outbox_events WHERE event_type = $1 AND published_at IS NULL",
+		cloudevents.TypeAssociateShiftStarted).Scan(&attempts, &lastErr); err != nil {
+		t.Fatalf("read poison row: %v", err)
+	}
+	return attempts, lastErr
+}
+
+// TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes pins
+// gap fix D12 (ADR 0036): once a row has failed WithMaxAttempts times the
+// relay stops claiming it, logs it once at ERROR with id, topic, type and
+// key, and the rows behind it (same key included) publish. The row stays in
+// outbox_events with attempts and last_error, and re-arming it
+// (attempts = 0) makes it publish again.
+func TestOutboxRelay_MaxAttempts_PoisonRowIsExcludedAndTheNextRowPublishes(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+	seedPoisonThenGood(t, pool)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	sink := &recordingSink{failOn: cloudevents.TypeAssociateShiftStarted, failErr: errors.New("message too large")}
+	relay := postgres.NewOutboxRelay(pool, sink, logger, postgres.WithMaxAttempts(2))
+
+	for pass := 1; pass <= 2; pass++ {
+		if n, err := relay.RelayOnce(ctx); err == nil || n != 0 {
+			t.Fatalf("pass %d: want the poison row to fail the pass with nothing published, got n=%d err=%v", pass, n, err)
+		}
+	}
+	if attempts, lastErr := poisonAttempts(t, pool); attempts != 2 || lastErr == "" {
+		t.Fatalf("poison row: attempts=%d last_error=%q, want 2 and the send error", attempts, lastErr)
+	}
+	if !strings.Contains(logs.String(), `"level":"ERROR"`) || !strings.Contains(logs.String(), "attempt cap") ||
+		!strings.Contains(logs.String(), `"key":"A1"`) || !strings.Contains(logs.String(), `"outbox_id"`) {
+		t.Fatalf("reaching the cap must log an ERROR naming the row (id, topic, type, key), got %s", logs.String())
+	}
+
+	// Pass 3: the poison row is excluded; the good row behind it publishes.
+	n, err := relay.RelayOnce(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("pass 3: want the next row published past the parked one, got n=%d err=%v", n, err)
+	}
+	if len(sink.sent) != 1 || sink.sent[0].EventType != cloudevents.TypeAssociateCertified {
+		t.Fatalf("want only AssociateCertified sent, got %v", sink.sent)
+	}
+	if attempts, _ := poisonAttempts(t, pool); attempts != 2 {
+		t.Fatalf("the parked row must not be claimed again, attempts=%d", attempts)
+	}
+
+	// Operator re-arm (runbook): attempts = 0, broker fixed -> it publishes.
+	if _, err := pool.Exec(ctx, "UPDATE outbox_events SET attempts = 0 WHERE event_type = $1", cloudevents.TypeAssociateShiftStarted); err != nil {
+		t.Fatalf("re-arm: %v", err)
+	}
+	sink.failOn = ""
+	if n, err := relay.RelayOnce(ctx); err != nil || n != 1 {
+		t.Fatalf("re-armed row: want it published, got n=%d err=%v", n, err)
+	}
+	if got := countOutbox(t, pool, "published_at IS NULL"); got != 0 {
+		t.Fatalf("want the outbox drained after the re-arm, %d pending", got)
+	}
+}
+
+// TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound pins the default
+// (no option, or OUTBOX_MAX_ATTEMPTS=0): the relay keeps claiming a failing
+// row and the rows behind it wait, preserving per-key order.
+func TestOutboxRelay_WithoutMaxAttempts_RetriesWithoutBound(t *testing.T) {
+	pool := outboxDB(t)
+	ctx := context.Background()
+	seedPoisonThenGood(t, pool)
+
+	sink := &recordingSink{failOn: cloudevents.TypeAssociateShiftStarted, failErr: errors.New("message too large")}
+	relay := postgres.NewOutboxRelay(pool, sink, slog.Default(), postgres.WithMaxAttempts(0))
+	for pass := 1; pass <= 3; pass++ {
+		if _, err := relay.RelayOnce(ctx); err == nil {
+			t.Fatalf("pass %d: want the failing row to keep failing the pass", pass)
+		}
+	}
+	if attempts, _ := poisonAttempts(t, pool); attempts != 3 {
+		t.Fatalf("want the row claimed on every pass (attempts=3), got %d", attempts)
+	}
+	if len(sink.sent) != 0 {
+		t.Fatalf("unlimited mode must not let later rows overtake the failing one, sent %v", sink.sent)
 	}
 }
