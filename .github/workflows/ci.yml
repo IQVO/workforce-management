@@ -425,6 +425,34 @@ jobs:
       - name: Run chart-testing (lint)
         run: ct lint --charts charts/workforce-management --validate-maintainers=false --check-version-increment=false
 
+  # Chart behaviour tests (gap fix D25): the render assertions (D14 envFrom
+  # mount, config values reaching the ConfigMap, D24 installed-capacity
+  # defaults) and the Service selector isolation test. Unlike helm-lint this
+  # runs on every push and PR, so a broken selector or an unmounted
+  # ConfigMap is caught before release.
+  # ============================================================
+  # CLASSIFICATION: PACKAGING (Helm chart tests)
+  # ============================================================
+  chart-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5
+        with:
+          version: v3.16.4
+      - name: Chart render assertions
+        run: bash charts/workforce-management/tests/render_test.sh
+      # The selector test needs PyYAML; install it explicitly so the check
+      # can never pass vacuously.
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML
+        run: python3 -m pip install "pyyaml==6.0.3"
+      - name: Service selector test
+        run: python3 charts/workforce-management/tests/test_service_selectors.py
+
   # Shift-left container scan: builds the image (no push) on every push AND
   # every PR, so a vulnerable base image or dependency is caught before
   # merge, not just at publish time. Blocks on CRITICAL/HIGH with a known
