@@ -1,0 +1,72 @@
+---
+id: get-labor-report
+title: "Labor utilization and staffing per process path and UTC hour"
+description: "Returns one row per (pathId, hour bucket) in the half-open window [from, to) compared against `hourBucket`, ordered by hour bucket then path. An empty window is a 200 with an empty `rows` array, not a 404."
+sidebar_label: "Labor utilization and staffing per process path and UTC hour"
+hide_title: true
+hide_table_of_contents: true
+api: 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
+sidebar_class_name: "get api-method"
+info_path: docs/api-reference/rest-reports/workforce-management-reports-api
+custom_edit_url: null
+---
+
+import MethodEndpoint from "@theme/ApiExplorer/MethodEndpoint";
+import ParamsDetails from "@theme/ParamsDetails";
+import RequestSchema from "@theme/RequestSchema";
+import StatusCodes from "@theme/StatusCodes";
+import OperationTabs from "@theme/OperationTabs";
+import TabItem from "@theme/TabItem";
+import Heading from "@theme/Heading";
+import Translate from "@docusaurus/Translate";
+
+<Heading
+  as={"h1"}
+  className={"openapi__heading"}
+  children={"Labor utilization and staffing per process path and UTC hour"}
+>
+</Heading>
+
+<MethodEndpoint
+  method={"get"}
+  path={"/reports/labor"}
+  context={"endpoint"}
+>
+  
+</MethodEndpoint>
+
+
+
+Returns one row per (pathId, hour bucket) in the half-open window [from, to) compared against `hourBucket`, ordered by hour bucket then path. An empty window is a 200 with an empty `rows` array, not a 404.
+
+Path-scoped counters (`laborAssigned`, `laborReassigned`, `understaffingEvents`) land on the row of their path. Associate-scoped counters (`shiftsStarted`, `shiftsEnded`, `breaks`, `avgBreakSeconds`, `certifications`) land on the row whose `pathId` is the empty string.
+
+
+<Heading
+  id={"request"}
+  as={"h2"}
+  className={"openapi-tabs__heading"}
+>
+  <Translate id="theme.openapi.request.title">Request</Translate>
+</Heading>
+
+<ParamsDetails
+  {...require("./get-labor-report.ParamsDetails.json")}
+>
+  
+</ParamsDetails>
+
+<RequestSchema
+  {...require("./get-labor-report.RequestSchema.json")}
+>
+  
+</RequestSchema>
+
+<StatusCodes
+  {...require("./get-labor-report.StatusCodes.json")}
+>
+  
+</StatusCodes>
+
+
+      

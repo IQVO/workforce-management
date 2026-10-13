@@ -73,8 +73,21 @@ const config: Config = {
               groupPathsBy: 'tag',
               categoryLinkSource: 'tag',
             },
-          } satisfies OpenApiPlugin.Options,
-        },
+          },
+          workforceReports: {
+            // The read-only analytical surface served by cmd/workforce-reports
+            // (ADR 0010, ADR 0037): a SEPARATE spec from the OLTP API above,
+            // generated into its own output dir so the two never collide.
+            specPath: '../apis/openapi-reports.yaml',
+            outputDir: 'docs/api-reference/rest-reports',
+            downloadUrl:
+              'https://raw.githubusercontent.com/IQVO/workforce-management/main/apis/openapi-reports.yaml',
+            sidebarOptions: {
+              groupPathsBy: 'tag',
+              categoryLinkSource: 'tag',
+            },
+          },
+        } satisfies Record<string, OpenApiPlugin.Options>,
       },
     ],
   ],
@@ -101,6 +114,11 @@ const config: Config = {
           to: '/docs/api-reference/rest/workforce-management-api',
           position: 'left',
           label: 'API',
+        },
+        {
+          to: '/docs/api-reference/rest-reports/workforce-management-reports-api',
+          position: 'left',
+          label: 'Reports API',
         },
         {
           to: '/docs/adr',
@@ -130,10 +148,15 @@ const config: Config = {
           title: 'Contracts',
           items: [
             {label: 'REST API', to: '/docs/api-reference/rest/workforce-management-api'},
+            {label: 'Reports API', to: '/docs/api-reference/rest-reports/workforce-management-reports-api'},
             {label: 'Domain Events', to: '/docs/api-reference/events'},
             {
               label: 'openapi.yaml',
               href: 'https://github.com/IQVO/workforce-management/blob/main/apis/openapi.yaml',
+            },
+            {
+              label: 'openapi-reports.yaml',
+              href: 'https://github.com/IQVO/workforce-management/blob/main/apis/openapi-reports.yaml',
             },
             {
               label: 'asyncapi.yaml',

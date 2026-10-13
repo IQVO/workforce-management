@@ -12,6 +12,7 @@ description: ADR 0016 — why this service stopped publishing to Kafka from insi
 ## Status
 
 Accepted — implemented in the same change that introduced this record.
+Relay retry amended by [ADR 0036](./0036-outbox-relay-attempt-cap.md) (attempt cap).
 Follows process-path-management's ADR 0003 (the fleet's single-topic
 reference implementation) and adapts it to this service's fan-out.
 

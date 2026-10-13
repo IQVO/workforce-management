@@ -35,19 +35,38 @@ The chart refuses to render without `database.url` or
 `database.existingSecret` (`workforce-management.requireDatabase`), because
 `cmd/workforce` exits at once without `DATABASE_URL`.
 
-### Values the chart does not template
+### What the chart templates, and what needs `extraEnv`
 
-`deployment.yaml` sets `HTTP_ADDR`, `EVENT_PUBLISHER`, `MIGRATIONS_PATH`,
-`MAX_HOURS_PER_SHIFT`, the housekeeping variables, `SHUTDOWN_DRAIN_DELAY`,
-`DATABASE_URL`, `MIGRATIONS_DATABASE_URL` (secret key, `optional: true`),
-`LOG_LEVEL`, `KAFKA_BROKERS` (only when `kafka.enabled`), the OTel variables
-(when `otel.enabled`) and `PATH_CATALOGUE_FILE` (when `pathCatalogue.enabled`).
-These must come through `extraEnv`:
+`templates/configmap.yaml` renders `HTTP_ADDR`, `EVENT_PUBLISHER`,
+`MIGRATIONS_PATH`, `MAX_HOURS_PER_SHIFT`, `OUTBOX_RELAY_INTERVAL`, the
+housekeeping variables, `SHUTDOWN_DRAIN_DELAY`, `INSTALLED_CAPACITY_MODE`
+(default `http`), `FULFILLMENT_EXECUTION_BASE_URL` (default
+`http://fulfillment-execution.<release namespace>.svc.cluster.local:80`; both
+gap fix D24) and (with `kafka.enabled`)
+`KAFKA_BROKERS` from `config.*`, and the api Deployment mounts it with
+`envFrom` (gap fix D14, 2026-10-12; the full key table is in
+[Configuration](./configuration.md#how-the-helm-chart-delivers-cmdworkforces-variables)).
+Changing a `config.*` value takes effect on the next rollout: the
+`checksum/config` annotation rolls the pods. `deployment.yaml` also sets
+`HTTP_ADDR`, `EVENT_PUBLISHER`, `MIGRATIONS_PATH`, `MAX_HOURS_PER_SHIFT`, the
+housekeeping variables, `SHUTDOWN_DRAIN_DELAY`, `DATABASE_URL`,
+`MIGRATIONS_DATABASE_URL` (secret key, `optional: true`), `LOG_LEVEL`,
+`KAFKA_BROKERS` (only when `kafka.enabled`), the OTel variables (when
+`otel.enabled`) and `PATH_CATALOGUE_FILE` (when `pathCatalogue.enabled`) as
+explicit `env`, which wins over the ConfigMap for the same key. The projector,
+reports and MCP Deployments do not mount the ConfigMap.
+`charts/workforce-management/tests/render_test.sh` (CI job `chart-tests`)
+fails if the mount disappears. These must come through `extraEnv`:
 
-- `INSTALLED_CAPACITY_MODE=http` and `FULFILLMENT_EXECUTION_BASE_URL`. Without them **every `CommitShiftPlan` fails** with `503 installed-capacity-unavailable`.
+- Nothing for the installed-capacity edge any more: the chart defaults it to
+  `http` against fulfillment-execution's in-cluster Service. Override
+  `config.installedCapacityMode` / `config.fulfillmentExecutionBaseUrl` (or an
+  `extraEnv` entry, which wins) when fulfillment-execution lives elsewhere.
+  With `permissive`, **every `CommitShiftPlan` fails** with
+  `503 installed-capacity-unavailable`.
 - `LABOR_PERFORMANCE_MODE` and `LABOR_PERFORMANCE_BASE_URL`, when you want a measured-rate feed.
 - `PATH_CATALOGUE_SOURCE=kafka`, to replay the catalogue from Kafka instead of the mounted file.
-- `OUTBOX_RELAY_INTERVAL`, `IDLE_SHARE_TRIM_THRESHOLD` and `CORS_ALLOWED_ORIGINS`.
+- `IDLE_SHARE_TRIM_THRESHOLD` and `CORS_ALLOWED_ORIGINS`.
 
 `extraEnv` is also rendered into the MCP Deployment.
 
@@ -81,6 +100,12 @@ wait shares one 10 s deadline. The Postgres pool closes last. The chart's
 `terminationGracePeriodSeconds: 30` covers 10 s drain + 10 s shutdown + 5 s
 telemetry flush. `cmd/mcp`, the projector and reports shut down with a plain
 10 s `Shutdown`.
+
+The projector also stops on its own when its consumer loop exits without a
+signal (a commit or DLQ write failure): it shuts the admin server down and
+exits non-zero, so the pod restarts instead of serving a green `/healthz`
+over a dead consumer (gap fix D13, `superviseConsumer` in
+`cmd/workforce-projector/main.go`).
 
 ## Migrations
 
@@ -129,7 +154,8 @@ Only `cmd/workforce` runs the relay (`internal/adapters/outbound/postgres/outbox
 
 - Each pass claims up to 100 unpublished rows (`FOR UPDATE SKIP LOCKED`, so overlapping pods during a rollout never double-send) and sends them one at a time in `id` order.
 - After a full batch the next pass starts at once. After a partial or empty one the relay sleeps `OUTBOX_RELAY_INTERVAL` (1 s).
-- On the first send failure the pass stops, the row gets `attempts`/`last_error`, rows already sent stay published, and the next pass retries the failed row. Ordering per key is preserved, so one stuck row holds back everything behind it.
+- On the first send failure the pass stops, the row gets `attempts`/`last_error`, rows already sent stay published, and the next pass retries the failed row. Ordering per key is preserved, so one stuck row holds back everything behind it, until the row has failed `OUTBOX_MAX_ATTEMPTS` times (default `20`, about 20 s of continuous failure at the default interval; [ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)).
+- At the cap the relay stops claiming the row and logs it once at ERROR (`outbox relay: row reached the attempt cap and is no longer claimed`, with `outbox_id`, `topic`, `event_type`, `key`, `attempts`). The rows behind it publish, so later events with the same key overtake it. The row stays in `outbox_events` (`published_at IS NULL`) with its `attempts` and `last_error`; the sweeper never deletes it. After fixing the cause, re-arm it: `UPDATE outbox_events SET attempts = 0 WHERE id = <outbox_id>;` (after a broker outage, all parked rows: `UPDATE outbox_events SET attempts = 0 WHERE published_at IS NULL AND attempts >= 20;`). `OUTBOX_MAX_ATTEMPTS=0` restores unlimited retries.
 - Lag is visible as `workforce.outbox.lag_seconds` (see [Observability](./observability.md)).
 
 ### Analytics DLQ
@@ -179,7 +205,7 @@ the replica maximum when you size PgBouncer or `max_connections`.
 
 | Task | How |
 |---|---|
-| Re-publish stuck outbox rows | Fix the broker or topic. The relay retries the oldest unpublished row on every pass, so nothing else is needed. Inspect the row with `SELECT id, topic, event_type, attempts, last_error FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;`. |
+| Re-publish stuck outbox rows | Fix the broker or topic. Inspect with `SELECT id, topic, event_type, key, attempts, last_error FROM outbox_events WHERE published_at IS NULL ORDER BY id LIMIT 20;`. A row below `OUTBOX_MAX_ATTEMPTS` is retried on every pass, so nothing else is needed. A row at the cap is parked: re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = <id>;` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)). |
 | Re-send already-published events | `UPDATE outbox_events SET published_at = NULL WHERE id BETWEEN … ;` while the rows are still inside `OUTBOX_RETENTION`. Consumers must dedupe on the CloudEvents `id`; the projector does. |
 | Replay the analytics projection | Stop the projector, reset group `workforce-analytics` on `warehouse.workforce.analytics` (`kafka-consumer-groups.sh --reset-offsets --to-earliest --execute`), restart. Already-applied ids are skipped through `analytics_consumed_events`. To rebuild from scratch, truncate the analytical tables first. |
 | Reprocess the analytics DLQ | Read `warehouse.workforce.analytics.dlq`, fix the cause, and produce the original payload back onto `warehouse.workforce.analytics`. There is no tooling in this repo for it. |

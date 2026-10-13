@@ -24,6 +24,7 @@ from the two adapters that read the environment themselves
 | `envOrDefault` / `getenv` | every string setting | An empty string counts as unset, so the default applies. |
 | `envFloatOrDefault` | `MAX_HOURS_PER_SHIFT`, `IDLE_SHARE_TRIM_THRESHOLD` | A value that is not a number logs `invalid float env var` and exits 1. |
 | `envDurationOrDefault` (`cmd/workforce/main.go`) | `OUTBOX_RELAY_INTERVAL` | A malformed, zero or negative value logs a warning and falls back to the default. It never stops the boot. |
+| `envNonNegativeIntOrDefault` (`cmd/workforce/main.go`) | `OUTBOX_MAX_ATTEMPTS` | `0` is valid ("unlimited"). A non-numeric or negative value logs a warning and falls back to the default. It never stops the boot. |
 | `envDurationAllowZero` (`cmd/workforce/housekeeping.go`) | `HOUSEKEEPING_INTERVAL`, `IDEMPOTENCY_KEY_TTL`, `OUTBOX_RETENTION`, `SHUTDOWN_DRAIN_DELAY` | `0` is valid and means "disabled" or "keep forever". A malformed or negative value logs a warning and falls back to the default. |
 
 Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
@@ -40,19 +41,20 @@ Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
 | `EVENT_PUBLISHER` | `log` | no | `log` writes domain events to the JSON log only. `kafka` writes each event into `outbox_events` in the use case's transaction (two rows: integration and analytics topic), and this process's outbox relay forwards them ([ADR 0016](../adr/0016-transactional-outbox.md)). Any other value stops the boot with `unknown EVENT_PUBLISHER`. | `cmd/workforce/main.go` (`publisherConfigFromEnv`), `internal/composition/publisher.go` |
 | `KAFKA_BROKERS` | `localhost:9092` for the publisher; no default for the consumers | when a Kafka mode is on | Comma-separated bootstrap brokers. The publisher falls back to `localhost:9092`. `PATH_CATALOGUE_SOURCE=kafka` and `LABOR_PERFORMANCE_MODE=kafka-cache` read the raw value and stop the boot when it is empty. | `cmd/workforce/main.go` (three reads) |
 | `OUTBOX_RELAY_INTERVAL` | `1s` | no | Poll interval of the outbox relay. Used only when `EVENT_PUBLISHER=kafka`. | `cmd/workforce/main.go` |
+| `OUTBOX_MAX_ATTEMPTS` | `20` | no | Failed sends after which the outbox relay stops claiming a row, so one poison row cannot block the relay forever. The row stays in `outbox_events` with `attempts`/`last_error` and is logged once at ERROR; re-arm it with `UPDATE outbox_events SET attempts = 0 WHERE id = ...`. `0` = unlimited. A negative or non-numeric value logs a warning and uses `20` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)). Used only when `EVENT_PUBLISHER=kafka`. | `cmd/workforce/main.go` (`publisherConfigFromEnv`), `internal/composition/publisher.go` |
 | `PATH_CATALOGUE_SOURCE` | `file` | no | Where the process-path catalogue comes from. `kafka` replays the compacted process-path topic before the service accepts traffic (60 s `WaitReady` timeout). Any other value selects the file ([ADR 0013](../adr/0013-process-path-catalogue-validation.md), [ADR 0030](../adr/0030-kafka-sourced-process-path-catalogue.md)). | `cmd/workforce/main.go` (`catalogueConfigFromEnv`), `internal/composition/catalogue.go` |
 | `PATH_CATALOGUE_FILE` | `/etc/workforce-management/process-paths.yaml` | when the source is `file` | YAML catalogue of valid path ids. A missing or malformed file stops the boot; there is no empty-catalogue fallback. | `cmd/workforce/main.go` |
 | `LABOR_PERFORMANCE_MODE` | `permissive` | no | Measured-rate feed for `ProposePathPlan`. `permissive` returns no measured rate (fail-open). `http` calls labor-performance behind a circuit breaker with retry. `kafka-cache` builds an in-memory read model from the labor-performance integration topic, waits up to 60 s for it to replay, and is also the only mode that supplies the idle-share signal ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)). | `cmd/workforce/main.go` (`newMeasuredRateClients`) |
 | `LABOR_PERFORMANCE_BASE_URL` | empty | when the mode is `http` | Base URL of labor-performance's REST API. | `cmd/workforce/main.go` |
-| `INSTALLED_CAPACITY_MODE` | `permissive` | yes, set it to `http` in a real deployment | Installed-capacity ceiling for `CommitShiftPlan`. **`permissive` fails every shift-plan commit** (fail-loud, [ADR 0014](../adr/0014-installed-capacity-ceiling.md)). `http` calls fulfillment-execution behind a circuit breaker without retry. | `cmd/workforce/main.go` (`newOLTPHandler`) |
-| `FULFILLMENT_EXECUTION_BASE_URL` | empty | when the mode is `http` | Base URL of fulfillment-execution's REST API. | `cmd/workforce/main.go` |
+| `INSTALLED_CAPACITY_MODE` | `permissive` (binary); `http` (Helm chart, `config.installedCapacityMode`) | yes, set it to `http` in a real deployment | Installed-capacity ceiling for `CommitShiftPlan`. **`permissive` fails every shift-plan commit** (fail-loud, [ADR 0014](../adr/0014-installed-capacity-ceiling.md)). `http` calls fulfillment-execution behind a circuit breaker without retry. The chart sets `http` by default (gap fix D24). | `cmd/workforce/main.go` (`newOLTPHandler`) |
+| `FULFILLMENT_EXECUTION_BASE_URL` | empty (binary); `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` (Helm chart, `config.fulfillmentExecutionBaseUrl`) | when the mode is `http` | Base URL of fulfillment-execution's REST API. The chart default is fulfillment-execution's in-cluster Service. | `cmd/workforce/main.go` |
 | `IDLE_SHARE_TRIM_THRESHOLD` | `0.30` (`usecases.DefaultIdleShareTrimThreshold`) | no | Idle-share fraction above which `ProposePathPlan` trims its proposed headcount. Only matters in `kafka-cache` mode. Not a number: exit 1. | `cmd/workforce/main.go` |
 | `HOUSEKEEPING_INTERVAL` | `1h` | no | How often the housekeeping sweeper runs. `0` disables the sweeper ([ADR 0028](../adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox.md)). | `cmd/workforce/housekeeping.go` |
 | `IDEMPOTENCY_KEY_TTL` | `24h` | no | Age after which `idempotency_keys` rows are deleted. `0` keeps them forever. | `cmd/workforce/housekeeping.go` |
 | `OUTBOX_RETENTION` | `168h` (7 days) | no | Age after which already-published `outbox_events` rows are deleted. `0` keeps them forever. | `cmd/workforce/housekeeping.go` |
 | `SHUTDOWN_DRAIN_DELAY` | `10s` | no | On SIGTERM, how long the process keeps serving after `/readyz` flips to 503, before the HTTP listener closes. `0` skips the wait. The shutdown deadline after that is a fixed 10 s (`shutdownTimeout`) ([ADR 0022](../adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)). | `cmd/workforce/serve.go` (`shutdownDrainDelayFromEnv`) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5185` | no | Comma-separated browser origins allowed to call the REST API: the console shell's dev port and this service's MFE remote dev port. Credentials are never allowed. | `internal/adapters/inbound/http/router.go` (`corsMiddleware`) |
-| `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Anything else, including `warning`, means `info` in this binary. | `cmd/workforce/main.go` (`newLogger`) |
+| `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn`/`warning` or `error` (case-insensitive). Anything else means `info`. | `cmd/workforce/main.go` (`newLogger`) |
 | `OTEL_SERVICE_NAME` | `workforce-management` | no | OTel `service.name` and the HTTP metrics' service label. | `cmd/workforce/main.go` (`setupServiceTelemetry`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | no | OTLP/gRPC collector endpoint (insecure) for traces and metrics. The service still starts when no collector is listening. | `cmd/workforce/main.go` |
 | `SERVICE_VERSION` | `dev` | no | OTel `service.version`. A build-time `-ldflags "-X main.version=..."` takes precedence. | `cmd/workforce/main.go` (`serviceVersion`) |
@@ -83,7 +85,7 @@ state is separate from any other process.
 | `SERVICE_VERSION` | `dev` | no | OTel `service.version`, unless ldflags set it. | `cmd/mcp/main.go` |
 | `ENVIRONMENT` | `local` | no | `deployment.environment.name`. | `internal/adapters/outbound/telemetry/telemetry.go` |
 
-`cmd/mcp` does not read `OUTBOX_RELAY_INTERVAL`, the `LABOR_PERFORMANCE_*` or
+`cmd/mcp` does not read `OUTBOX_RELAY_INTERVAL`, `OUTBOX_MAX_ATTEMPTS`, the `LABOR_PERFORMANCE_*` or
 `INSTALLED_CAPACITY_*` variables, `IDLE_SHARE_TRIM_THRESHOLD`, the
 housekeeping variables or `CORS_ALLOWED_ORIGINS`. Its `ProposePathPlan` has no
 measured-rate client, and it builds no `CommitShiftPlan`.
@@ -124,13 +126,50 @@ Each binary's first connections to Postgres, and to Kafka for the
 [ADR 0032](../adr/0032-bootretry-first-outbound-dial.md)). It makes 5 attempts
 with a backoff that starts at 1 s and doubles. Only four waits happen between
 the five attempts, so the total wait is **1 + 2 + 4 + 8 = 15 s** before the
-process gives up and exits with the last error. The package comment says
-"~31s total (1+2+4+8+16)", but the loop breaks after the fifth attempt without
-sleeping the 16 s step. None of this is configurable through the environment.
+process gives up and exits with the last error (the loop breaks after the
+fifth attempt without sleeping a 16 s step; the package comment says so since
+gap fix D22). None of this is configurable through the environment.
 
 ## Minimal local set
 
 For a local `cmd/workforce` run you need `DATABASE_URL` and a
 `PATH_CATALOGUE_FILE` that exists. Add `INSTALLED_CAPACITY_MODE=http` plus
-`FULFILLMENT_EXECUTION_BASE_URL` before you try to commit a shift plan. See the
+`FULFILLMENT_EXECUTION_BASE_URL` before you try to commit a shift plan (the
+Helm chart sets both by default). See the
 [Quickstart](../overview/quickstart.md) for the walk-through.
+
+## How the Helm chart delivers `cmd/workforce`'s variables
+
+`charts/workforce-management/templates/configmap.yaml` renders `config.*` (plus
+`kafka.brokers` when `kafka.enabled`) into a ConfigMap named after the release:
+
+| ConfigMap key | Chart value | Chart default |
+|---|---|---|
+| `HTTP_ADDR` | `config.httpAddr` | `:8080` |
+| `EVENT_PUBLISHER` | `config.eventPublisher` | `log` |
+| `MIGRATIONS_PATH` | `config.migrationsPath` | `migrations` |
+| `MAX_HOURS_PER_SHIFT` | `config.maxHoursPerShift` | `8.0` |
+| `OUTBOX_RELAY_INTERVAL` | `config.outboxRelayInterval` | `1s` |
+| `OUTBOX_MAX_ATTEMPTS` | `config.outboxMaxAttempts` | `20` |
+| `HOUSEKEEPING_INTERVAL` | `config.housekeepingInterval` | `1h` |
+| `IDEMPOTENCY_KEY_TTL` | `config.idempotencyKeyTtl` | `24h` |
+| `OUTBOX_RETENTION` | `config.outboxRetention` | `168h` |
+| `SHUTDOWN_DRAIN_DELAY` | `config.shutdownDrainDelay` | `10s` |
+| `INSTALLED_CAPACITY_MODE` | `config.installedCapacityMode` | `http` |
+| `FULFILLMENT_EXECUTION_BASE_URL` | `config.fulfillmentExecutionBaseUrl` | empty, rendered as `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` |
+| `KAFKA_BROKERS` | `kafka.brokers` (only with `kafka.enabled`) | `kafka:9092` |
+
+The api Deployment mounts it with `envFrom: configMapRef` (gap fix D14,
+2026-10-12), so every `config.*` value reaches `cmd/workforce`. Explicit `env`
+entries in `deployment.yaml` (the same values, plus the Secret-backed DSNs, the
+OTel variables and `PATH_CATALOGUE_FILE`) and `extraEnv` win over the ConfigMap
+for the same key. The projector, reports and MCP Deployments do not mount the
+ConfigMap: their variables are set explicitly in their own templates (the
+reports binary would otherwise inherit `HTTP_ADDR=:8080`).
+`INSTALLED_CAPACITY_MODE` and `FULFILLMENT_EXECUTION_BASE_URL` live only in the
+ConfigMap, never in an explicit `env` entry, so an `extraEnv` entry for the
+same name (warehouse-infra sets both) wins without rendering a duplicate env
+key, which would break ArgoCD's diff.
+`charts/workforce-management/tests/render_test.sh` fails when the mount
+disappears, when a tuned value is not rendered, or when another workload mounts
+the ConfigMap.

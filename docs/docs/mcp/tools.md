@@ -94,13 +94,16 @@ The Labor Utilization & Staffing data product, read over REST from
 |---|---|---|---|
 | `from` | string | yes | Window start, inclusive, RFC 3339. |
 | `to` | string | yes | Window end, exclusive, RFC 3339. |
-| `pathId` | string | schema: yes; handler: optional | Path filter. Empty means all rows, including the building-wide bucket. |
-| `granularity` | string | schema: yes; handler: optional | Only `hour` is supported. |
+| `pathId` | string | no | Path filter. Omitted or empty means all rows, including the building-wide bucket. |
+| `granularity` | string | no | Only `hour` is supported; omitting it means `hour`. |
 
-The struct fields for `pathId` and `granularity` have no `omitempty`, so the
-go-sdk publishes them as **required** in the tool's input schema, even though
-the handler and its descriptions treat them as optional. Clients that follow
-the schema must send them; an empty string is accepted. The output is the
+Both optional fields carry `omitempty`, so the go-sdk publishes only `from`
+and `to` as required and a call without the filters is accepted (gap fix D16;
+until then the schema marked them required). The fitness test
+`TestMCPOptionalToolInputsCarryOmitempty` (`internal/architecture/mcp_optional_inputs_test.go`)
+fails when any MCP input field described as optional lacks `omitempty`, and
+`TestLaborReportTool_OptionalFiltersMayBeOmitted` calls the tool with only the
+window. The output is the
 reports API's `rows` array (see
 [Runbook](../operations/runbook.md#analytics-reports-api-cmdworkforce-reports)).
 

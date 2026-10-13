@@ -45,8 +45,10 @@ def render(extra_args: list[str]) -> list[dict]:
     try:
         import yaml  # type: ignore
     except ModuleNotFoundError:  # pragma: no cover - environment guard
-        print("SKIP: PyYAML not available; cannot assert selectors", file=sys.stderr)
-        raise SystemExit(0)
+        # FAIL, never skip: CI (the chart-tests job) pins PyYAML, and a
+        # skipped selector check would pass vacuously (gap fix D25).
+        print("FAIL: PyYAML not available; install it (python3 -m pip install pyyaml)", file=sys.stderr)
+        raise SystemExit(1)
     return [d for d in yaml.safe_load_all(out) if d]
 
 

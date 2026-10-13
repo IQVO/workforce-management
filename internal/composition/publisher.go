@@ -5,8 +5,9 @@
 // through the MCP adapter is stored in the transactional outbox exactly like
 // one raised through REST (ADR-0008, ADR-0016).
 //
-// It reads NO environment: the roots resolve EVENT_PUBLISHER, KAFKA_BROKERS
-// and OUTBOX_RELAY_INTERVAL and pass them in via PublisherConfig. Only the
+// It reads NO environment: the roots resolve EVENT_PUBLISHER, KAFKA_BROKERS,
+// OUTBOX_RELAY_INTERVAL and OUTBOX_MAX_ATTEMPTS and pass them in via
+// PublisherConfig. Only the
 // cmd/** roots may import this package.
 package composition
 
@@ -45,6 +46,10 @@ type PublisherConfig struct {
 	RunRelay bool
 	// RelayInterval is the relay poll interval (OUTBOX_RELAY_INTERVAL).
 	RelayInterval time.Duration
+	// MaxAttempts caps how many failed sends an outbox row may accumulate
+	// before the relay stops claiming it (OUTBOX_MAX_ATTEMPTS, ADR 0036);
+	// 0 means unlimited.
+	MaxAttempts int
 }
 
 // Built is what BuildEventPublisher returns.
@@ -116,7 +121,9 @@ func BuildEventPublisher(cfg PublisherConfig, pool *pgxpool.Pool, shiftPlans por
 	// The relay's topic-less sink is the single Kafka connection this
 	// process holds for publishing.
 	sink := outboundkafka.NewRelaySink(cfg.Brokers)
-	relay := postgres.NewOutboxRelay(pool, sink, logger, postgres.WithInterval(cfg.RelayInterval))
+	relay := postgres.NewOutboxRelay(pool, sink, logger,
+		postgres.WithInterval(cfg.RelayInterval),
+		postgres.WithMaxAttempts(cfg.MaxAttempts))
 	// workforce.outbox.lag_seconds (ADR-0016): only meaningful where the
 	// relay drains the outbox.
 	lagGaugeReg, err := postgres.RegisterOutboxLagGauge(pool)
@@ -124,7 +131,8 @@ func BuildEventPublisher(cfg PublisherConfig, pool *pgxpool.Pool, shiftPlans por
 		logger.Error("failed to register outbox lag gauge", "error", err)
 	}
 	logger.Info("event publisher configured", "publisher", "kafka", "mode", "outbox",
-		"brokers", cfg.Brokers, "topic", outboundkafka.Topic, "analytics_topic", outboundkafka.AnalyticsTopic)
+		"brokers", cfg.Brokers, "topic", outboundkafka.Topic, "analytics_topic", outboundkafka.AnalyticsTopic,
+		"outbox_max_attempts", cfg.MaxAttempts)
 	return Built{
 		Publisher: outbox,
 		Relay:     relay,

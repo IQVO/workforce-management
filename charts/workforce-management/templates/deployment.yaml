@@ -51,6 +51,18 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          # D14 (2026-10-12): every config.* value (OUTBOX_RELAY_INTERVAL,
+          # HOUSEKEEPING_INTERVAL, IDEMPOTENCY_KEY_TTL, OUTBOX_RETENTION, ...)
+          # reaches cmd/workforce through the chart ConfigMap. The explicit
+          # `env` entries below and extraEnv win over envFrom for the same key,
+          # so nothing changes for the variables already set here; the
+          # checksum/config annotation above rolls the pods when the ConfigMap
+          # changes. Only this Deployment mounts it: the projector, reports and
+          # MCP binaries read their own explicit env (reports would otherwise
+          # inherit HTTP_ADDR=:8080).
+          envFrom:
+            - configMapRef:
+                name: {{ include "workforce-management.fullname" . }}
           env:
             - name: HTTP_ADDR
               value: {{ .Values.config.httpAddr | quote }}

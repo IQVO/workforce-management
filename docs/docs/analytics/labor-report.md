@@ -69,6 +69,11 @@ not move this report; the projector acknowledges them without projecting.
 
 ### REST (served by `cmd/workforce-reports`, read-only)
 
+Contract: `apis/openapi-reports.yaml` ([ADR 0037](../adr/0037-reports-api-openapi-contract.md)),
+rendered as the [Reports API](../api-reference/rest-reports/workforce-management-reports-api.info.mdx)
+and pinned by the contract tests in
+`internal/adapters/inbound/http/reports_contract_test.go`.
+
 ```
 GET /reports/labor?from=<RFC3339>&to=<RFC3339>&pathId=&granularity=hour
 GET /reports/labor/freshness
