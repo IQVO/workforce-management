@@ -82,6 +82,12 @@ wait shares one 10 s deadline. The Postgres pool closes last. The chart's
 telemetry flush. `cmd/mcp`, the projector and reports shut down with a plain
 10 s `Shutdown`.
 
+The projector also stops on its own when its consumer loop exits without a
+signal (a commit or DLQ write failure): it shuts the admin server down and
+exits non-zero, so the pod restarts instead of serving a green `/healthz`
+over a dead consumer (gap fix D13, `superviseConsumer` in
+`cmd/workforce-projector/main.go`).
+
 ## Migrations
 
 | Database | Files | Applied by | DSN |

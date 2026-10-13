@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -99,7 +100,10 @@ func newAnalyticsPipeline(pool *pgxpool.Pool, brokers []string, logger *slog.Log
 }
 
 // newAdminServer builds the projector's admin server: only a /healthz on
-// the admin port, so Kubernetes probes can reach the process.
+// the admin port, so Kubernetes probes can reach the process. It reports
+// the process, not the consumer: a consumer loop that stops ends the
+// process (superviseConsumer, gap fix D13), so a live /healthz always sits
+// over a running consumer.
 func newAdminServer(adminAddr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
@@ -145,23 +149,50 @@ func run() error {
 		}
 	}()
 
-	consumerCtx, cancelConsumer := context.WithCancel(context.Background())
-	go func() {
-		logger.Info("analytics consumer starting", "topic", outboundkafka.AnalyticsTopic, "group", inboundkafka.AnalyticsConsumerGroup, "brokers", kafkaBrokers)
-		if err := consumer.Run(consumerCtx); err != nil {
-			logger.Error("analytics consumer stopped", "error", err)
-		}
-	}()
-
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
 
-	cancelConsumer()
+	logger.Info("analytics consumer starting", "topic", outboundkafka.AnalyticsTopic, "group", inboundkafka.AnalyticsConsumerGroup, "brokers", kafkaBrokers)
+	consumerErr := superviseConsumer(consumer.Run, stop)
+	if consumerErr != nil {
+		logger.Error("analytics consumer stopped; exiting so the pod restarts", "error", consumerErr)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	return srv.Shutdown(ctx)
+	return errors.Join(consumerErr, srv.Shutdown(ctx))
+}
+
+// errConsumerStopped marks a consumer loop that ended without a shutdown
+// signal. run() returns it, so main exits non-zero.
+var errConsumerStopped = errors.New("analytics consumer stopped")
+
+// superviseConsumer runs consume in the background and blocks until a
+// shutdown signal arrives or the consumer loop exits on its own.
+//
+// On a signal it cancels the consumer and returns nil (a requested
+// shutdown). When the loop exits first (a commit or DLQ failure, or any
+// return without a signal) it returns an error wrapping errConsumerStopped
+// and the loop's own error. The projector then exits non-zero instead of
+// keeping its admin /healthz green over a dead consumer (gap fix D13): the
+// only thing this process does is consume, so a stopped consumer means a
+// stopped projector, and Kubernetes restarts it.
+func superviseConsumer(consume func(context.Context) error, stop <-chan os.Signal) error {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- consume(ctx) }()
+
+	select {
+	case <-stop:
+		return nil
+	case err := <-done:
+		if err == nil {
+			return errConsumerStopped
+		}
+		return fmt.Errorf("%w: %w", errConsumerStopped, err)
+	}
 }
 
 // version is the service version reported as the OTel service.version resource
