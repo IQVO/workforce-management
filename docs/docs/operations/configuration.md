@@ -54,7 +54,7 @@ Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
 | `OUTBOX_RETENTION` | `168h` (7 days) | no | Age after which already-published `outbox_events` rows are deleted. `0` keeps them forever. | `cmd/workforce/housekeeping.go` |
 | `SHUTDOWN_DRAIN_DELAY` | `10s` | no | On SIGTERM, how long the process keeps serving after `/readyz` flips to 503, before the HTTP listener closes. `0` skips the wait. The shutdown deadline after that is a fixed 10 s (`shutdownTimeout`) ([ADR 0022](../adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)). | `cmd/workforce/serve.go` (`shutdownDrainDelayFromEnv`) |
 | `CORS_ALLOWED_ORIGINS` | `http://localhost:5173,http://localhost:5185` | no | Comma-separated browser origins allowed to call the REST API: the console shell's dev port and this service's MFE remote dev port. Credentials are never allowed. | `internal/adapters/inbound/http/router.go` (`corsMiddleware`) |
-| `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn` or `error`. Anything else, including `warning`, means `info` in this binary. | `cmd/workforce/main.go` (`newLogger`) |
+| `LOG_LEVEL` | `info` | no | `debug`, `info`, `warn`/`warning` or `error` (case-insensitive). Anything else means `info`. | `cmd/workforce/main.go` (`newLogger`) |
 | `OTEL_SERVICE_NAME` | `workforce-management` | no | OTel `service.name` and the HTTP metrics' service label. | `cmd/workforce/main.go` (`setupServiceTelemetry`) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | `localhost:4317` | no | OTLP/gRPC collector endpoint (insecure) for traces and metrics. The service still starts when no collector is listening. | `cmd/workforce/main.go` |
 | `SERVICE_VERSION` | `dev` | no | OTel `service.version`. A build-time `-ldflags "-X main.version=..."` takes precedence. | `cmd/workforce/main.go` (`serviceVersion`) |
@@ -126,9 +126,9 @@ Each binary's first connections to Postgres, and to Kafka for the
 [ADR 0032](../adr/0032-bootretry-first-outbound-dial.md)). It makes 5 attempts
 with a backoff that starts at 1 s and doubles. Only four waits happen between
 the five attempts, so the total wait is **1 + 2 + 4 + 8 = 15 s** before the
-process gives up and exits with the last error. The package comment says
-"~31s total (1+2+4+8+16)", but the loop breaks after the fifth attempt without
-sleeping the 16 s step. None of this is configurable through the environment.
+process gives up and exits with the last error (the loop breaks after the
+fifth attempt without sleeping a 16 s step; the package comment says so since
+gap fix D22). None of this is configurable through the environment.
 
 ## Minimal local set
 

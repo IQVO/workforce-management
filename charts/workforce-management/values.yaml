@@ -264,8 +264,9 @@ pathCatalogue:
 # 143 — SIGTERM, the kubelet killing a pod that was still booting, which
 # reads like an app crash and is not one.
 #
-# 30 x 2s = 60s of grace, comfortably past the ~31s retry budget in
-# bootretry, after which liveness takes over unchanged. A genuinely
+# 30 x 2s = 60s of grace, comfortably past the retry budget in bootretry
+# (5 attempts, 1+2+4+8 = 15s of backoff per step), after which liveness
+# takes over unchanged. A genuinely
 # broken database still fails the pod; it just is not mistaken for a
 # slow one. Applies to every deployment in this chart (api, projector,
 # reports, mcp).
