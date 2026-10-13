@@ -131,6 +131,7 @@ They run in the `test` job.
 | `TestKafkaIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationTestsUseTestcontainers` / `TestPostgresIntegrationSensorFailsOnBadFixtures` | Integration tests never skip on an environment variable and never hard-code `localhost:9092`. The sensor proves it catches bad fixtures. |
 | `TestMCPOptionalToolInputsCarryOmitempty` (+ `TestMCPOptionalToolInputsSensorFailsOnBadFixtures`) | Every MCP tool input field whose `jsonschema` description says "optional" carries `omitempty`, or the SDK marks it required and calls without it fail (gap fix D16). |
 | `TestOutboxRelaysPassAttemptCap` (+ `TestOutboxRelayCapSensorFailsOnBadFixtures`) | Every non-test `NewOutboxRelay` call under `cmd/` or `internal/composition/` passes `WithMaxAttempts` ([ADR 0036](../adr/0036-outbox-relay-attempt-cap.md)), so one poison row cannot block the relay forever. |
+| `TestKafkaWritersSetRequiredAcks` (+ `TestKafkaWriterAcksSensorBites`) | Every kafka-go `Writer` composite literal in a non-test file under `internal/` or `cmd/` sets `RequiredAcks` (the import alias is resolved per file). kafka-go defaults it to `RequireNone` (acks=0): the broker never confirms the write, so a broker blip silently drops the message while `WriteMessages` returns nil. The twin proves the sensor flags a bad fixture under any alias. |
 
 ## MCP evals
 
