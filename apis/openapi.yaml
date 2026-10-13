@@ -735,6 +735,8 @@ paths:
                   activeHeads: 1
                   understaffed: false
                   siteCode: WH1
+        "400":
+          $ref: '#/components/responses/BadRequest'
         "404":
           description: >-
             No committed ShiftPlan exists for siteCode+shiftId
@@ -814,6 +816,8 @@ paths:
                   plannedHeads: 1
                   activeHeads: 1
                   understaffed: false
+        "400":
+          $ref: '#/components/responses/BadRequest'
         "404":
           description: >-
             No committed ShiftPlan exists for buildingId+shiftId
