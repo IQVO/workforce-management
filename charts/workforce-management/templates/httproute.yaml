@@ -5,6 +5,10 @@ metadata:
   name: {{ include "workforce-management.fullname" . }}
   labels:
     {{- include "workforce-management.labels" . | nindent 4 }}
+  {{- with include "workforce-management.kongPluginNames" . }}
+  annotations:
+    konghq.com/plugins: {{ . | quote }}
+  {{- end }}
 spec:
   parentRefs:
     {{- range .Values.gatewayApi.parentRefs }}
