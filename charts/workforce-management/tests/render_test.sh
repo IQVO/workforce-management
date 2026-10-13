@@ -37,6 +37,26 @@ grep -A3 'envFrom:' <<<"$api_deployment" | grep -q "name: $configmap_name" \
 tuned="$(render --set config.outboxRelayInterval=7s --show-only templates/configmap.yaml)"
 grep -q 'OUTBOX_RELAY_INTERVAL: "7s"' <<<"$tuned" || fail "config.outboxRelayInterval is not rendered into the ConfigMap"
 
+# D24 (2026-10-12): the chart wires the installed-capacity edge by default.
+# The binary defaults INSTALLED_CAPACITY_MODE to "permissive", which fails
+# EVERY shift-plan commit (ADR-0014); the chart defaults to "http" against
+# fulfillment-execution's in-cluster Service (port 80) in the release
+# namespace, and both stay overridable.
+grep -q 'INSTALLED_CAPACITY_MODE: "http"' <<<"$configmap" \
+  || fail "INSTALLED_CAPACITY_MODE must default to http in the chart"
+ns_render="$(render --namespace warehouse-systems --show-only templates/configmap.yaml)"
+grep -q 'FULFILLMENT_EXECUTION_BASE_URL: "http://fulfillment-execution.warehouse-systems.svc.cluster.local:80"' <<<"$ns_render" \
+  || fail "FULFILLMENT_EXECUTION_BASE_URL must default to fulfillment-execution's in-cluster Service in the release namespace"
+overridden="$(render --set config.installedCapacityMode=permissive --set config.fulfillmentExecutionBaseUrl=http://fe.example:8080 --show-only templates/configmap.yaml)"
+grep -q 'INSTALLED_CAPACITY_MODE: "permissive"' <<<"$overridden" || fail "config.installedCapacityMode is not rendered"
+grep -q 'FULFILLMENT_EXECUTION_BASE_URL: "http://fe.example:8080"' <<<"$overridden" || fail "config.fulfillmentExecutionBaseUrl is not rendered"
+# They reach the api only through the ConfigMap: an explicit env entry would
+# collide with warehouse-infra's extraEnv for the same names (a duplicate env
+# entry breaks ArgoCD's diff), while envFrom lets extraEnv win.
+if grep -qE 'name: (INSTALLED_CAPACITY_MODE|FULFILLMENT_EXECUTION_BASE_URL)$' <<<"$api_deployment"; then
+  fail "INSTALLED_CAPACITY_MODE / FULFILLMENT_EXECUTION_BASE_URL must come from the ConfigMap, not an explicit env entry"
+fi
+
 # The other workloads read their own explicit env and must NOT inherit the
 # api's HTTP_ADDR (reports would bind :8080) or OTEL_SERVICE_NAME from it.
 for template in reports-deployment.yaml projector-deployment.yaml mcp-deployment.yaml; do

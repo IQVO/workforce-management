@@ -44,8 +44,8 @@ Durations use Go syntax (`500ms`, `30s`, `1h`, `168h`).
 | `PATH_CATALOGUE_FILE` | `/etc/workforce-management/process-paths.yaml` | when the source is `file` | YAML catalogue of valid path ids. A missing or malformed file stops the boot; there is no empty-catalogue fallback. | `cmd/workforce/main.go` |
 | `LABOR_PERFORMANCE_MODE` | `permissive` | no | Measured-rate feed for `ProposePathPlan`. `permissive` returns no measured rate (fail-open). `http` calls labor-performance behind a circuit breaker with retry. `kafka-cache` builds an in-memory read model from the labor-performance integration topic, waits up to 60 s for it to replay, and is also the only mode that supplies the idle-share signal ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md), [ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)). | `cmd/workforce/main.go` (`newMeasuredRateClients`) |
 | `LABOR_PERFORMANCE_BASE_URL` | empty | when the mode is `http` | Base URL of labor-performance's REST API. | `cmd/workforce/main.go` |
-| `INSTALLED_CAPACITY_MODE` | `permissive` | yes, set it to `http` in a real deployment | Installed-capacity ceiling for `CommitShiftPlan`. **`permissive` fails every shift-plan commit** (fail-loud, [ADR 0014](../adr/0014-installed-capacity-ceiling.md)). `http` calls fulfillment-execution behind a circuit breaker without retry. | `cmd/workforce/main.go` (`newOLTPHandler`) |
-| `FULFILLMENT_EXECUTION_BASE_URL` | empty | when the mode is `http` | Base URL of fulfillment-execution's REST API. | `cmd/workforce/main.go` |
+| `INSTALLED_CAPACITY_MODE` | `permissive` (binary); `http` (Helm chart, `config.installedCapacityMode`) | yes, set it to `http` in a real deployment | Installed-capacity ceiling for `CommitShiftPlan`. **`permissive` fails every shift-plan commit** (fail-loud, [ADR 0014](../adr/0014-installed-capacity-ceiling.md)). `http` calls fulfillment-execution behind a circuit breaker without retry. The chart sets `http` by default (gap fix D24). | `cmd/workforce/main.go` (`newOLTPHandler`) |
+| `FULFILLMENT_EXECUTION_BASE_URL` | empty (binary); `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` (Helm chart, `config.fulfillmentExecutionBaseUrl`) | when the mode is `http` | Base URL of fulfillment-execution's REST API. The chart default is fulfillment-execution's in-cluster Service. | `cmd/workforce/main.go` |
 | `IDLE_SHARE_TRIM_THRESHOLD` | `0.30` (`usecases.DefaultIdleShareTrimThreshold`) | no | Idle-share fraction above which `ProposePathPlan` trims its proposed headcount. Only matters in `kafka-cache` mode. Not a number: exit 1. | `cmd/workforce/main.go` |
 | `HOUSEKEEPING_INTERVAL` | `1h` | no | How often the housekeeping sweeper runs. `0` disables the sweeper ([ADR 0028](../adr/0028-housekeeping-sweeper-idempotency-keys-and-outbox.md)). | `cmd/workforce/housekeeping.go` |
 | `IDEMPOTENCY_KEY_TTL` | `24h` | no | Age after which `idempotency_keys` rows are deleted. `0` keeps them forever. | `cmd/workforce/housekeeping.go` |
@@ -132,7 +132,8 @@ sleeping the 16 s step. None of this is configurable through the environment.
 
 For a local `cmd/workforce` run you need `DATABASE_URL` and a
 `PATH_CATALOGUE_FILE` that exists. Add `INSTALLED_CAPACITY_MODE=http` plus
-`FULFILLMENT_EXECUTION_BASE_URL` before you try to commit a shift plan. See the
+`FULFILLMENT_EXECUTION_BASE_URL` before you try to commit a shift plan (the
+Helm chart sets both by default). See the
 [Quickstart](../overview/quickstart.md) for the walk-through.
 
 ## How the Helm chart delivers `cmd/workforce`'s variables
@@ -151,6 +152,8 @@ For a local `cmd/workforce` run you need `DATABASE_URL` and a
 | `IDEMPOTENCY_KEY_TTL` | `config.idempotencyKeyTtl` | `24h` |
 | `OUTBOX_RETENTION` | `config.outboxRetention` | `168h` |
 | `SHUTDOWN_DRAIN_DELAY` | `config.shutdownDrainDelay` | `10s` |
+| `INSTALLED_CAPACITY_MODE` | `config.installedCapacityMode` | `http` |
+| `FULFILLMENT_EXECUTION_BASE_URL` | `config.fulfillmentExecutionBaseUrl` | empty, rendered as `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` |
 | `KAFKA_BROKERS` | `kafka.brokers` (only with `kafka.enabled`) | `kafka:9092` |
 
 The api Deployment mounts it with `envFrom: configMapRef` (gap fix D14,
@@ -160,6 +163,10 @@ OTel variables and `PATH_CATALOGUE_FILE`) and `extraEnv` win over the ConfigMap
 for the same key. The projector, reports and MCP Deployments do not mount the
 ConfigMap: their variables are set explicitly in their own templates (the
 reports binary would otherwise inherit `HTTP_ADDR=:8080`).
+`INSTALLED_CAPACITY_MODE` and `FULFILLMENT_EXECUTION_BASE_URL` live only in the
+ConfigMap, never in an explicit `env` entry, so an `extraEnv` entry for the
+same name (warehouse-infra sets both) wins without rendering a duplicate env
+key, which would break ArgoCD's diff.
 `charts/workforce-management/tests/render_test.sh` fails when the mount
 disappears, when a tuned value is not rendered, or when another workload mounts
 the ConfigMap.
