@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -240,4 +241,27 @@ func assertSiteRouteNotFounds(t *testing.T, router http.Handler) {
 	}
 	notFound := doRequest(t, router, http.MethodGet, "/sites/NOPE/shifts/shift-1/staffing-gap", nil)
 	assertProblemDetails(t, notFound, http.StatusNotFound, "resource-not-found", "/sites/NOPE/shifts/shift-1/staffing-gap")
+}
+
+// TestStaffingGapForSiteShift_PathSiteCodeMustBeCanonical: the path siteCode is
+// a facility-layout Site code (^[A-Z0-9]+$, the OpenAPI SiteCodePath pattern),
+// so the handler and the schema agree on what is valid. Found by Schemathesis:
+// U+0085 satisfied the old minLength-only schema but the handler trimmed it to
+// blank and answered 400.
+func TestStaffingGapForSiteShift_PathSiteCodeMustBeCanonical(t *testing.T) {
+	router := siteFixtureAtSite(t)
+	for _, raw := range []string{"wh1", "%C2%85", "WH-1", "%20WH1"} {
+		target := "/sites/" + raw + "/shifts/shift-1/staffing-gap"
+		res := doRequest(t, router, http.MethodGet, target, nil)
+		if res.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want 400 invalid-site-code; body %s", target, res.Code, res.Body.String())
+		}
+		var problem map[string]any
+		if err := json.Unmarshal(res.Body.Bytes(), &problem); err != nil {
+			t.Fatalf("%s: decode problem: %v", target, err)
+		}
+		if typ, _ := problem["type"].(string); !strings.HasSuffix(typ, "invalid-site-code") {
+			t.Fatalf("%s: problem type %q, want .../invalid-site-code", target, typ)
+		}
+	}
 }

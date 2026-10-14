@@ -62,7 +62,7 @@ func statusFor(err error) int {
 		// caller can tell "re-fetch and retry" apart from a business
 		// rule rejection.
 		return http.StatusConflict
-	case errors.Is(err, shared.ErrMissingSiteKey):
+	case errors.Is(err, shared.ErrMissingSiteKey), errors.Is(err, shared.ErrInvalidSiteCode):
 		return http.StatusBadRequest
 	case errors.Is(err, shared.ErrConflictingSiteAndBuilding):
 		// siteCode and its deprecated alias buildingId name the same value;
@@ -109,6 +109,7 @@ var problemCategoryCatalog = []struct {
 	{sentinel: shiftplan.ErrMissingInstalledStations, category: problemCategory{"shift-plan-missing-installed-stations", "Missing installed station count for path"}},
 	// The slug stays `missing-building-id` (ADR 0035): clients that match it
 	// keep working; only the title/detail now name siteCode, the canonical key.
+	{sentinel: shared.ErrInvalidSiteCode, category: problemCategory{"invalid-site-code", "siteCode must be a facility-layout Site code (uppercase letters and digits)"}},
 	{sentinel: shared.ErrMissingSiteKey, category: problemCategory{"missing-building-id", "siteCode is required (buildingId is a deprecated alias)"}},
 	{sentinel: shared.ErrConflictingSiteAndBuilding, category: problemCategory{"conflicting-site-and-building", "siteCode and its deprecated alias buildingId have different values"}},
 	{sentinel: errMissingShiftId, category: problemCategory{"missing-shift-id", "shiftId is required"}},

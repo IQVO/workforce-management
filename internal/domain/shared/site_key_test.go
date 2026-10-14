@@ -38,3 +38,16 @@ func TestResolveSiteKey(t *testing.T) {
 		})
 	}
 }
+
+func TestParseCanonicalSiteCode(t *testing.T) {
+	for _, ok := range []string{"WH1", "ABE8", "SIM"} {
+		if got, err := ParseCanonicalSiteCode(ok); err != nil || got != ok {
+			t.Fatalf("ParseCanonicalSiteCode(%q) = %q, %v; want it unchanged", ok, got, err)
+		}
+	}
+	for _, bad := range []string{"", " ", "\u0085", "wh1", "WH-1", " WH1", "WH1 "} {
+		if _, err := ParseCanonicalSiteCode(bad); !errors.Is(err, ErrInvalidSiteCode) {
+			t.Fatalf("ParseCanonicalSiteCode(%q) err = %v, want ErrInvalidSiteCode", bad, err)
+		}
+	}
+}

@@ -2,6 +2,7 @@ package shared
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 )
 
@@ -13,6 +14,24 @@ var ErrMissingSiteKey = errors.New("siteCode is required (buildingId is accepted
 // siteCode and its deprecated alias buildingId with DIFFERENT values: they
 // name the same thing, so two values are ambiguous (ADR 0035).
 var ErrConflictingSiteAndBuilding = errors.New("siteCode and buildingId (a deprecated alias of siteCode) are both present with different values")
+
+// ErrInvalidSiteCode is returned when a path that names a Site by its
+// canonical code carries something that is not one: facility-layout owns
+// Site codes and they are uppercase letters and digits only (its OpenAPI
+// SiteCode pattern, ^[A-Z0-9]+$), so anything else can never name a Site.
+var ErrInvalidSiteCode = errors.New("siteCode must be a facility-layout Site code: uppercase letters and digits only")
+
+var canonicalSiteCode = regexp.MustCompile(`^[A-Z0-9]+$`)
+
+// ParseCanonicalSiteCode validates a Site code taken from a URL path, where
+// the code is the resource identity and is never optional: it must match
+// facility-layout's Site code format exactly (no trimming, no blank).
+func ParseCanonicalSiteCode(raw string) (string, error) {
+	if !canonicalSiteCode.MatchString(raw) {
+		return "", ErrInvalidSiteCode
+	}
+	return raw, nil
+}
 
 // ResolveSiteKey resolves the ShiftPlan key from the canonical siteCode and
 // its deprecated alias buildingId (ADR 0035). Both name the same value, stored
