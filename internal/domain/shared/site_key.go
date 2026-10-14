@@ -2,7 +2,6 @@ package shared
 
 import (
 	"errors"
-	"regexp"
 	"strings"
 )
 
@@ -15,20 +14,17 @@ var ErrMissingSiteKey = errors.New("siteCode is required (buildingId is accepted
 // name the same thing, so two values are ambiguous (ADR 0035).
 var ErrConflictingSiteAndBuilding = errors.New("siteCode and buildingId (a deprecated alias of siteCode) are both present with different values")
 
-// ErrInvalidSiteCode is returned when a path that names a Site by its
-// canonical code carries something that is not one: facility-layout owns
-// Site codes and they are uppercase letters and digits only (its OpenAPI
-// SiteCode pattern, ^[A-Z0-9]+$), so anything else can never name a Site.
-var ErrInvalidSiteCode = errors.New("siteCode must be a facility-layout Site code: uppercase letters and digits only")
-
-var canonicalSiteCode = regexp.MustCompile(`^[A-Z0-9]+$`)
-
-// ParseCanonicalSiteCode validates a Site code taken from a URL path, where
-// the code is the resource identity and is never optional: it must match
-// facility-layout's Site code format exactly (no trimming, no blank).
-func ParseCanonicalSiteCode(raw string) (string, error) {
-	if !canonicalSiteCode.MatchString(raw) {
-		return "", ErrInvalidSiteCode
+// ParsePathSiteKey takes the site key from a URL path, where it is the
+// resource identity: it is used exactly as given (never trimmed) and must be
+// non-empty, matching the OpenAPI SiteCodePath parameter (minLength 1). A key
+// is not required to be a canonical facility-layout Site code: plans written
+// under a legacy buildingId are read back through /sites/{siteCode} too
+// (ADR 0035 convergence). An unknown key is simply not found (404), never a
+// validation error - Schemathesis found the old trim-then-require-non-blank
+// rule answered 400 for U+0085, a value the schema allows.
+func ParsePathSiteKey(raw string) (string, error) {
+	if raw == "" {
+		return "", ErrMissingSiteKey
 	}
 	return raw, nil
 }

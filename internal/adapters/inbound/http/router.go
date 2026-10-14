@@ -443,10 +443,9 @@ func deprecatedRoute(next http.Handler) http.Handler {
 // fleet-wide "all paths, one site/shift" list as staffingGapForShift, with
 // the path siteCode as both the plan lookup key and the associate scope.
 // There is no second name on this route, so nothing can conflict; the path
-// siteCode must be a canonical facility-layout Site code (^[A-Z0-9]+$, the
-// same pattern the OpenAPI SiteCodePath parameter declares).
+// siteCode is the resource identity, used exactly as given (ParsePathSiteKey).
 func (h *Handler) staffingGapForSiteShift(w http.ResponseWriter, r *http.Request) {
-	siteCode, err := shared.ParseCanonicalSiteCode(chi.URLParam(r, "siteCode"))
+	siteCode, err := shared.ParsePathSiteKey(chi.URLParam(r, "siteCode"))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return

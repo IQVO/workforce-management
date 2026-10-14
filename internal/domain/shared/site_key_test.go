@@ -39,15 +39,13 @@ func TestResolveSiteKey(t *testing.T) {
 	}
 }
 
-func TestParseCanonicalSiteCode(t *testing.T) {
-	for _, ok := range []string{"WH1", "ABE8", "SIM"} {
-		if got, err := ParseCanonicalSiteCode(ok); err != nil || got != ok {
-			t.Fatalf("ParseCanonicalSiteCode(%q) = %q, %v; want it unchanged", ok, got, err)
+func TestParsePathSiteKey(t *testing.T) {
+	for _, raw := range []string{"WH1", "LEGACY-1", "\u0085", " WH1"} {
+		if got, err := ParsePathSiteKey(raw); err != nil || got != raw {
+			t.Fatalf("ParsePathSiteKey(%q) = %q, %v; want it unchanged", raw, got, err)
 		}
 	}
-	for _, bad := range []string{"", " ", "\u0085", "wh1", "WH-1", " WH1", "WH1 "} {
-		if _, err := ParseCanonicalSiteCode(bad); !errors.Is(err, ErrInvalidSiteCode) {
-			t.Fatalf("ParseCanonicalSiteCode(%q) err = %v, want ErrInvalidSiteCode", bad, err)
-		}
+	if _, err := ParsePathSiteKey(""); !errors.Is(err, ErrMissingSiteKey) {
+		t.Fatalf("ParsePathSiteKey(\"\") err = %v, want ErrMissingSiteKey", err)
 	}
 }

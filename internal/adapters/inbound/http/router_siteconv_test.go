@@ -243,25 +243,24 @@ func assertSiteRouteNotFounds(t *testing.T, router http.Handler) {
 	assertProblemDetails(t, notFound, http.StatusNotFound, "resource-not-found", "/sites/NOPE/shifts/shift-1/staffing-gap")
 }
 
-// TestStaffingGapForSiteShift_PathSiteCodeMustBeCanonical: the path siteCode is
-// a facility-layout Site code (^[A-Z0-9]+$, the OpenAPI SiteCodePath pattern),
-// so the handler and the schema agree on what is valid. Found by Schemathesis:
-// U+0085 satisfied the old minLength-only schema but the handler trimmed it to
-// blank and answered 400.
-func TestStaffingGapForSiteShift_PathSiteCodeMustBeCanonical(t *testing.T) {
+// TestStaffingGapForSiteShift_PathSiteKeyIsTheIdentityAsGiven: the path key is
+// used exactly as given, so a value the schema allows but no plan has is the
+// documented 404 problem, never a 400. Found by Schemathesis: U+0085 used to be
+// trimmed to blank and answered 400 missing-building-id.
+func TestStaffingGapForSiteShift_PathSiteKeyIsTheIdentityAsGiven(t *testing.T) {
 	router := siteFixtureAtSite(t)
-	for _, raw := range []string{"wh1", "%C2%85", "WH-1", "%20WH1"} {
+	for _, raw := range []string{"%C2%85", "%20WH1", "wh1"} {
 		target := "/sites/" + raw + "/shifts/shift-1/staffing-gap"
 		res := doRequest(t, router, http.MethodGet, target, nil)
-		if res.Code != http.StatusBadRequest {
-			t.Fatalf("%s: status %d, want 400 invalid-site-code; body %s", target, res.Code, res.Body.String())
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d, want 404 (no plan under that exact key); body %s", target, res.Code, res.Body.String())
 		}
 		var problem map[string]any
 		if err := json.Unmarshal(res.Body.Bytes(), &problem); err != nil {
 			t.Fatalf("%s: decode problem: %v", target, err)
 		}
-		if typ, _ := problem["type"].(string); !strings.HasSuffix(typ, "invalid-site-code") {
-			t.Fatalf("%s: problem type %q, want .../invalid-site-code", target, typ)
+		if typ, _ := problem["type"].(string); !strings.HasSuffix(typ, "resource-not-found") {
+			t.Fatalf("%s: problem type %q, want .../resource-not-found", target, typ)
 		}
 	}
 }
