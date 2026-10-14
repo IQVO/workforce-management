@@ -160,7 +160,7 @@ Triggers: push and pull_request on `main` and `develop`, a weekly cron
 | `lint` | golangci-lint v2.13.1 | every run |
 | `guide-lint` | `scripts/harness/guide_lint.py`, `repo_lint.py`, and the harness self-tests | every run |
 | `complexity` | golangci-lint with only `gocyclo,gocognit,cyclop,funlen,nestif` (gocyclo gate 15), plus an informational `gocyclo -over 10` report | every run |
-| `test` | `go build`, `go vet`, `go test ./... -race` with coverage, 90 % gate | every run |
+| `test` | `go build`, `go vet`, then `make coverage` (`go test ./... -race` with the Makefile's coverage scope and 90 % gate) | every run |
 | `bdd` | `go test ./... -run TestFeatures -v` | every run |
 | `contract` | Schemathesis 4.28.0 through `scripts/contract-test.sh` against a `postgres:16` service container | every run |
 | `evals-tests` | MCP E1, E2, E3 evals | every run |
