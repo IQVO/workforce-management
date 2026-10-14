@@ -12,6 +12,7 @@ package postgres_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -49,8 +50,11 @@ func installW3CTracing(t *testing.T) trace.Tracer {
 	return tp.Tracer("outbox-trace-itest")
 }
 
-// startTraceKafka boots a disposable broker and pre-creates topics so the
-// relay's first write does not race topic auto-creation.
+// startTraceKafka boots a disposable broker and creates every destination
+// topic, waiting for its partition leader, before the relay's first write.
+// conn.CreateTopics returns before the broker has elected the leader, so on a
+// cold broker a relay that wrote right away failed with "Unknown Topic Or
+// Partition" (the TestOutboxTrace_TraceparentCrossesTheOutboxToKafka flake).
 func startTraceKafka(t *testing.T, ctx context.Context, topics ...string) []string {
 	t.Helper()
 	container, err := tckafka.Run(ctx, "confluentinc/confluent-local:7.6.1",
@@ -67,17 +71,49 @@ func startTraceKafka(t *testing.T, ctx context.Context, topics ...string) []stri
 	if err != nil {
 		t.Fatalf("resolve Kafka brokers: %v", err)
 	}
-	conn, err := kafkago.DialContext(ctx, "tcp", brokers[0])
-	if err != nil {
-		t.Fatalf("dial Kafka: %v", err)
-	}
-	defer func() { _ = conn.Close() }()
 	for _, topic := range topics {
-		if err := conn.CreateTopics(kafkago.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1}); err != nil {
-			t.Fatalf("create topic %s: %v", topic, err)
-		}
+		ensureTraceTopic(t, ctx, brokers[0], topic)
 	}
 	return brokers
+}
+
+// ensureTraceTopic creates topic (retrying the connection resets a just-booted
+// broker gives; TopicAlreadyExists after such a reset is success) and then
+// polls until its single partition has a leader, so the first produce cannot
+// see "Unknown Topic Or Partition".
+func ensureTraceTopic(t *testing.T, ctx context.Context, broker, topic string) {
+	t.Helper()
+	cfg := kafkago.TopicConfig{Topic: topic, NumPartitions: 1, ReplicationFactor: 1}
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) && ctx.Err() == nil {
+		if lastErr = createAndCheckLeader(ctx, broker, cfg); lastErr == nil {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatalf("topic %q not ready on %s: %v", topic, broker, lastErr)
+}
+
+// createAndCheckLeader is one attempt: dial, create (idempotently), and
+// report an error until the topic's partition has an elected leader.
+func createAndCheckLeader(ctx context.Context, broker string, cfg kafkago.TopicConfig) error {
+	conn, err := kafkago.DialContext(ctx, "tcp", broker)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conn.Close() }()
+	if err := conn.CreateTopics(cfg); err != nil && !errors.Is(err, kafkago.TopicAlreadyExists) {
+		return err
+	}
+	partitions, err := conn.ReadPartitions(cfg.Topic)
+	if err != nil {
+		return err
+	}
+	if len(partitions) != cfg.NumPartitions || partitions[0].Leader.ID < 0 {
+		return fmt.Errorf("partition leader not elected yet (%d partitions)", len(partitions))
+	}
+	return nil
 }
 
 func readOneMessage(t *testing.T, ctx context.Context, brokers []string, topic string) kafkago.Message {

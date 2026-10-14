@@ -14,6 +14,21 @@ var ErrMissingSiteKey = errors.New("siteCode is required (buildingId is accepted
 // name the same thing, so two values are ambiguous (ADR 0035).
 var ErrConflictingSiteAndBuilding = errors.New("siteCode and buildingId (a deprecated alias of siteCode) are both present with different values")
 
+// ParsePathSiteKey takes the site key from a URL path, where it is the
+// resource identity: it is used exactly as given (never trimmed) and must be
+// non-empty, matching the OpenAPI SiteCodePath parameter (minLength 1). A key
+// is not required to be a canonical facility-layout Site code: plans written
+// under a legacy buildingId are read back through /sites/{siteCode} too
+// (ADR 0035 convergence). An unknown key is simply not found (404), never a
+// validation error - Schemathesis found the old trim-then-require-non-blank
+// rule answered 400 for U+0085, a value the schema allows.
+func ParsePathSiteKey(raw string) (string, error) {
+	if raw == "" {
+		return "", ErrMissingSiteKey
+	}
+	return raw, nil
+}
+
 // ResolveSiteKey resolves the ShiftPlan key from the canonical siteCode and
 // its deprecated alias buildingId (ADR 0035). Both name the same value, stored
 // in the same column. Surrounding whitespace is trimmed and a blank value counts

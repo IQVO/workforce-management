@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -240,4 +241,26 @@ func assertSiteRouteNotFounds(t *testing.T, router http.Handler) {
 	}
 	notFound := doRequest(t, router, http.MethodGet, "/sites/NOPE/shifts/shift-1/staffing-gap", nil)
 	assertProblemDetails(t, notFound, http.StatusNotFound, "resource-not-found", "/sites/NOPE/shifts/shift-1/staffing-gap")
+}
+
+// TestStaffingGapForSiteShift_PathSiteKeyIsTheIdentityAsGiven: the path key is
+// used exactly as given, so a value the schema allows but no plan has is the
+// documented 404 problem, never a 400. Found by Schemathesis: U+0085 used to be
+// trimmed to blank and answered 400 missing-building-id.
+func TestStaffingGapForSiteShift_PathSiteKeyIsTheIdentityAsGiven(t *testing.T) {
+	router := siteFixtureAtSite(t)
+	for _, raw := range []string{"%C2%85", "%20WH1", "wh1"} {
+		target := "/sites/" + raw + "/shifts/shift-1/staffing-gap"
+		res := doRequest(t, router, http.MethodGet, target, nil)
+		if res.Code != http.StatusNotFound {
+			t.Fatalf("%s: status %d, want 404 (no plan under that exact key); body %s", target, res.Code, res.Body.String())
+		}
+		var problem map[string]any
+		if err := json.Unmarshal(res.Body.Bytes(), &problem); err != nil {
+			t.Fatalf("%s: decode problem: %v", target, err)
+		}
+		if typ, _ := problem["type"].(string); !strings.HasSuffix(typ, "resource-not-found") {
+			t.Fatalf("%s: problem type %q, want .../resource-not-found", target, typ)
+		}
+	}
 }

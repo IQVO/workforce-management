@@ -38,3 +38,14 @@ func TestResolveSiteKey(t *testing.T) {
 		})
 	}
 }
+
+func TestParsePathSiteKey(t *testing.T) {
+	for _, raw := range []string{"WH1", "LEGACY-1", "\u0085", " WH1"} {
+		if got, err := ParsePathSiteKey(raw); err != nil || got != raw {
+			t.Fatalf("ParsePathSiteKey(%q) = %q, %v; want it unchanged", raw, got, err)
+		}
+	}
+	if _, err := ParsePathSiteKey(""); !errors.Is(err, ErrMissingSiteKey) {
+		t.Fatalf("ParsePathSiteKey(\"\") err = %v, want ErrMissingSiteKey", err)
+	}
+}
