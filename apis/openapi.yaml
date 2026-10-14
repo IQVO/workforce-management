@@ -927,8 +927,11 @@ components:
         The canonical Site code (the facility-layout Site code, e.g. WH1).
         It is both the plan lookup key AND the associate scope: activeHeads
         counts only assignments whose associate has an active (not-ended)
-        shift at that site (ADR 0034, ADR 0035). The code is accepted as
-        given, never validated against facility-layout.
+        shift at that site (ADR 0034, ADR 0035). The key is the resource
+        identity and is used exactly as given (never trimmed); it is not
+        required to be a canonical facility-layout code, because plans written
+        under a legacy buildingId are read here too (ADR 0035). It is never
+        validated against facility-layout: a key with no plan is 404.
       schema:
         type: string
         minLength: 1
