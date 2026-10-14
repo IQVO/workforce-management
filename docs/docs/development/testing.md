@@ -83,6 +83,12 @@ Every integration test starts its own containers, so no `DATABASE_URL` or
 The `integration` CI job and `make integration` both run
 `go test -tags=integration ./...`, so every file above runs in CI.
 
+A Kafka integration test creates every topic it reads or writes and waits for the
+partition leader before the first produce (`conn.CreateTopics` returns before the
+broker has elected one). Writing to a topic that was only "created" fails on a cold
+broker with `Unknown Topic Or Partition`; the outbox trace test flaked that way until
+its `ensureTraceTopic` helper did both steps.
+
 ## Contract tests
 
 `scripts/contract-test.sh` builds `cmd/workforce` and starts it on
