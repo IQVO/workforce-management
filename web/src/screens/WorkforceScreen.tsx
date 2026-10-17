@@ -3,44 +3,56 @@ import { WORKFORCE_API_BASE } from "../config";
 import {
   allPathsStaffingGapUrl,
   singlePathStaffingGapUrl,
+  siteShiftStaffingGapUrl,
 } from "../apiUrls";
 import type { StaffingGap } from "../types";
-import { Card, StatusPill, useFetch } from "@warehouse/ui-kit";
+import { Card, StatusPill, formatNumber, useFetch } from "@warehouse/ui-kit";
 
 /**
- * Staffing-gap dashboard. Two views over the same committed shift plan:
+ * Staffing-gap dashboard. Three views over the same committed shift plan:
  *
- * 1. ALL PATHS (the default): GET /buildings/{buildingId}/shifts/{shiftId}/
- *    staffing-gap lists every path planned in the plan in one call — the
- *    "fleet-wide all-paths" endpoint ADR-0011 originally deferred and later
- *    shipped (operationId listStaffingGapsForShift). One building/shift
- *    pair, one request, every path's gap.
- * 2. BY PATH (kept): GET /paths/{pathId}/staffing-gap?buildingId=&shiftId=
- *    narrows to one caller-supplied path. ShiftPlan is keyed by
- *    building+shift, so both query params are required alongside the path.
+ * 1. SHIFT, BY SITE (the default, canonical since ADR 0035): GET
+ *    /sites/{siteCode}/shifts/{shiftId}/staffing-gap lists every path
+ *    planned in that site's committed plan in one call, with activeHeads
+ *    scoped to associates on shift at that site (ADR 0034).
+ * 2. SHIFT, BY BUILDING (kept): the deprecated GET /buildings/{buildingId}/
+ *    shifts/{shiftId}/staffing-gap alias this remote has always used --
+ *    same handler core, but a building-only call is NOT scoped by site.
+ * 3. BY PATH (kept): GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=
+ *    narrows to one caller-supplied path (siteCode is the canonical plan
+ *    key and scope since ADR 0035).
  *
- * Both endpoints compute a path's gap identically, so the two views can
- * never disagree for a given path.
+ * All three endpoints compute a path's gap identically, so the views can
+ * never disagree for a given path. Each card also shows the gap itself
+ * (planned minus present heads) and whatever measured-rate enrichment the
+ * response carries (observedIdleShare, siteCode echo) -- omitted wire
+ * fields are never rendered as fabricated zeros.
  */
+type GapMode = "site" | "building" | "path";
+
 export function WorkforceScreen() {
-  const [mode, setMode] = useState<"all" | "path">("all");
+  const [mode, setMode] = useState<GapMode>("site");
   const [pathIdInput, setPathIdInput] = useState("");
+  const [siteCodeInput, setSiteCodeInput] = useState("WH1");
   const [buildingIdInput, setBuildingIdInput] = useState("wh1");
   const [shiftIdInput, setShiftIdInput] = useState("shift-1");
   const [query, setQuery] = useState<{
-    mode: "all" | "path";
+    mode: GapMode;
     pathId: string;
+    siteCode: string;
     buildingId: string;
     shiftId: string;
   } | null>(null);
 
   const url = query
-    ? query.mode === "all"
-      ? allPathsStaffingGapUrl(WORKFORCE_API_BASE, query.buildingId, query.shiftId)
-      : singlePathStaffingGapUrl(WORKFORCE_API_BASE, query.pathId, query.buildingId, query.shiftId)
+    ? query.mode === "site"
+      ? siteShiftStaffingGapUrl(WORKFORCE_API_BASE, query.siteCode, query.shiftId)
+      : query.mode === "building"
+        ? allPathsStaffingGapUrl(WORKFORCE_API_BASE, query.buildingId, query.shiftId)
+        : singlePathStaffingGapUrl(WORKFORCE_API_BASE, query.pathId, query.siteCode, query.shiftId)
     : null;
-  // The all-paths endpoint answers with an array; the single-path lookup
-  // with one object. Normalise both to a list for rendering.
+  // Both shift views answer with an array; the single-path lookup with one
+  // object. Normalise both to a list for rendering.
   const { data, loading, error } = useFetch<StaffingGap[] | StaffingGap>(url);
   const gaps: StaffingGap[] = !data
     ? []
@@ -51,37 +63,51 @@ export function WorkforceScreen() {
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     const pathId = pathIdInput.trim();
+    const siteCode = siteCodeInput.trim();
     const buildingId = buildingIdInput.trim();
     const shiftId = shiftIdInput.trim();
-    if (!buildingId || !shiftId) {
+    if (!shiftId) {
       return;
     }
-    if (mode === "path" && !pathId) {
+    if (mode === "site" && !siteCode) {
       return;
     }
-    setQuery({ mode, pathId, buildingId, shiftId });
+    if (mode === "building" && !buildingId) {
+      return;
+    }
+    if (mode === "path" && (!pathId || !siteCode)) {
+      return;
+    }
+    setQuery({ mode, pathId, siteCode, buildingId, shiftId });
   }
 
   const maxHeads = gaps.reduce((m, g) => Math.max(m, g.plannedHeads, g.activeHeads), 1);
   const understaffedCount = gaps.filter((g) => g.understaffed).length;
+  const scopeLabel =
+    query === null
+      ? ""
+      : query.mode === "building"
+        ? `Building: ${query.buildingId}`
+        : `Site: ${query.siteCode}`;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-5)" }}>
       <div>
         <h1 style={{ fontSize: "var(--wh-font-size-2xl)", margin: 0 }}>Workforce</h1>
         <p style={{ color: "var(--wh-color-text-muted)", marginTop: 4 }}>
-          workforce-management · staffing gap by path -- planned vs active headcount
+          workforce-management · staffing gap by path -- planned vs present headcount
         </p>
       </div>
 
       <form onSubmit={onSubmit} style={{ display: "flex", gap: "var(--wh-space-2)", flexWrap: "wrap" }}>
         <select
           value={mode}
-          onChange={(e) => setMode(e.target.value as "all" | "path")}
-          style={inputStyle({ width: 130 })}
+          onChange={(e) => setMode(e.target.value as GapMode)}
+          style={inputStyle({ width: 190 })}
           aria-label="View mode"
         >
-          <option value="all">All paths</option>
+          <option value="site">Shift (by site)</option>
+          <option value="building">Shift (by building)</option>
           <option value="path">By path</option>
         </select>
         {mode === "path" && (
@@ -92,12 +118,22 @@ export function WorkforceScreen() {
             style={inputStyle({ flex: 1, minWidth: 160 })}
           />
         )}
-        <input
-          value={buildingIdInput}
-          onChange={(e) => setBuildingIdInput(e.target.value)}
-          placeholder="Building ID"
-          style={inputStyle({ width: 140 })}
-        />
+        {mode !== "building" && (
+          <input
+            value={siteCodeInput}
+            onChange={(e) => setSiteCodeInput(e.target.value)}
+            placeholder="Site code"
+            style={inputStyle({ width: 140 })}
+          />
+        )}
+        {mode === "building" && (
+          <input
+            value={buildingIdInput}
+            onChange={(e) => setBuildingIdInput(e.target.value)}
+            placeholder="Building ID"
+            style={inputStyle({ width: 140 })}
+          />
+        )}
         <input
           value={shiftIdInput}
           onChange={(e) => setShiftIdInput(e.target.value)}
@@ -112,8 +148,8 @@ export function WorkforceScreen() {
       {!query && (
         <Card>
           <div style={{ color: "var(--wh-color-text-muted)" }}>
-            Enter a building and shift to see planned vs active headcount for every
-            path in the committed plan, or switch to “By path” for one path.
+            Enter a site and shift to see planned vs present headcount for every path in
+            the committed plan, narrow to one path, or use the legacy building-keyed view.
           </div>
         </Card>
       )}
@@ -133,7 +169,7 @@ export function WorkforceScreen() {
       {!loading && query && gaps.length === 0 && !error && (
         <Card>
           <div style={{ color: "var(--wh-color-text-muted)" }}>
-            No committed shift plan found for this building/shift with paths to show.
+            No committed shift plan found for this {query.mode === "building" ? "building" : "site"}/shift with paths to show.
           </div>
         </Card>
       )}
@@ -148,7 +184,7 @@ export function WorkforceScreen() {
               color: "var(--wh-color-text-muted)",
             }}
           >
-            <span>Building: {query?.buildingId}</span>
+            <span>{scopeLabel}</span>
             <span>Shift: {query?.shiftId}</span>
             <span>
               {gaps.length} path{gaps.length === 1 ? "" : "s"} ·{" "}
@@ -168,6 +204,7 @@ export function WorkforceScreen() {
 
 function PathGapCard({ gap, maxHeads }: { gap: StaffingGap; maxHeads: number }) {
   const status = gap.understaffed ? "Understaffed" : "Staffed";
+  const headGap = gap.plannedHeads - gap.activeHeads;
   return (
     <Card
       title={gap.pathId}
@@ -178,17 +215,53 @@ function PathGapCard({ gap, maxHeads }: { gap: StaffingGap; maxHeads: number }) 
       <div style={{ display: "flex", flexDirection: "column", gap: "var(--wh-space-4)" }}>
         <HeadcountBar label="Planned heads" value={gap.plannedHeads} max={maxHeads} tone="neutral" />
         <HeadcountBar
-          label="Active heads"
+          label="Present heads"
           value={gap.activeHeads}
           max={maxHeads}
           tone={gap.understaffed ? "warning" : "success"}
         />
+        <div
+          style={{
+            display: "flex",
+            gap: "var(--wh-space-6)",
+            fontSize: "var(--wh-font-size-sm)",
+            color: "var(--wh-color-text-muted)",
+            flexWrap: "wrap",
+          }}
+        >
+          <span>
+            Gap:{" "}
+            <span
+              style={{
+                fontWeight: 600,
+                fontFamily: "var(--wh-font-mono)",
+                color: gap.understaffed
+                  ? "var(--wh-color-status-warning)"
+                  : "var(--wh-color-text)",
+              }}
+            >
+              {headGap > 0 ? `+${headGap}` : formatNumber(headGap)}
+            </span>
+          </span>
+          {/* Enrichment the response actually carries; omitted wire fields
+              are absent on purpose (no idle-share signal, unscoped query)
+              and must not render as fabricated zeros. */}
+          {gap.observedIdleShare != null && (
+            <span>
+              Observed idle:{" "}
+              <span style={{ fontFamily: "var(--wh-font-mono)" }}>
+                {formatNumber(gap.observedIdleShare * 100)}%
+              </span>
+            </span>
+          )}
+          {gap.siteCode != null && <span>Site: {gap.siteCode}</span>}
+        </div>
       </div>
     </Card>
   );
 }
 
-/** Simple two-number visual comparison (planned vs active) using inline
+/** Simple two-number visual comparison (planned vs present) using inline
  *  styled divs matching the design tokens -- deliberately not a new
  *  ui-kit chart component for this single pilot dashboard; revisit if a
  *  second screen needs the same shape. */
