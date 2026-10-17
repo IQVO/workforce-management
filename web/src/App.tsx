@@ -1,7 +1,11 @@
 import { Navigate, NavLink, Outlet, Route, Routes } from "react-router-dom";
+import { AssociateScreen } from "./screens/AssociateScreen";
 import { WorkforceScreen } from "./screens/WorkforceScreen";
 
-const SUB_NAV = [{ to: "staffing-gaps", label: "Staffing gaps", end: true }];
+const SUB_NAV = [
+  { to: "staffing-gaps", label: "Staffing gaps", end: true },
+  { to: "associates", label: "Associates", end: true },
+];
 
 const linkStyle = ({ isActive }: { isActive: boolean }) => ({
   display: "inline-flex",
@@ -49,13 +53,16 @@ function WorkforceLayout() {
  *
  *  - staffing-gaps: planned vs present headcount per path -- by site
  *    (canonical, ADR 0035), by building (deprecated key, kept), or one
- *    path at a time. */
+ *    path at a time.
+ *  - associates: the supervisor console for one associate's labor record
+ *    -- certifications and path assignment. */
 export default function App() {
   return (
     <Routes>
       <Route path="/" element={<WorkforceLayout />}>
         <Route index element={<Navigate to="staffing-gaps" replace />} />
         <Route path="staffing-gaps" element={<WorkforceScreen />} />
+        <Route path="associates" element={<AssociateScreen />} />
       </Route>
     </Routes>
   );
