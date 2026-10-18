@@ -184,6 +184,38 @@ channels:
           - $ref: "#/components/messages/LaborAssigned"
           - $ref: "#/components/messages/LaborReassigned"
 
+  warehouse.labor-performance.events:
+    description: |
+      labor-performance's integration topic (its ADR 0013), CONSUMED by this
+      service — not published: key and `subject` = the associate id,
+      `source=/warehouse/labor-performance`. This service consumes only
+      `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`
+      and ignores every other type. The consumer is the measured-rate cache
+      (`LABOR_PERFORMANCE_MODE=kafka-cache`, the `laborperformancecache`
+      adapter: a per-process consumer group replays the topic's full history
+      at startup, then keeps the local mean and idle-share totals current);
+      this channel mirrors labor-performance's own apis/asyncapi.yaml
+      read-only.
+    subscribe:
+      operationId: consumeLaborPerformanceEvents
+      summary: Keep the local measured-rate cache current for ProposePathPlan.
+      description: |
+        Subscribe to labor-performance's TaskPerformanceRecorded stream.
+        Every message updates the running mean of `actual_seconds` and the
+        running idle share for its `task_type`. `efficiency_pct` is nullable
+        and unused here (never coerced to 0); `idle_seconds_before` is
+        nullable ("not observed"; such a message contributes to the actual
+        total only). Messages are CloudEvents 1.0 structured-mode JSON
+        (dataschema
+        `urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1`).
+        A message that is not a valid CloudEvents 1.0 event is logged at WARN
+        and skipped; the cache dedupes on `id`.
+      tags:
+        - name: labor-performance
+          description: Consumed from the labor-performance bounded context.
+      message:
+        $ref: "#/components/messages/TaskPerformanceRecorded"
+
 components:
   messages:
     ShiftPlanCommitted:
@@ -615,6 +647,48 @@ components:
               associate_id: "A-1001"
               from_path_id: "pack"
               to_path_id: "pick"
+
+    TaskPerformanceRecorded:
+      name: TaskPerformanceRecorded
+      title: Task Performance Recorded (from labor-performance, consumed)
+      summary: One completed task was scored against the standard active at completion time.
+      description: |
+        CONSUMED, not produced. Pinned by labor-performance's
+        `apis/asyncapi.yaml`: type
+        `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`,
+        `source=/warehouse/labor-performance`, subject and Kafka key = the
+        associate id. `efficiency_pct` is NULL when the task could not be
+        scored (a real business fact, never coerced to 0) and
+        `idle_seconds_before` is NULL when no idle gap was observed; the
+        measured-rate cache (`laborperformancecache`) updates its
+        per-`task_type` running mean of `actual_seconds` and running idle
+        share from every message.
+      contentType: application/cloudevents+json
+      tags:
+        - name: labor-performance
+          description: Consumed from labor-performance.
+      payload:
+        $ref: "#/components/schemas/TaskPerformanceRecordedEvent"
+      examples:
+        - name: scoredPickTask
+          summary: A PICK task scored at 91.2% of standard after a 90s idle gap.
+          payload:
+            specversion: "1.0"
+            id: 7a2d5e91-3f04-4c8b-9e12-8b4a6d1c5f30
+            source: /warehouse/labor-performance
+            type: com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded
+            subject: assoc-4471
+            time: "2026-09-05T11:00:00Z"
+            datacontenttype: application/json
+            dataschema: "urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1"
+            data:
+              task_id: task-10231
+              associate_id: assoc-4471
+              task_type: PICK
+              efficiency_pct: 91.2
+              actual_seconds: 41
+              idle_seconds_before: 90
+              completed_at: "2026-09-05T09:30:00Z"
 
   schemas:
     CloudEventBase:
@@ -1122,3 +1196,82 @@ components:
                 to_path_id:
                   type: string
                   description: Process path the associate was moved onto.
+
+    TaskPerformanceRecordedEvent:
+      type: object
+      description: |
+        CloudEvents 1.0 envelope of labor-performance's
+        TaskPerformanceRecorded, the integration payload, as consumed here
+        (not composed from CloudEventBase, whose `source` is this service's
+        own).
+      required:
+        - specversion
+        - id
+        - source
+        - type
+        - subject
+        - time
+        - datacontenttype
+        - dataschema
+        - data
+      properties:
+        specversion:
+          type: string
+          enum: ["1.0"]
+        id:
+          type: string
+          description: CloudEvents id; the cache's dedupe key.
+        source:
+          type: string
+          enum: ["/warehouse/labor-performance"]
+        type:
+          type: string
+          const: "com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded"
+        subject:
+          type: string
+          description: The associate id (also the Kafka key); the task id when the task could not be scored.
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          enum: ["application/json"]
+        dataschema:
+          type: string
+          description: urn:warehouse:labor-performance:events:TaskPerformanceRecorded:v1
+        data:
+          type: object
+          description: Mirrors labor-performance's TaskPerformanceRecordedEventsData field-for-field.
+          required:
+            - task_id
+            - task_type
+            - actual_seconds
+            - completed_at
+          properties:
+            task_id:
+              type: string
+              description: fulfillment-execution's task id, an opaque foreign reference.
+            associate_id:
+              type: string
+              description: The associate who completed the task; the empty string means no checked-in occupant (e.g. a robot station).
+            task_type:
+              type: string
+              description: PICK, PACK, SLAM, or the empty string when the type could not be resolved.
+            efficiency_pct:
+              type: number
+              format: double
+              nullable: true
+              description: 100 * standard_seconds / actual_seconds, or NULL when unscorable; never coerced to 0.
+            actual_seconds:
+              type: integer
+              format: int64
+              description: The measured duration; 0 means unmeasurable.
+            idle_seconds_before:
+              type: integer
+              format: int64
+              nullable: true
+              description: The idle gap immediately before this task's claim; NULL when not observed (additive field).
+            completed_at:
+              type: string
+              format: date-time
+              description: When the associate finished — the business time, distinct from the CloudEvents `time`.
