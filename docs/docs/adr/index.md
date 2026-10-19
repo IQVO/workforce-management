@@ -117,3 +117,4 @@ quietly delete the old one — the fact that it was tried is itself information.
 | [0035](./0035-sitecode-converges-building-id.md) | siteCode is the canonical name of the ShiftPlan key; buildingId is a deprecated alias | Accepted |
 | [0036](./0036-outbox-relay-attempt-cap.md) | The outbox relay stops claiming a row after OUTBOX_MAX_ATTEMPTS failures | Accepted |
 | [0037](./0037-reports-api-openapi-contract.md) | The reports binary's routes are specified in apis/openapi-reports.yaml | Accepted |
+| [0038](./0038-postgres-and-kafka-are-the-only-runtime.md) | Postgres and Kafka are the only runtime (no in-memory, log, file-catalogue or permissive mode) | Accepted; supersedes the fallbacks of [0008](./0008-mcp-inbound-adapter.md), [0013](./0013-process-path-catalogue-validation.md), [0016](./0016-transactional-outbox.md), [0019](./0019-labor-performance-cache-consumer.md) and [0030](./0030-kafka-sourced-process-path-catalogue.md) |

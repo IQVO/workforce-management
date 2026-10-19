@@ -15,8 +15,6 @@ To reach it locally:
   curl http://localhost:8080/healthz
 {{- end }}
 
-{{- if not .Values.kafka.enabled }}
-NOTE: kafka.enabled is false — this service publishes ShiftPlanCommitted to
-its own log only and does not join the cross-service Kafka bus
-(wes-work-planning's labor-plan-view projection will not update).
-{{- end }}
+Runtime: real Postgres and real Kafka only (ADR-0038). /readyz is 200 only while
+Postgres answers a ping AND a broker at {{ .Values.kafka.brokers }} answers; topics
+are not required (the broker auto-creates them on first write).

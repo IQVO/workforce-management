@@ -43,6 +43,12 @@ spec:
               value: {{ .Values.analytics.projector.adminAddr | quote }}
             - name: KAFKA_BROKERS
               value: {{ .Values.kafka.brokers | quote }}
+            # The projector's STABLE, shared Kafka consumer group (ADR-0038:
+            # it comes from the environment, there is no default in the
+            # binary). The chart default keeps the group the projector has
+            # always used, so a rollout does not reset its committed offsets.
+            - name: ANALYTICS_CONSUMER_GROUP
+              value: {{ .Values.analytics.projector.consumerGroup | quote }}
             - name: ANALYTICS_MIGRATIONS_PATH
               value: {{ .Values.analytics.migrationsPath | quote }}
             - name: ANALYTICS_DATABASE_URL

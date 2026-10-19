@@ -11,6 +11,10 @@ description: ProposePathPlan's measured-rate enrichment can now be served from a
 
 ## Status
 
+> **Amended by [ADR 0038](./0038-postgres-and-kafka-are-the-only-runtime.md):**
+> `LABOR_PERFORMANCE_MODE` now defaults to `kafka-cache` and `permissive` is a
+> boot error; `http` stays as the REST rollback.
+
 Accepted — implemented in the same change that introduced this record.
 
 ## Context

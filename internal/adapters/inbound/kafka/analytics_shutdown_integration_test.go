@@ -68,7 +68,7 @@ func TestAnalyticsConsumer_ShutdownMidHandle_IsCleanAndDeadLettersNothing(t *tes
 
 	projection := &blockingProjection{recordingProjection: &recordingProjection{}, entered: make(chan struct{}, 1)}
 	consumer := inboundkafka.NewAnalyticsConsumer(
-		brokers, topic, projection, newFakeProcessedEvents(),
+		brokers, topic, "workforce-analytics-itest", projection, newFakeProcessedEvents(),
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	defer func() { _ = consumer.Close() }()

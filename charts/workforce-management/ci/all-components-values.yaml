@@ -1,0 +1,17 @@
+# Values for `ct lint` (chart-testing) and for the render tests that want every
+# component: the chart refuses to render without a database source and Kafka
+# brokers (ADR-0038), and enabling every optional component exercises every
+# template. Dummy hosts, never dialled; no password in any DSN.
+database:
+  url: postgres://u@example.invalid:5432/db
+kafka:
+  brokers: kafka.example.invalid:9092
+analytics:
+  enabled: true
+  database:
+    projectorUrl: postgres://projector@example.invalid:5432/analytics
+    reportsUrl: postgres://reports@example.invalid:5432/analytics
+mcp:
+  enabled: true
+frontend:
+  enabled: true

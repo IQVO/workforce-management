@@ -11,6 +11,10 @@ description: "ADR 0030 — the process-path catalogue ADR-0013 validates path id
 
 ## Status
 
+> **Amended by [ADR 0038](./0038-postgres-and-kafka-are-the-only-runtime.md):**
+> `PATH_CATALOGUE_SOURCE=kafka` is no longer opt-in; it is the only source and
+> `file` is a boot error.
+
 Accepted — recorded retroactively (2026-10 ADR-conformance pass) for a
 source that shipped as an ADR-0013 extension without its own record.
 

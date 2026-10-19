@@ -10,6 +10,10 @@ description: "Expose this bounded context to the AI ecosystem via an MCP server 
 
 ## Status
 
+> **Amended by [ADR 0038](./0038-postgres-and-kafka-are-the-only-runtime.md):**
+> the in-memory MCP repositories and the log/direct publisher described below
+> no longer exist; every binary runs on real Postgres and real Kafka.
+
 **Accepted — auth/static-bearer sections superseded by
 [ADR-0018](./0018-remove-fleet-rest-identity.md).** REST and MCP surfaces in
 this repo are unauthenticated by decision; the `auth.go` bearer-key
