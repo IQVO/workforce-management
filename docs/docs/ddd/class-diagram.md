@@ -284,15 +284,15 @@ classDiagram
         +MarkProcessed(ctx, eventId) bool
     }
     class PostgresRepos["postgres AssociateRepo / ShiftPlanRepo / AssignmentRepo"]
-    class MemoryRepos["memory repos"]
+    class MemoryRepos["memory repos (test double)"]
     class OutboxPublisher["postgres OutboxPublisher"]
     class KafkaPublishers["kafka Publisher + AnalyticsPublisher"]
-    class LogPublisher["events LogPublisher"]
+    class LogPublisher["events publishers (test doubles)"]
     class PgUnitOfWork["postgres UnitOfWork"]
     class FEClient["fulfillmentexecution Client / PermissiveClient"]
-    class LPClient["laborperformance Client / PermissiveClient"]
+    class LPClient["laborperformance Client (REST rollback)"]
     class LPCache["laborperformancecache Consumer"]
-    class Catalogues["pathcatalog Catalogue via filecatalog / kafkacatalog Consumer"]
+    class Catalogues["pathcatalog Catalogue via kafkacatalog Consumer"]
     class SystemClock["clock System"]
     class Telemetry["telemetry LaborMetrics"]
     class ConsumedEvents["analyticsstore ConsumedEventsRepo"]
@@ -317,7 +317,7 @@ classDiagram
 Source: `internal/application/ports/ports.go`, `internal/adapters/outbound/**`,
 `internal/composition/*.go`, `cmd/workforce/main.go`. Omits: the inbound
 side (shown below), the circuit-breaker decorators that wrap the two HTTP
-clients, and the in-memory implementations of the other two repos and of
+clients, and the in-memory test doubles of the other two repos and of
 `ProcessedEvents`.
 
 ```mermaid
@@ -340,7 +340,7 @@ flowchart LR
         KP["kafka publishers + outbox relay"]
         FE["fulfillmentexecution"]
         LP["laborperformance, laborperformancecache"]
-        CAT["filecatalog, kafkacatalog"]
+        CAT["kafkacatalog"]
         AS["analyticsstore"]
     end
     HTTP --> UC

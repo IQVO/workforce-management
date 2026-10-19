@@ -123,11 +123,11 @@ and [Troubleshooting](../operations/troubleshooting.md#requests).
 
 | Port | Implemented by |
 |---|---|
-| `AssociateRepo`, `ShiftPlanRepo`, `AssignmentRepo` | `internal/adapters/outbound/postgres`; `internal/adapters/outbound/memory` (in-memory MCP and tests) |
-| `EventPublisher` | `events.LogPublisher`; `postgres.OutboxPublisher` (kafka + Postgres); `events.MultiPublisher` over the Kafka publishers (kafka, no Postgres) |
+| `AssociateRepo`, `ShiftPlanRepo`, `AssignmentRepo` | `internal/adapters/outbound/postgres` (every binary); `internal/adapters/outbound/memory` only as a test double |
+| `EventPublisher` | `postgres.OutboxPublisher`, relayed to Kafka (ADR 0038: no log or direct publisher); `events.*` only as test doubles |
 | `UnitOfWork` | `postgres.UnitOfWork`. When nil, saves and publish run back to back. |
-| `PathCatalogue` | `filecatalog`, `kafkacatalog` |
-| `MeasuredRateClient`, `IdleShareClient` | `laborperformance` (permissive or HTTP + breaker); `laborperformancecache` (kafka-cache, both ports) |
+| `PathCatalogue` | `kafkacatalog` |
+| `MeasuredRateClient`, `IdleShareClient` | `laborperformancecache` (kafka-cache, both ports, the default); `laborperformance` (HTTP + breaker, the REST rollback) |
 | `InstalledCapacityClient` | `fulfillmentexecution` (permissive fail-loud, or HTTP + breaker) |
 | `LaborMetrics` | `telemetry.LaborMetrics` |
 | `Clock` | `clock.System` |

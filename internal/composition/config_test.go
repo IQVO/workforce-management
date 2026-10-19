@@ -11,10 +11,10 @@ import (
 
 func TestParseBrokers(t *testing.T) {
 	cases := map[string][]string{
-		"":                      nil,
-		" , ,":                  nil,
-		"a:9092":                {"a:9092"},
-		" a:9092, b:9092 ,,":    {"a:9092", "b:9092"},
+		"":                       nil,
+		" , ,":                   nil,
+		"a:9092":                 {"a:9092"},
+		" a:9092, b:9092 ,,":     {"a:9092", "b:9092"},
 		"kafka.svc.cluster:9092": {"kafka.svc.cluster:9092"},
 	}
 	for raw, want := range cases {
