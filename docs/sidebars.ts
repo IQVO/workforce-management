@@ -169,6 +169,7 @@ const sidebars: SidebarsConfig = {
         'adr/0035-sitecode-converges-building-id',
         'adr/0036-outbox-relay-attempt-cap',
         'adr/0037-reports-api-openapi-contract',
+        'adr/0038-postgres-and-kafka-are-the-only-runtime',
       ],
     },
   ],

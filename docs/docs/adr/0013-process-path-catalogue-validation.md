@@ -11,6 +11,10 @@ description: ADR 0013 — validate every caller-supplied path_id (ProposePathPla
 
 ## Status
 
+> **Amended by [ADR 0038](./0038-postgres-and-kafka-are-the-only-runtime.md):**
+> the boot-time YAML source (`PATH_CATALOGUE_FILE`, `filecatalog`) was removed;
+> the catalogue is only replayed from Kafka.
+
 Accepted.
 
 ## Context
