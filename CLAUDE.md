@@ -1,5 +1,7 @@
 # Project: Workforce Management (Supporting Bounded Context)
 
+<!-- harness-template: v4 -->
+
 Owns "who is on shift, on which process path, at what rate; direct vs
 indirect hours." Covers the **shift-start planning horizon** (a human commits
 a headcount split across paths) plus **intra-shift assignment tracking**
