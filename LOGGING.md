@@ -53,9 +53,9 @@ formatting step.
   else at `Info`. Logging both `path` and `route` gives log aggregation the
   same low-cardinality grouping key the trace spans use, without losing the
   concrete URL.
-- **Domain events** — `events.LogPublisher` (used when
-  `EVENT_PUBLISHER=log`, the default) logs each published domain event's
-  name and occurrence time at `Info`. A `nil` `*slog.Logger` disables event
+- **Domain events** — `events.LogPublisher` is a test double only (ADR-0038:
+  no `cmd/**` binary selects it); production events go through the outbox to
+  Kafka. A `nil` `*slog.Logger` disables event
   logging while still buffering events in memory (used by tests).
 - **Startup/shutdown and config errors** — missing required env vars,
   invalid env var values, and the Kafka publisher's configuration/close

@@ -716,7 +716,7 @@ func TestFeatures(t *testing.T) {
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
 			Format: "pretty",
-			Paths:  []string{"features"},
+			Paths:  []string{"."},
 			// Strict makes an undefined or pending step fail the suite
 			// instead of silently passing.
 			Strict:   true,

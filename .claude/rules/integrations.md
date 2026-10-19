@@ -17,15 +17,15 @@ paths:
   service, malformed response, genuinely no data yet) collapses to the
   single sentinel `ErrMeasuredRateUnavailable`, and the use case falls back
   to the caller-supplied rate. Selected via `LABOR_PERFORMANCE_MODE`
-  (`http`|`kafka-cache`|`permissive`, default `permissive` — never reaches
-  the network) and `LABOR_PERFORMANCE_BASE_URL` (http mode).
+  (`kafka-cache`|`http`, default `kafka-cache`; `permissive` is a boot error,
+  ADR-0038) and `LABOR_PERFORMANCE_BASE_URL` (http mode, the REST rollback).
   `kafka-cache` (ADR-0019) swaps the HTTP call for
   `outbound/laborperformancecache`: an in-memory cache fed by
   `warehouse.labor-performance.events` (`TaskPerformanceRecorded`), replayed
   from the earliest offset under a per-process-unique consumer group, with a
-  60s `WaitReady` gate at boot. Requires `KAFKA_BROKERS`.
+  60s `WaitReady` gate at boot. Requires `KAFKA_BROKERS` (always required).
 - **`IdleShareClient`** (ADR-0020) — the observed idle share per path's task
-  type. **Only `kafka-cache` provides one**; `http`/`permissive` leave it nil.
+  type. **Only `kafka-cache` provides one**; `http` leaves it nil.
   `GetStaffingGap` surfaces it as `observedIdlePct`; `ProposePathPlan` trims
   the proposal when it exceeds `IDLE_SHARE_TRIM_THRESHOLD` (default 0.30).
   Fail-open via `ErrIdleShareUnavailable` (surface nothing / trim nothing).
@@ -49,7 +49,8 @@ paths:
   `plannedHeads > 0` for that path is then rejected (409,
   `exceeds-installed-capacity`). Selected via `INSTALLED_CAPACITY_MODE`
   (`http`|`permissive`, default `permissive` — but permissive here means
-  fail-loud-always, the opposite sense of the measured-rate default) and
+  fail-loud-always, the opposite sense of the measured-rate default; this REST
+  sync edge is NOT covered by ADR-0038, follow-up) and
   `FULFILLMENT_EXECUTION_BASE_URL`.
 
 Both interfaces deliberately expose only one error sentinel each: the use
@@ -67,12 +68,10 @@ matches the declared prefix `pick`). This package mirrors
 byte-for-byte in matching semantics, since all three read the same
 published-language file (`warehouse-infra/config/process-paths/*.yaml`).
 
-- `outbound/filecatalog` — loads the YAML from `PATH_CATALOGUE_FILE`
-  (default `/etc/workforce-management/process-paths.yaml`) once at startup.
-  A missing/invalid file is a **fatal boot-time error**.
-- `outbound/kafkacatalog` — an alternative, Kafka-sourced catalogue adapter
-  implementing the same `ports.PathCatalogue` interface, selected with
-  `PATH_CATALOGUE_SOURCE=kafka` (default `file`). It replays
+- `outbound/kafkacatalog` — the ONLY catalogue source (ADR-0030, ADR-0038:
+  the `filecatalog` adapter and `PATH_CATALOGUE_FILE` were removed;
+  `PATH_CATALOGUE_SOURCE` unset or `kafka`, `file` is a boot error). It
+  replays
   `process-path-management`'s `warehouse.process-path-management.events`
   (`ProcessPathCreated`/`Updated`/`Deactivated`) from the earliest offset under
   a per-process consumer group, and blocks boot up to 60s (`WaitReady`).
@@ -85,17 +84,17 @@ Kafka broker; `wes-work-planning` projects it into its own
 `LaborPlanObserved` read model, keyed by `path_id`, and `warehouse-planning`'s
 labor-capacity consumer (group `warehouse-planning-labor-capacity`) registers
 it as a labor capacity constraint. On the consuming side,
-the only inbound topics are the two opt-in cache feeds above
+the only inbound topics are the two cache feeds above
 (`kafkacatalog`, `laborperformancecache`); neither writes to Postgres.
 
 - **Topic**: `warehouse.workforce.events`. **Broker**: `KAFKA_BROKERS`
-  (default `localhost:9092`, the fleet's one shared broker — in-cluster in
-  the `warehouse-infra` kind cluster; this repo's own `docker-compose.yml`
-  only runs Postgres).
-- **Selection**: `EVENT_PUBLISHER=kafka` to publish; default `log` keeps
-  tests/local runs broker-free.
-- **Delivery** (ADR-0016, transactional outbox): with `EVENT_PUBLISHER=kafka`
-  the use case inserts the already-encoded message(s) for BOTH the
+  (REQUIRED, no default: the service does not boot without it, ADR-0038; the
+  fleet's shared broker in the `warehouse-infra` kind cluster, or this repo's
+  `docker-compose.yml`, which runs Postgres 16 and a single-node Kafka).
+- **Selection**: none. There is no log publisher; `EVENT_PUBLISHER` survives
+  only for chart/infra compatibility (unset or `kafka`; `log` is a boot error).
+- **Delivery** (ADR-0016, transactional outbox): always, the use case inserts
+  the already-encoded message(s) for BOTH the
   integration topic and the analytics topic into the `outbox_events` table
   inside the SAME Postgres transaction as the aggregate. A relay goroutine in
   `cmd/workforce` drains that table onto Kafka every `OUTBOX_RELAY_INTERVAL`

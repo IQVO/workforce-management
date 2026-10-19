@@ -21,9 +21,8 @@ data:
   # Installed-capacity ceiling for CommitShiftPlan (ADR-0014, gap fix D24).
   # Only in the ConfigMap, never an explicit env entry, so an extraEnv entry
   # for the same name (warehouse-infra sets one) wins without rendering a
-  # duplicate env key.
+  # duplicate env key. A REST sync edge: out of scope of ADR-0038.
   INSTALLED_CAPACITY_MODE: {{ .Values.config.installedCapacityMode | quote }}
   FULFILLMENT_EXECUTION_BASE_URL: {{ .Values.config.fulfillmentExecutionBaseUrl | default (printf "http://fulfillment-execution.%s.svc.cluster.local:80" .Release.Namespace) | quote }}
-  {{- if .Values.kafka.enabled }}
+  # KAFKA_BROKERS is mandatory and always rendered (ADR-0038).
   KAFKA_BROKERS: {{ .Values.kafka.brokers | quote }}
-  {{- end }}

@@ -256,6 +256,6 @@ These hold state or raise events but have no aggregate identity:
 | --- | --- | --- |
 | `ProposedHeads` / `ProposePathPlan` | pure computation that raises `ShiftPlanProposed` | `internal/domain/shiftplan`, `internal/application/usecases/propose_path_plan.go` |
 | `StaffingGap` / `GetStaffingGap` | read model derived from a `ShiftPlan` and `CountActiveByPath` (unscoped) or `CountActiveByPathAtSite` (optional `siteCode`, ADR 0034); raises `PathUnderstaffed` | `internal/application/usecases/get_staffing_gap.go` |
-| `pathcatalog.Catalogue` | in-memory lookup of the process-path catalogue (file or Kafka-fed) | `internal/domain/pathcatalog` |
+| `pathcatalog.Catalogue` | in-memory lookup of the process-path catalogue (Kafka-fed) | `internal/domain/pathcatalog` |
 | `labor_rollup` and the `analytics_*` tables | analytics projection, written by `cmd/workforce-projector` | `migrations/analytics/0001_report.up.sql`, `internal/adapters/outbound/analyticsstore` |
 | `laborperformancecache.Consumer` | per-TaskType running mean and idle share cache | `internal/adapters/outbound/laborperformancecache` |

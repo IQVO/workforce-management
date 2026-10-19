@@ -5,10 +5,12 @@
 // through the MCP adapter is stored in the transactional outbox exactly like
 // one raised through REST (ADR-0008, ADR-0016).
 //
-// It reads NO environment: the roots resolve EVENT_PUBLISHER, KAFKA_BROKERS,
+// Postgres and Kafka are the only runtime (ADR-0038): there is no log
+// publisher, no direct-to-broker publisher and no file catalogue here.
+//
+// It reads NO environment: the roots resolve KAFKA_BROKERS,
 // OUTBOX_RELAY_INTERVAL and OUTBOX_MAX_ATTEMPTS and pass them in via
-// PublisherConfig. Only the
-// cmd/** roots may import this package.
+// PublisherConfig. Only the cmd/** roots may import this package.
 package composition
 
 import (
@@ -18,27 +20,14 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 )
 
-// Publisher kinds accepted in PublisherConfig.Kind (the EVENT_PUBLISHER
-// values).
-const (
-	// KafkaPublisher selects Kafka (transactional outbox when Postgres is
-	// configured).
-	KafkaPublisher = "kafka"
-	// LogPublisher selects the log-only publisher.
-	LogPublisher = "log"
-)
-
 // PublisherConfig is the already-resolved publisher configuration.
 type PublisherConfig struct {
-	// Kind is the EVENT_PUBLISHER value ("kafka" or "log"; empty means log).
-	Kind string
-	// Brokers is the parsed KAFKA_BROKERS list.
+	// Brokers is the parsed KAFKA_BROKERS list (mandatory).
 	Brokers []string
 	// RunRelay asks for the outbox relay to be built (cmd/workforce). The
 	// relay is deliberately NOT built by cmd/mcp: only one process drains
@@ -56,55 +45,32 @@ type PublisherConfig struct {
 type Built struct {
 	// Publisher is the ports.EventPublisher the use cases publish through.
 	Publisher ports.EventPublisher
-	// Relay is the outbox relay to run alongside the process; nil when none
-	// was requested or applicable.
+	// Relay is the outbox relay to run alongside the process; nil only when
+	// the caller asked for a writer-only publisher (RunRelay false).
 	Relay *postgres.OutboxRelay
 	// Close releases the publisher's adapters; never nil.
 	Close func()
 }
 
-// BuildEventPublisher wires the outbound event publisher.
-//
-// An empty or "log" Kind selects the log publisher, so a local dev run with
-// no Kafka is still fully functional; any other value than "kafka"/"log" is
-// an error. With Kind "kafka" every domain event is fanned to BOTH the
-// integration topic and the analytics topic (ADR-0010), always as
-// CloudEvents 1.0 structured-mode messages (there is no envelope toggle):
-//
-//   - with Postgres configured (pool != nil) the use cases publish into the
-//     transactional outbox (ADR-0016): both Kafka publishers act only as
-//     Encoders inside the use case's transaction, and the relay (when
-//     RunRelay) forwards the stored rows to Kafka. The store and the
-//     topics can no longer diverge.
-//   - with in-memory adapters (pool == nil) events go straight to the
-//     broker through MultiPublisher — there is no transaction to bind
-//     them to.
-func BuildEventPublisher(cfg PublisherConfig, pool *pgxpool.Pool, shiftPlans ports.ShiftPlanRepo, logger *slog.Logger) (Built, error) {
-	switch cfg.Kind {
-	case "", LogPublisher:
-		logger.Info("event publisher configured", "publisher", "log")
-		return Built{Publisher: events.NewLogPublisher(logger), Close: func() {}}, nil
-	case KafkaPublisher:
-	default:
-		return Built{}, fmt.Errorf("unknown EVENT_PUBLISHER %q (want kafka or log)", cfg.Kind)
-	}
+// Boot errors of the publisher wiring. Each names its variable.
+var (
+	errNoPool    = fmt.Errorf("event publisher cannot be built (events leave only through the transactional outbox): %w", ErrNoDatabase)
+	errNoBrokers = fmt.Errorf("event publisher cannot be built: %w", ErrNoBrokers)
+)
 
+// BuildEventPublisher wires the outbound event publisher: always the
+// transactional outbox (ADR-0016) over Postgres. Every domain event is fanned
+// to BOTH the integration topic and the analytics topic (ADR-0010), always as
+// CloudEvents 1.0 structured-mode messages: both Kafka publishers act only as
+// Encoders inside the use case's transaction, and the relay (when RunRelay)
+// forwards the stored rows to Kafka, so the store and the topics can no longer
+// diverge. A nil pool or an empty broker list is an error, never a fallback.
+func BuildEventPublisher(cfg PublisherConfig, pool *pgxpool.Pool, shiftPlans ports.ShiftPlanRepo, logger *slog.Logger) (Built, error) {
 	if pool == nil {
-		integration := outboundkafka.NewPublisher(cfg.Brokers, shiftPlans)
-		analytics := outboundkafka.NewAnalyticsPublisher(cfg.Brokers, outboundkafka.NewEventID)
-		logger.Info("event publisher configured", "publisher", "kafka", "mode", "direct",
-			"brokers", cfg.Brokers, "topic", outboundkafka.Topic, "analytics_topic", outboundkafka.AnalyticsTopic)
-		return Built{
-			Publisher: events.NewMultiPublisher(integration, analytics),
-			Close: func() {
-				if err := integration.Close(); err != nil {
-					logger.Error("kafka publisher close failed", "error", err)
-				}
-				if err := analytics.Close(); err != nil {
-					logger.Error("kafka analytics publisher close failed", "error", err)
-				}
-			},
-		}, nil
+		return Built{}, errNoPool
+	}
+	if len(cfg.Brokers) == 0 {
+		return Built{}, errNoBrokers
 	}
 
 	// Encoders only: no writer is ever opened for them.
