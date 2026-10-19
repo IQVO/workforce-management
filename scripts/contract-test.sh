@@ -10,18 +10,24 @@
 # Schemathesis version, same flags — so a local pass means a CI pass.
 #
 # Unlike inventory-storage (in-memory contract runs), this service has no
-# in-memory mode: cmd/workforce requires DATABASE_URL (it migrates and
-# serves from Postgres). CI provides a postgres:16 service container; for
-# a local run, start a disposable one first (the exact line this script
-# was verified against):
+# in-memory mode (ADR-0038): cmd/workforce requires DATABASE_URL (it migrates
+# and serves from Postgres) AND KAFKA_BROKERS (outbox relay, process-path
+# catalogue consumer, /readyz). CI provides a postgres:16 and a Kafka service
+# container; for a local run, start disposable ones first (the exact lines
+# this script was verified against; the broker must advertise the address
+# you pass in KAFKA_BROKERS):
 #
 #   docker run -d --rm --name wf-contract-pg -p 18097:5432 \
 #     -e POSTGRES_USER=workforce -e POSTGRES_PASSWORD=workforce \
 #     -e POSTGRES_DB=workforce postgres:16
+#   docker run -d --rm --name wf-contract-kafka -p 19092:9092 \
+#     -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:29092,PLAINTEXT_HOST://localhost:19092 \
+#     confluentinc/confluent-local:7.6.1
 #   export DATABASE_URL='postgres://workforce:workforce@localhost:18097/workforce?sslmode=disable'
+#   export KAFKA_BROKERS='localhost:19092'
 #
 # (credentials/URL shape mirror docker-compose.yml and the CI
-# `integration` job's postgres service).
+# `contract` job's postgres service).
 #
 # Requires `st` on PATH:
 #   python3 -m pip install --user 'schemathesis==4.28.0'
@@ -50,39 +56,39 @@ if [ -z "${DATABASE_URL:-}" ]; then
   exit 1
 fi
 
+if [ -z "${KAFKA_BROKERS:-}" ]; then
+  echo "KAFKA_BROKERS is not set — this service has no log sink and no optional relay"
+  echo "(cmd/workforce requires a real Kafka broker; /readyz depends on it)."
+  echo "Start a disposable one and export KAFKA_BROKERS, e.g.:"
+  echo "  docker run -d --rm --name wf-contract-kafka -p 19092:9092 \\"
+  echo "    -e KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://localhost:29092,PLAINTEXT_HOST://localhost:19092 \\"
+  echo "    confluentinc/confluent-local:7.6.1"
+  echo "  export KAFKA_BROKERS='localhost:19092'"
+  exit 1
+fi
+
 cd "$(dirname "$0")/.."
 BIN="$(mktemp -d)/workforce"
 go build -o "$BIN" ./cmd/workforce
 
-# The service refuses to boot without a process-path catalogue (ADR-0013;
-# the default /etc/workforce-management/process-paths.yaml never exists on
-# a laptop or CI runner). Use the quickstart's documented minimal
-# equivalent of warehouse-infra's config/process-paths/sortable-fc.yaml
-# (docs/docs/overview/quickstart.md) so the run is self-contained.
-CATALOGUE="$(mktemp -d)/process-paths.yaml"
-cat > "$CATALOGUE" <<'EOF'
-building: local
-paths:
-  - id: PACK
-    matchPrefix: pack
-    requiredCapabilities: [pack]
-  - id: PICK
-    matchPrefix: pick
-    requiredCapabilities: [pick]
-EOF
-
-HTTP_ADDR="127.0.0.1:${PORT}" PATH_CATALOGUE_FILE="$CATALOGUE" "$BIN" &
+# The process-path catalogue (ADR-0013) is replayed from the fleet's Kafka
+# topic; this hermetic broker holds no ProcessPathCreated event, so the
+# catalogue is empty for the whole run. That is what the operations excluded
+# below already assumed (see the exclusions), and the boot does not wait for
+# a non-empty catalogue.
+LOG_LEVEL="${LOG_LEVEL:-warn}" HTTP_ADDR="127.0.0.1:${PORT}" "$BIN" &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 
-# Wait for the server to report healthy (up to ~10s).
-for _ in $(seq 1 50); do
-  if curl -sf "${BASE_URL}/healthz" >/dev/null 2>&1; then
+# Wait for /readyz: it is 200 only while Postgres answers a ping AND the
+# broker answers a metadata request (up to ~60s: migrations + broker).
+for _ in $(seq 1 300); do
+  if curl -sf "${BASE_URL}/readyz" >/dev/null 2>&1; then
     break
   fi
   sleep 0.2
 done
-curl -sf "${BASE_URL}/healthz" >/dev/null # fail loudly if it never came up
+curl -sf "${BASE_URL}/readyz" >/dev/null # fail loudly if it never became ready
 
 # Exclusions — each names where the excluded behavior IS otherwise tested:
 #
