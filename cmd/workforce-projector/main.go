@@ -27,12 +27,48 @@ import (
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
+	"github.com/claudioed/workforce-management/internal/composition"
 )
 
-// errMissingAnalyticsURL is returned when ANALYTICS_DATABASE_URL is unset: the
-// projector is the writer of the analytical database and cannot start without
-// it.
-var errMissingAnalyticsURL = errors.New("ANALYTICS_DATABASE_URL is required")
+// Boot errors of the projector's mandatory configuration. Each names its
+// variable (ADR-0038): the projector writes only to the analytical database
+// and consumes only from real Kafka, with no default behind either.
+var (
+	errMissingAnalyticsURL = errors.New("ANALYTICS_DATABASE_URL is required: the projector writes only to the analytical database")
+	errMissingBrokers      = errors.New("KAFKA_BROKERS is required: the projector consumes the analytics topic")
+	errMissingGroup        = errors.New("ANALYTICS_CONSUMER_GROUP is required: a stable Kafka group id for the projector; there is no default")
+)
+
+// config is the validated mandatory environment of the projector.
+type config struct {
+	analyticsURL string
+	brokers      []string
+	group        string
+}
+
+// loadConfig reads and validates the mandatory environment through getenv
+// (os.Getenv in main). Every problem is reported at once.
+func loadConfig(getenv func(string) string) (config, error) {
+	c := config{
+		analyticsURL: getenv("ANALYTICS_DATABASE_URL"),
+		brokers:      composition.ParseBrokers(getenv("KAFKA_BROKERS")),
+		group:        getenv("ANALYTICS_CONSUMER_GROUP"),
+	}
+	var errs []error
+	if c.analyticsURL == "" {
+		errs = append(errs, errMissingAnalyticsURL)
+	}
+	if len(c.brokers) == 0 {
+		errs = append(errs, errMissingBrokers)
+	}
+	if c.group == "" {
+		errs = append(errs, errMissingGroup)
+	}
+	if err := errors.Join(errs...); err != nil {
+		return config{}, err
+	}
+	return c, nil
+}
 
 func main() {
 	if err := run(); err != nil {
@@ -93,10 +129,10 @@ func openAnalyticsPool(ctx context.Context, logger *slog.Logger, analyticsURL, m
 // idempotent Postgres projection, the consumed-events dedupe repo, and the
 // Kafka consumer reading the analytics topic under the analytics consumer
 // group.
-func newAnalyticsPipeline(pool *pgxpool.Pool, brokers []string, logger *slog.Logger) *inboundkafka.AnalyticsConsumer {
+func newAnalyticsPipeline(pool *pgxpool.Pool, brokers []string, group string, logger *slog.Logger) *inboundkafka.AnalyticsConsumer {
 	projection := analyticsstore.NewPostgresProjection(pool)
 	consumed := analyticsstore.NewConsumedEventsRepo(pool)
-	return inboundkafka.NewAnalyticsConsumer(brokers, outboundkafka.AnalyticsTopic, projection, consumed, logger)
+	return inboundkafka.NewAnalyticsConsumer(brokers, outboundkafka.AnalyticsTopic, group, projection, consumed, logger)
 }
 
 // newAdminServer builds the projector's admin server: only a /healthz on
@@ -118,14 +154,16 @@ func run() error {
 	slog.SetDefault(logger)
 
 	rootCtx := context.Background()
+	// Fail fast, before telemetry, any connection and the admin listener.
+	cfg, err := loadConfig(os.Getenv)
+	if err != nil {
+		return err
+	}
 	defer setupTelemetry(rootCtx, logger)()
 
 	adminAddr := getenv("ADMIN_ADDR", ":8091")
-	analyticsURL := os.Getenv("ANALYTICS_DATABASE_URL")
-	if analyticsURL == "" {
-		return errMissingAnalyticsURL
-	}
-	kafkaBrokers := strings.Split(getenv("KAFKA_BROKERS", "localhost:9092"), ",")
+	analyticsURL := cfg.analyticsURL
+	kafkaBrokers := cfg.brokers
 	migrationsPath := getenv("ANALYTICS_MIGRATIONS_PATH", "migrations/analytics")
 
 	pool, err := openAnalyticsPool(rootCtx, logger, analyticsURL, migrationsPath)
@@ -137,7 +175,7 @@ func run() error {
 		logger.Error("analytics pgxpool metrics unavailable", "error", err)
 	}
 
-	consumer := newAnalyticsPipeline(pool, kafkaBrokers, logger)
+	consumer := newAnalyticsPipeline(pool, kafkaBrokers, cfg.group, logger)
 	defer func() { _ = consumer.Close() }()
 
 	srv := newAdminServer(adminAddr)
@@ -152,7 +190,7 @@ func run() error {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 
-	logger.Info("analytics consumer starting", "topic", outboundkafka.AnalyticsTopic, "group", inboundkafka.AnalyticsConsumerGroup, "brokers", kafkaBrokers)
+	logger.Info("analytics consumer starting", "topic", outboundkafka.AnalyticsTopic, "group", cfg.group, "brokers", kafkaBrokers)
 	consumerErr := superviseConsumer(consumer.Run, stop)
 	if consumerErr != nil {
 		logger.Error("analytics consumer stopped; exiting so the pod restarts", "error", consumerErr)

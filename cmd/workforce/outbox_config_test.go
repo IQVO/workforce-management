@@ -37,11 +37,16 @@ func TestOutboxMaxAttemptsFromEnv(t *testing.T) {
 // shared composition (which passes it to the relay as WithMaxAttempts).
 func TestPublisherConfigFromEnv_CarriesTheOutboxCap(t *testing.T) {
 	t.Setenv(outboxMaxAttemptsEnv, "")
-	if got := publisherConfigFromEnv().MaxAttempts; got != 20 {
+	brokers := []string{"b:9092"}
+	if got := publisherConfigFromEnv(brokers).MaxAttempts; got != 20 {
 		t.Fatalf("default MaxAttempts = %d, want 20", got)
 	}
 	t.Setenv(outboxMaxAttemptsEnv, "3")
-	if got := publisherConfigFromEnv().MaxAttempts; got != 3 {
-		t.Fatalf("MaxAttempts = %d, want 3 from OUTBOX_MAX_ATTEMPTS", got)
+	cfg := publisherConfigFromEnv(brokers)
+	if cfg.MaxAttempts != 3 {
+		t.Fatalf("MaxAttempts = %d, want 3 from OUTBOX_MAX_ATTEMPTS", cfg.MaxAttempts)
+	}
+	if !cfg.RunRelay || len(cfg.Brokers) != 1 {
+		t.Fatalf("cmd/workforce always runs the relay on the given brokers, got %+v", cfg)
 	}
 }
