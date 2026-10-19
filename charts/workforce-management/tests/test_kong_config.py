@@ -77,7 +77,7 @@ def main() -> int:
     failures: list[str] = []
 
     # 1. Defaults render zero Kong objects.
-    default_docs = render(["--set", "database.url=postgres://user:pass@localhost:5432/db"])
+    default_docs = render(["--set", "kafka.brokers=dummy:9092", "--set", "database.url=postgres://user:pass@localhost:5432/db"])
     kong_docs = [d for d in default_docs if "Kong" in (d.get("kind") or "")]
     if kong_docs:
         failures.append(
