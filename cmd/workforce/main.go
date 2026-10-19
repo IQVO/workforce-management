@@ -118,13 +118,7 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	defer func() {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := shutdownTelemetry(shutdownCtx); err != nil {
-			logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
-		}
-	}()
+	defer flushTelemetry(logger, shutdownTelemetry)
 
 	breakerMetrics := newBreakerMetrics(logger)
 
@@ -206,6 +200,15 @@ func run(ctx context.Context) error {
 	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate)
 
 	return serveWorkforce(ctx, logger, settings.httpAddr, server, readiness, repos.relay, stopConsumers, stopSweeper)
+}
+
+// flushTelemetry flushes the telemetry providers within a bound on the way out.
+func flushTelemetry(logger *slog.Logger, shutdown func(context.Context) error) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := shutdown(shutdownCtx); err != nil {
+		logger.Warn("telemetry shutdown did not flush cleanly", "error", err)
+	}
 }
 
 // buildReadiness makes /readyz real: the drain gate AND a Postgres ping AND a
