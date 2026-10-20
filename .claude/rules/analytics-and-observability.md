@@ -17,7 +17,7 @@ depend on it.)
 
 - Events are fanned to a SEPARATE topic `warehouse.workforce.analytics` by
   the outbound Kafka adapter; the integration topic/publisher are untouched.
-  Selected by `EVENT_PUBLISHER=kafka` (fan-out alongside the integration
+  Always on (ADR-0038; fan-out alongside the integration
   publisher, same transactional-outbox delivery as rules/integrations.md).
 - Separate analytical Postgres (`ANALYTICS_DATABASE_URL`), own migrations
   (`migrations/analytics/`), read-only reader role for `workforce-reports`.
@@ -37,11 +37,11 @@ depend on it.)
 
 ```bash
 # 2. OLTP fanning events onto the analytics topic
-export EVENT_PUBLISHER=kafka KAFKA_BROKERS=localhost:9092
+export DATABASE_URL="postgres://workforce:***@localhost:5432/workforce?sslmode=disable" KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce
 
 # 3. Projector (only writer of the analytical DB)
-export ANALYTICS_DATABASE_URL="postgres://workforce:***@localhost:5432/workforce_analytics?sslmode=disable"
+export ANALYTICS_DATABASE_URL="postgres://workforce:***@localhost:5432/workforce_analytics?sslmode=disable" ANALYTICS_CONSUMER_GROUP=workforce-analytics
 go run ./cmd/workforce-projector
 
 # 4. Reports (read-only)
@@ -89,7 +89,7 @@ enforced by `TestSetupDoesNotBlockWithoutACollector`, not just convention.
 |---|---|
 | Traces | one server span per HTTP request, named by **route pattern** (`POST /associates/{id}/assignments`), not raw path — bounds span-name cardinality |
 | Traces | a client child span per Postgres round-trip via `otelpgx`, carrying **parameterized** SQL only (never literal values) |
-| Traces | with `EVENT_PUBLISHER=kafka`, W3C trace context is captured into each outbox row's headers when the event is raised; the relay's `kafka.publish outbox` producer span forwards those headers untouched, so a consumer's span parents onto the originating request's trace (ADR-0016) |
+| Traces | W3C trace context is captured into each outbox row's headers when the event is raised; the relay's `kafka.publish outbox` producer span forwards those headers untouched, so a consumer's span parents onto the originating request's trace (ADR-0016) |
 | Metrics | `http.server.request.duration` (histogram, seconds, OTel HTTP semconv) |
 | Metrics | `workforce.labor_assignments` (counter) — every `AssignLabor` attempt, attributed `workforce.assignment.outcome=accepted\|rejected`, `workforce.path.id`, and on rejection `workforce.assignment.reason` (`uncertified`, `on_break`, `shift_ended`, `max_hours_exceeded`, `associate_not_found`, `internal_error`) |
 | Metrics | Go runtime metrics (goroutines, GC, memory) |

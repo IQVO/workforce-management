@@ -1,4 +1,4 @@
-{{- include "workforce-management.requireDatabase" . -}}
+{{- include "workforce-management.requireRealRuntime" . -}}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,9 +18,6 @@ spec:
     metadata:
       annotations:
         checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
-        {{- if .Values.pathCatalogue.enabled }}
-        checksum/path-catalogue: {{ .Values.pathCatalogue.content | sha256sum }}
-        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -107,10 +104,11 @@ spec:
             {{- end }}
             - name: LOG_LEVEL
               value: {{ .Values.logLevel | quote }}
-            {{- if .Values.kafka.enabled }}
+            # KAFKA_BROKERS is mandatory and always rendered (ADR-0038): the
+            # service runs on real Kafka only; kafka.enabled is no longer a
+            # switch.
             - name: KAFKA_BROKERS
               value: {{ .Values.kafka.brokers | quote }}
-            {{- end }}
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}
@@ -121,19 +119,9 @@ spec:
             - name: ENVIRONMENT
               value: {{ .Values.environment | quote }}
             {{- end }}
-            {{- if .Values.pathCatalogue.enabled }}
-            - name: PATH_CATALOGUE_FILE
-              value: {{ .Values.pathCatalogue.mountPath }}/process-paths.yaml
-            {{- end }}
             {{- range .Values.extraEnv }}
             - {{ toYaml . | nindent 14 | trim }}
             {{- end }}
-          {{- if .Values.pathCatalogue.enabled }}
-          volumeMounts:
-            - name: path-catalogue
-              mountPath: {{ .Values.pathCatalogue.mountPath }}
-              readOnly: true
-          {{- end }}
           {{- with .Values.startupProbe }}
           startupProbe:
             {{- toYaml . | nindent 12 }}
@@ -148,12 +136,6 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-      {{- if .Values.pathCatalogue.enabled }}
-      volumes:
-        - name: path-catalogue
-          configMap:
-            name: {{ .Values.pathCatalogue.existingConfigMap | default (printf "%s-path-catalogue" (include "workforce-management.fullname" .)) }}
-      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

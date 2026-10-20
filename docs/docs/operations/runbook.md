@@ -32,8 +32,14 @@ through Kong (see the `frontend:` comment in `values.yaml`). REST and MCP are
 unauthenticated.
 
 The chart refuses to render without `database.url` or
-`database.existingSecret` (`workforce-management.requireDatabase`), because
-`cmd/workforce` exits at once without `DATABASE_URL`.
+`database.existingSecret` (`workforce-management.requireDatabase`) and without
+`kafka.brokers` (`workforce-management.requireKafka`), because `cmd/workforce`
+and `cmd/mcp` exit at once without `DATABASE_URL` and `KAFKA_BROKERS`
+([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)). The same
+`requireRealRuntime` gate also refuses `config.eventPublisher` other than
+`kafka`, `kafka.enabled=false`, `pathCatalogue.enabled=true`, a
+`terminationGracePeriodSeconds` under 25, retired-mode `extraEnv` entries, and
+`analytics.enabled` without a DSN source or `analytics.projector.consumerGroup`.
 
 ### What the chart templates, and what needs `extraEnv`
 
@@ -42,8 +48,7 @@ The chart refuses to render without `database.url` or
 housekeeping variables, `SHUTDOWN_DRAIN_DELAY`, `INSTALLED_CAPACITY_MODE`
 (default `http`), `FULFILLMENT_EXECUTION_BASE_URL` (default
 `http://fulfillment-execution.<release namespace>.svc.cluster.local:80`; both
-gap fix D24) and (with `kafka.enabled`)
-`KAFKA_BROKERS` from `config.*`, and the api Deployment mounts it with
+gap fix D24) and `KAFKA_BROKERS` from `config.*` / `kafka.brokers`, and the api Deployment mounts it with
 `envFrom` (gap fix D14, 2026-10-12; the full key table is in
 [Configuration](./configuration.md#how-the-helm-chart-delivers-cmdworkforces-variables)).
 Changing a `config.*` value takes effect on the next rollout: the
@@ -51,10 +56,12 @@ Changing a `config.*` value takes effect on the next rollout: the
 `HTTP_ADDR`, `EVENT_PUBLISHER`, `MIGRATIONS_PATH`, `MAX_HOURS_PER_SHIFT`, the
 housekeeping variables, `SHUTDOWN_DRAIN_DELAY`, `DATABASE_URL`,
 `MIGRATIONS_DATABASE_URL` (secret key, `optional: true`), `LOG_LEVEL`,
-`KAFKA_BROKERS` (only when `kafka.enabled`), the OTel variables (when
-`otel.enabled`) and `PATH_CATALOGUE_FILE` (when `pathCatalogue.enabled`) as
+`KAFKA_BROKERS` (always), and the OTel variables (when
+`otel.enabled`) as
 explicit `env`, which wins over the ConfigMap for the same key. The projector,
-reports and MCP Deployments do not mount the ConfigMap.
+reports and MCP Deployments do not mount the ConfigMap (the projector gets
+`KAFKA_BROKERS` and `ANALYTICS_CONSUMER_GROUP`, the MCP Deployment
+`KAFKA_BROKERS` and `EVENT_PUBLISHER`).
 `charts/workforce-management/tests/render_test.sh` (CI job `chart-tests`)
 fails if the mount disappears. These must come through `extraEnv`:
 
@@ -64,8 +71,11 @@ fails if the mount disappears. These must come through `extraEnv`:
   `extraEnv` entry, which wins) when fulfillment-execution lives elsewhere.
   With `permissive`, **every `CommitShiftPlan` fails** with
   `503 installed-capacity-unavailable`.
-- `LABOR_PERFORMANCE_MODE` and `LABOR_PERFORMANCE_BASE_URL`, when you want a measured-rate feed.
-- `PATH_CATALOGUE_SOURCE=kafka`, to replay the catalogue from Kafka instead of the mounted file.
+- Nothing for the catalogue or the measured-rate feed: `PATH_CATALOGUE_SOURCE`
+  (`kafka`) and `LABOR_PERFORMANCE_MODE` (`kafka-cache`) are the binary's
+  defaults. warehouse-infra still sets both explicitly, which the chart
+  accepts; `LABOR_PERFORMANCE_MODE=http` plus `LABOR_PERFORMANCE_BASE_URL` is
+  the REST rollback.
 - `IDLE_SHARE_TRIM_THRESHOLD` and `CORS_ALLOWED_ORIGINS`.
 
 `extraEnv` is also rendered into the MCP Deployment.
@@ -74,17 +84,22 @@ fails if the mount disappears. These must come through `extraEnv`:
 
 `cmd/workforce` boots in this order (`cmd/workforce/main.go` `run`):
 
-1. Telemetry (non-blocking; a missing collector only drops data).
-2. The process-path catalogue. With `file`, the YAML is loaded and validated. With `kafka`, the compacted `warehouse.process-path-management.events` topic is replayed up to its current high-water mark, waiting at most 60 s. Failure stops the boot.
-3. Migrations on `MIGRATIONS_DATABASE_URL`, then the pgxpool on `DATABASE_URL`. Each step runs under `bootretry`: 5 attempts, 15 s of total backoff.
-4. With `LABOR_PERFORMANCE_MODE=kafka-cache`: replay of `warehouse.labor-performance.events`, waiting at most 60 s.
-5. The housekeeping sweeper starts, then the HTTP listener and, in kafka mode, the outbox relay.
+1. `loadBootConfig`: `DATABASE_URL`, `KAFKA_BROKERS` and the mode variables are validated; any problem is a boot error naming its variable, before telemetry, any connection and the listener ([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)).
+2. Telemetry (non-blocking; a missing collector only drops data).
+3. The process-path catalogue: the compacted `warehouse.process-path-management.events` topic is replayed up to its current high-water mark, waiting at most 60 s. Failure stops the boot.
+4. Migrations on `MIGRATIONS_DATABASE_URL`, then the pgxpool on `DATABASE_URL`. Each step runs under `bootretry`: 5 attempts, 15 s of total backoff.
+5. With `LABOR_PERFORMANCE_MODE=kafka-cache` (the default): replay of `warehouse.labor-performance.events`, waiting at most 60 s. The boot then logs `kafka topics` with the topics it produces to and consumes from (it creates none).
+6. The housekeeping sweeper starts, then the HTTP listener and the outbox relay (always on).
 
-**`/readyz` does not wait for any dependency.** It returns `200 {"status":"ready"}` as soon as the
-listener is up, and the listener only starts after steps 2 to 4 have
-succeeded. `/readyz` turns to `503 {"status":"not_ready"}` at exactly one
-point: the first step of graceful shutdown. `/healthz` is pure liveness and is
-never flipped. The other three binaries have only `/healthz`.
+**`/readyz` waits for the dependencies.** It returns `200 {"status":"ready"}` only
+while the drain gate is open AND Postgres answers a ping AND a Kafka broker
+answers a metadata request (topics are never required). The verdict is cached
+3 s and each check is bounded to 2 s. A failed dependency is a `503`
+`dependency-unavailable` problem naming `postgres` and/or `kafka`, and a WARN
+`readiness: dependency is not ready` in the log; during graceful shutdown it is
+`503 {"status":"not_ready"}`. `/healthz` is pure liveness and is never flipped,
+so a dependency outage takes pods out of the Service without restarting them.
+The other three binaries have only `/healthz`.
 
 The startup probe allows 30 × 2 s = 60 s before liveness takes over. A cold
 start that needs the full boot-retry budget twice (migrations, then the pool)
@@ -142,15 +157,15 @@ There is no binary-mode toggle.
 | `warehouse.workforce.analytics` | produce | same as above | n/a | Analytics fan-out of every domain event ([ADR 0010](../adr/0010-analytical-data-product.md)). |
 | `warehouse.workforce.analytics` | consume | `cmd/workforce-projector` | `workforce-analytics` (stable, shared) | Idempotent on the CloudEvents `id` (`analytics_consumed_events`). |
 | `warehouse.workforce.analytics.dlq` | produce | `cmd/workforce-projector` | n/a | Poison messages, see below. Auto-created on first write. |
-| `warehouse.process-path-management.events` | consume | `cmd/workforce`, `cmd/mcp` when `PATH_CATALOGUE_SOURCE=kafka` | `workforce-management-process-path-catalogue-<host>-<pid>-<ns>` (unique per process) | Full replay from the first offset on every start. No DLQ: an invalid CloudEvent is logged at WARN and skipped. |
-| `warehouse.labor-performance.events` | consume | `cmd/workforce` when `LABOR_PERFORMANCE_MODE=kafka-cache` | `workforce-management-labor-performance-cache-<host>-<pid>-<ns>` (unique per process) | Same replay and skip behaviour. Feeds the measured rate and the idle-share signal. |
+| `warehouse.process-path-management.events` | consume | `cmd/workforce`, `cmd/mcp` | `workforce-management-process-path-catalogue-<host>-<pid>-<ns>` (unique per process) | Full replay from the first offset on every start. No DLQ: an invalid CloudEvent is logged at WARN and skipped. |
+| `warehouse.labor-performance.events` | consume | `cmd/workforce` when `LABOR_PERFORMANCE_MODE=kafka-cache` (the default) | `workforce-management-labor-performance-cache-<host>-<pid>-<ns>` (unique per process) | Same replay and skip behaviour. Feeds the measured rate and the idle-share signal. |
 
 ### Outbox relay
 
-With `EVENT_PUBLISHER=kafka` and Postgres, every use case writes its events
+Every use case writes its events
 into `outbox_events` in the same transaction as its state change (two rows
 per event, one per topic) ([ADR 0016](../adr/0016-transactional-outbox.md)).
-Only `cmd/workforce` runs the relay (`internal/adapters/outbound/postgres/outbox_relay.go`):
+Only `cmd/workforce` runs the relay, and it is always on (`internal/adapters/outbound/postgres/outbox_relay.go`):
 
 - Each pass claims up to 100 unpublished rows (`FOR UPDATE SKIP LOCKED`, so overlapping pods during a rollout never double-send) and sends them one at a time in `id` order.
 - After a full batch the next pass starts at once. After a partial or empty one the relay sleeps `OUTBOX_RELAY_INTERVAL` (1 s).
@@ -209,7 +224,7 @@ the replica maximum when you size PgBouncer or `max_connections`.
 | Re-send already-published events | `UPDATE outbox_events SET published_at = NULL WHERE id BETWEEN … ;` while the rows are still inside `OUTBOX_RETENTION`. Consumers must dedupe on the CloudEvents `id`; the projector does. |
 | Replay the analytics projection | Stop the projector, reset group `workforce-analytics` on `warehouse.workforce.analytics` (`kafka-consumer-groups.sh --reset-offsets --to-earliest --execute`), restart. Already-applied ids are skipped through `analytics_consumed_events`. To rebuild from scratch, truncate the analytical tables first. |
 | Reprocess the analytics DLQ | Read `warehouse.workforce.analytics.dlq`, fix the cause, and produce the original payload back onto `warehouse.workforce.analytics`. There is no tooling in this repo for it. |
-| Refresh the process-path catalogue | `file` source: update the ConfigMap (`pathCatalogue.content` or `existingConfigMap`). The pod template's `checksum/path-catalogue` annotation rolls the Deployment when `content` changes. With `existingConfigMap`, restart by hand. `kafka` source: the catalogue keeps consuming at runtime. |
+| Refresh the process-path catalogue | Nothing to do: the catalogue consumer keeps consuming `warehouse.process-path-management.events` at runtime (the file source and its ConfigMap were removed, [ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)). A restart replays the topic from the first offset. |
 | Rotate database credentials | Update the Secret (`database.existingSecret`, keys `DATABASE_URL` and `MIGRATIONS_DATABASE_URL`; the analytics Secret's `ANALYTICS_DATABASE_URL` / `ANALYTICS_READER_DATABASE_URL`), then `kubectl rollout restart` the Deployments. DSNs are read only at boot. |
 | Disable housekeeping temporarily | Set `config.housekeepingInterval: "0"` and roll. |
 

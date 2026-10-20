@@ -8,27 +8,28 @@ description: The topics this service publishes and consumes, its two synchronous
 
 # Integration
 
-One integration topic out (plus a separate analytics topic). Up to two topics
-in and up to two synchronous calls to siblings, each selected by an env var
-and off by default. The table below lists every edge in
+One integration topic out (plus a separate analytics topic). Two topics in and
+up to two synchronous calls to siblings. Postgres and Kafka are mandatory
+([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)); only the
+two REST edges are selected by an env var. The table below lists every edge in
 `cmd/workforce/main.go`.
 
 | Direction | Counterpart | Mechanism | Selected by | Default |
 | --- | --- | --- | --- | --- |
-| Out | `wes-work-planning`, `warehouse-planning` | Kafka `warehouse.workforce.events` (`ShiftPlanCommitted`) | `EVENT_PUBLISHER=kafka` | `log` (no broker) |
-| Out | own analytics projector | Kafka `warehouse.workforce.analytics` (every domain event) | `EVENT_PUBLISHER=kafka` | `log` |
-| In (sync) | `fulfillment-execution` | `GET /capacity/{capability}` on every `CommitShiftPlan` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) | `INSTALLED_CAPACITY_MODE=http` + `FULFILLMENT_EXECUTION_BASE_URL` | binary: `permissive` = **every commit fails with 503**; Helm chart: `http` against `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` (gap fix D24) |
-| In (sync) | `labor-performance` | `GET /task-types/{taskType}/performance` when `ProposePathPlan` has no caller rate ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)) | `LABOR_PERFORMANCE_MODE=http` + `LABOR_PERFORMANCE_BASE_URL` | `permissive` = no measured rate (fail-open) |
-| In (async) | `labor-performance` | Kafka `warehouse.labor-performance.events` (`TaskPerformanceRecorded`) into an in-memory cache ([ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)) | `LABOR_PERFORMANCE_MODE=kafka-cache` + `KAFKA_BROKERS` | off |
-| In (async) | `process-path-management` | Kafka `warehouse.process-path-management.events` (`ProcessPathCreated`/`Updated`/`Deactivated`) into the in-memory process-path catalogue | `PATH_CATALOGUE_SOURCE=kafka` + `KAFKA_BROKERS` | `file` (`PATH_CATALOGUE_FILE`) |
+| Out | `wes-work-planning`, `warehouse-planning` | Kafka `warehouse.workforce.events` (`ShiftPlanCommitted`), through the transactional outbox | always (`KAFKA_BROKERS` required) | n/a: there is no log-only publisher |
+| Out | own analytics projector | Kafka `warehouse.workforce.analytics` (every domain event), through the outbox | always | n/a |
+| In (sync) | `fulfillment-execution` | `GET /capacity/{capability}` on every `CommitShiftPlan` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) | `INSTALLED_CAPACITY_MODE=http` + `FULFILLMENT_EXECUTION_BASE_URL` | binary: `permissive` = **every commit fails with 503** (REST sync edge, out of scope of ADR 0038); Helm chart: `http` against `http://fulfillment-execution.<release namespace>.svc.cluster.local:80` (gap fix D24) |
+| In (sync) | `labor-performance` | `GET /task-types/{taskType}/performance` when `ProposePathPlan` has no caller rate ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)) | `LABOR_PERFORMANCE_MODE=http` + `LABOR_PERFORMANCE_BASE_URL` (REST rollback) | `kafka-cache`; `permissive` is a boot error |
+| In (async) | `labor-performance` | Kafka `warehouse.labor-performance.events` (`TaskPerformanceRecorded`) into an in-memory cache ([ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)) | `LABOR_PERFORMANCE_MODE=kafka-cache` | on |
+| In (async) | `process-path-management` | Kafka `warehouse.process-path-management.events` (`ProcessPathCreated`/`Updated`/`Deactivated`) into the in-memory process-path catalogue | always (`PATH_CATALOGUE_SOURCE` unset or `kafka`) | on; `file` is a boot error |
 
 The Helm chart defaults the installed-capacity edge to `http` against
 fulfillment-execution's in-cluster Service (`config.installedCapacityMode`,
 `config.fulfillmentExecutionBaseUrl`). The `warehouse-infra` kind cluster also
 sets `INSTALLED_CAPACITY_MODE=http` (through `extraEnv`, which wins over the
-chart ConfigMap) and `LABOR_PERFORMANCE_MODE=kafka-cache`, and sets `PATH_CATALOGUE_SOURCE=kafka`
-when its `deploy_process_path_kafka_source` flag is on. All of these edges are
-therefore live there.
+chart ConfigMap), `LABOR_PERFORMANCE_MODE=kafka-cache` and
+`PATH_CATALOGUE_SOURCE=kafka`, all of which the binary accepts. All of these
+edges are therefore live there.
 
 ## What is published
 
@@ -42,19 +43,18 @@ therefore live there.
 | **Adapter** | `internal/adapters/outbound/kafka/publisher.go` |
 | **Consumers** | `wes-work-planning`, into its `LaborPlanObserved` read model, keyed by `path_id`; `warehouse-planning`, whose labor-capacity consumer (group `warehouse-planning-labor-capacity`) registers it as a LABOR capacity constraint |
 
-## Selecting the publisher
+## The publisher
 
-The Kafka publisher is off by default. Both publishers implement the same
-`ports.EventPublisher` interface, so nothing above the adapter layer knows the
-difference.
+There is one publisher: the transactional outbox relay writes to Kafka
+(`internal/adapters/outbound/kafka`). There is no log-only publisher and no
+direct publish path ([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)).
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `EVENT_PUBLISHER` | `log` | `log` (in-memory/log publisher) or `kafka` |
-| `KAFKA_BROKERS` | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
+| `KAFKA_BROKERS` | none, **required** | comma-separated broker list; the service does not boot without it |
+| `EVENT_PUBLISHER` | `kafka` | kept for the chart and warehouse-infra: unset or `kafka`; `log` and anything else stop the boot |
 
-The default keeps local runs and the whole test suite free of any broker
-dependency.
+Local runs need a broker: `docker compose up -d --wait` starts one.
 
 ## The fan-out
 
@@ -122,13 +122,12 @@ Helpers live in one package, `internal/adapters/kafka/cloudevents`
 
 ## Smoke-testing the edge
 
-The fleet runs one shared Kafka broker: the in-cluster release in the
-`warehouse-infra` kind cluster, reachable from the host at `localhost:9092`.
-This repo's own `docker-compose.yml` only runs Postgres — do not add a broker
-to it.
+This repo's `docker-compose.yml` runs a Postgres 16 and a single-node Kafka
+(`docker compose up -d --wait`, broker on `localhost:9092`); the fleet's shared
+kind-cluster broker works too.
 
 ```bash
-export EVENT_PUBLISHER=kafka
+export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce
 
@@ -168,18 +167,18 @@ events.
 
 ## What is consumed
 
-Two sibling topics, both **opt-in** and both used only to build an in-memory
+Two sibling topics, both used only to build an in-memory
 cache that the `cmd/workforce` process rebuilds from the earliest offset on
-every start:
+every start (the catalogue always; the labor-performance cache unless the REST rollback is selected):
 
 - **`warehouse.process-path-management.events`**
-  (`internal/adapters/outbound/kafkacatalog`, `PATH_CATALOGUE_SOURCE=kafka`).
-  It replaces the boot-time `PATH_CATALOGUE_FILE` read. Path ids on propose,
+  (`internal/adapters/outbound/kafkacatalog`). It is the only catalogue
+  source (the boot-time `PATH_CATALOGUE_FILE` read was removed). Path ids on propose,
   commit, assign and staffing-gap requests are validated against this cache
   ([ADR 0013](../adr/0013-process-path-catalogue-validation.md)).
 - **`warehouse.labor-performance.events`**
   (`internal/adapters/outbound/laborperformancecache`,
-  `LABOR_PERFORMANCE_MODE=kafka-cache`). It supplies measured rates to
+  `LABOR_PERFORMANCE_MODE=kafka-cache`, the default). It supplies measured rates to
   `ProposePathPlan` and the observed idle share to `GetStaffingGap` and
   `ProposePathPlan`.
 

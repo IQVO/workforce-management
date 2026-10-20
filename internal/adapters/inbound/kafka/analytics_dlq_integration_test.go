@@ -149,7 +149,7 @@ func TestAnalyticsConsumer_PoisonMessage_GoesToDeadLetterTopicWithoutBlockingPar
 	processed := newFakeProcessedEvents()
 
 	consumer := inboundkafka.NewAnalyticsConsumer(
-		brokers, topic, projection, processed,
+		brokers, topic, "workforce-analytics-itest", projection, processed,
 		slog.New(slog.NewTextHandler(testWriter{t}, nil)),
 	)
 	defer func() { _ = consumer.Close() }()

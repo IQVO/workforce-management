@@ -65,7 +65,7 @@ Four feature files, mapped to the four named invariants and the read model:
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |
 
 Step definitions and the suite entry point (`TestFeatures`) live in
-`features_test.go` at the repo root. CI runs them as a dedicated blocking `bdd`
+`features/features_test.go` (not at the repo root, ADR 0038). CI runs them as a dedicated blocking `bdd`
 job.
 
 Scenarios assert on the **RFC 7807 problem type**, not on message prose:
