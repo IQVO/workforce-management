@@ -84,7 +84,9 @@ Messages worth searching for:
 | Message | Binary | Meaning |
 |---|---|---|
 | `retrying` (`op`, `attempt`, `in`, `err`) / `succeeded after retry` | all | Boot retry around the first Postgres or Kafka dial. |
-| `missing required env var` | workforce | `DATABASE_URL` unset. Exit 1. |
+| `service exited with error` with `invalid configuration: DATABASE_URL is required: …` / `KAFKA_BROKERS is required: …` | workforce, mcp | Mandatory configuration missing; every problem is listed at once. Exit 1 ([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)). |
+| `readiness: dependency is not ready` (`dependency` = `postgres` or `kafka`, `error`) at WARN | workforce | `/readyz` answers 503 `dependency-unavailable` until it recovers. |
+| `kafka topics` (`produces`, `consumes`) | workforce | The topics this process uses; it creates none (the broker auto-creates on first write). |
 | `fulfillment-execution installed capacity client configured` at WARN with `mode=permissive` | workforce | Every shift-plan commit will fail. |
 | `waiting for the process-path catalogue to replay …` / `process-path catalogue is ready` | workforce, mcp | Kafka catalogue boot gate. |
 | `outbox relay pass failed` | workforce | A relay pass hit an error. The row is retried next pass. |

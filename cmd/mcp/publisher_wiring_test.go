@@ -15,7 +15,6 @@ import (
 
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/events"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
-	"github.com/claudioed/workforce-management/internal/composition"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 )
 
@@ -59,31 +58,23 @@ func TestBuildDeps_SharesPublisherUnitOfWorkAndCatalogue(t *testing.T) {
 	}
 }
 
-// Without DATABASE_URL there is no pool and no UnitOfWork (in-memory mode).
-func TestNewRepos_InMemoryHasNoPoolOrUnitOfWork(t *testing.T) {
+// Without DATABASE_URL there is no in-memory repository to fall back to: the
+// error names the variable (ADR-0038).
+func TestNewRepos_RefusesAnEmptyDatabaseURL(t *testing.T) {
 	r, closeRepos, err := newRepos(context.Background(), quietLogger(), "", "", "")
-	if err != nil {
-		t.Fatalf("newRepos: %v", err)
+	if err == nil || !strings.Contains(err.Error(), "DATABASE_URL is required") {
+		t.Fatalf("newRepos with no DATABASE_URL = %v, want a boot error naming it", err)
 	}
-	defer closeRepos()
-	if r.pool != nil || r.uow != nil {
-		t.Errorf("in-memory repos must carry no pool/uow, got pool=%v uow=%v", r.pool, r.uow)
+	closeRepos()
+	if r.pool != nil || r.uow != nil || r.associates != nil {
+		t.Errorf("a refused newRepos must wire nothing, got %+v", r)
 	}
 }
 
 func TestPublisherConfigFromEnv(t *testing.T) {
-	t.Setenv("EVENT_PUBLISHER", "")
-	t.Setenv("KAFKA_BROKERS", "")
-	cfg := publisherConfigFromEnv()
-	if cfg.Kind != composition.LogPublisher || cfg.RunRelay {
-		t.Errorf("defaults = %+v, want log publisher and no relay", cfg)
-	}
-
-	t.Setenv("EVENT_PUBLISHER", "kafka")
-	t.Setenv("KAFKA_BROKERS", "a:9092,b:9092")
-	cfg = publisherConfigFromEnv()
-	if cfg.Kind != composition.KafkaPublisher || len(cfg.Brokers) != 2 || cfg.Brokers[1] != "b:9092" {
-		t.Errorf("kafka cfg = %+v", cfg)
+	cfg := publisherConfigFromEnv([]string{"a:9092", "b:9092"})
+	if len(cfg.Brokers) != 2 || cfg.Brokers[1] != "b:9092" {
+		t.Errorf("cfg = %+v", cfg)
 	}
 	if cfg.RunRelay {
 		t.Error("cmd/mcp must never run the outbox relay: only cmd/workforce drains outbox_events")
@@ -91,18 +82,9 @@ func TestPublisherConfigFromEnv(t *testing.T) {
 }
 
 func TestCatalogueConfigFromEnv(t *testing.T) {
-	t.Setenv("PATH_CATALOGUE_SOURCE", "")
-	t.Setenv("PATH_CATALOGUE_FILE", "")
-	cfg := catalogueConfigFromEnv()
-	if cfg.Source != composition.CatalogueFromFile || cfg.File != "/etc/workforce-management/process-paths.yaml" {
-		t.Errorf("defaults = %+v", cfg)
-	}
-	t.Setenv("PATH_CATALOGUE_SOURCE", "kafka")
-	t.Setenv("PATH_CATALOGUE_FILE", "/tmp/x.yaml")
-	t.Setenv("KAFKA_BROKERS", "k:9092")
-	cfg = catalogueConfigFromEnv()
-	if cfg.Source != composition.CatalogueFromKafka || cfg.File != "/tmp/x.yaml" || cfg.Brokers[0] != "k:9092" {
-		t.Errorf("overrides = %+v", cfg)
+	cfg := catalogueConfigFromEnv([]string{"k:9092"})
+	if len(cfg.Brokers) != 1 || cfg.Brokers[0] != "k:9092" {
+		t.Errorf("cfg = %+v", cfg)
 	}
 }
 

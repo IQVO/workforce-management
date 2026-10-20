@@ -175,7 +175,7 @@ path into `AssignLabor` and the per-associate events' flow into
 | One message per line | Policy | `kafka.Publisher.Encode` |
 | Close active assignment on shift end | Policy | `EndAssociateShift.Execute` |
 | Flag, never move | Policy | `shared.PathUnderstaffed` doc comment, [ADR 0002](../adr/0002-stop-at-the-path-boundary.md) |
-| Process-path catalogue | Read model | `pathcatalog.Catalogue`, `filecatalog` / `kafkacatalog` adapters |
+| Process-path catalogue | Read model | `pathcatalog.Catalogue`, `kafkacatalog` adapter |
 | `StaffingGap` | Read model | `usecases.StaffingGap` |
 | `labor_rollup` report | Read model | `migrations/analytics/0001_report.up.sql`, `GET /reports/labor` |
 | labor-performance, fulfillment-execution, wes-work-planning, warehouse-planning, warehouse-ops-agent | External system | `internal/adapters/outbound/{laborperformance,laborperformancecache,fulfillmentexecution}`; sibling consumers named in [Context map](../ecosystem/context-map.md) |

@@ -3,10 +3,30 @@
 // cases, and those to the inbound MCP adapter, then serves MCP over Streamable
 // HTTP. It is a second, independent deployable alongside cmd/workforce (the
 // HTTP service), per ADR-0008.
+//
+// Like cmd/workforce it runs on real Postgres and real Kafka only (ADR-0038):
+// there is no in-memory mode, no log publisher and no file catalogue. A
+// missing mandatory variable is a boot error naming it, raised before
+// telemetry, any connection and the listener. It never starts the outbox relay
+// (only cmd/workforce drains outbox_events) and writes only outbox rows, but
+// it needs Kafka to replay the process-path catalogue its tools validate
+// path ids against, so KAFKA_BROKERS is mandatory here too.
+//
+// Environment:
+//
+//	DATABASE_URL             REQUIRED. Postgres DSN
+//	KAFKA_BROKERS            REQUIRED. Comma-separated brokers
+//	MIGRATIONS_DATABASE_URL  direct DSN for the boot migrations (default DATABASE_URL)
+//	EVENT_PUBLISHER          kafka (default). log is REJECTED at boot
+//	PATH_CATALOGUE_SOURCE    kafka (default). file is REJECTED at boot
+//	MCP_ADDR                 listen address (default :8090)
+//	REPORTS_BASE_URL         optional: enables the get_workforce_labor_report tool
 package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -22,7 +42,6 @@ import (
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/bootretry"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
-	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/postgres"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/telemetry"
 	"github.com/claudioed/workforce-management/internal/application/ports"
@@ -62,8 +81,7 @@ func setupTelemetry(ctx context.Context, logger *slog.Logger) (string, func()) {
 }
 
 // repos bundles the persistence ports the MCP tools share. pool and uow are
-// nil in the in-memory configuration (no DATABASE_URL): the use cases then
-// run Save and Publish back to back (see ports.UnitOfWork).
+// always set: Postgres is the only runtime (ADR-0038).
 type repos struct {
 	associates  ports.AssociateRepo
 	shiftPlans  ports.ShiftPlanRepo
@@ -72,10 +90,41 @@ type repos struct {
 	uow         ports.UnitOfWork
 }
 
-// newRepos selects in-memory vs Postgres repos the same way the platform
-// does: no DATABASE_URL means local/in-memory adapters; a URL means migrate
-// then connect a pgx pool. The returned close func releases the pool when
-// one was opened.
+// bootConfig is the mandatory configuration of cmd/mcp: real Postgres and
+// real Kafka, with no default and no degraded mode behind any of it.
+type bootConfig struct {
+	databaseURL string
+	brokers     []string
+}
+
+// loadBootConfig reads and validates the mandatory environment. Every problem
+// is reported at once, each naming its variable, so the process fails fast at
+// boot, before telemetry, any connection and the listener.
+func loadBootConfig() (bootConfig, error) {
+	cfg := bootConfig{
+		databaseURL: os.Getenv("DATABASE_URL"),
+		brokers:     composition.ParseBrokers(os.Getenv("KAFKA_BROKERS")),
+	}
+	var errs []error
+	if cfg.databaseURL == "" {
+		errs = append(errs, composition.ErrNoDatabase)
+	}
+	if len(cfg.brokers) == 0 {
+		errs = append(errs, composition.ErrNoBrokers)
+	}
+	errs = append(errs,
+		composition.CheckEventPublisher(os.Getenv("EVENT_PUBLISHER")),
+		composition.CheckCatalogueSource(os.Getenv("PATH_CATALOGUE_SOURCE")),
+	)
+	if err := errors.Join(errs...); err != nil {
+		return bootConfig{}, fmt.Errorf("invalid configuration: %w", err)
+	}
+	return cfg, nil
+}
+
+// newRepos migrates then connects a pgx pool and wires the Postgres
+// repositories. An empty databaseURL is a boot error: there is no in-memory
+// fallback. The returned close func releases the pool.
 //
 // migrationsDatabaseURL is used ONLY for the golang-migrate step below —
 // the pgxpool opened just after it (databaseURL) is unchanged. See
@@ -85,13 +134,7 @@ type repos struct {
 // ported from order-management's ADR-0029).
 func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsDatabaseURL, migrationsPath string) (repos, func(), error) {
 	if databaseURL == "" {
-		logger.Info("database url not configured; using in-memory adapters")
-		associates := memory.NewAssociateRepo()
-		return repos{
-			associates:  associates,
-			shiftPlans:  memory.NewShiftPlanRepo(),
-			assignments: memory.NewAssignmentRepo().WithAssociates(associates),
-		}, func() {}, nil
+		return repos{}, func() {}, composition.ErrNoDatabase
 	}
 	// Retried: in this fleet EVERY injected pod's FIRST outbound TCP
 	// dial (here, Postgres) is reset ~10s after the app starts
@@ -121,27 +164,22 @@ func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsD
 	}, func() { pool.Close() }, nil
 }
 
-// publisherConfigFromEnv resolves EVENT_PUBLISHER, KAFKA_BROKERS and
-// OUTBOX_RELAY_INTERVAL for the shared composition.BuildEventPublisher.
-// RunRelay is false: only cmd/workforce drains outbox_events onto Kafka;
-// this process only inserts.
-func publisherConfigFromEnv() composition.PublisherConfig {
+// publisherConfigFromEnv builds the publisher settings for the shared
+// composition.BuildEventPublisher (KAFKA_BROKERS arrives validated). RunRelay
+// is false: only cmd/workforce drains outbox_events onto Kafka; this process
+// only inserts.
+func publisherConfigFromEnv(brokers []string) composition.PublisherConfig {
 	return composition.PublisherConfig{
-		Kind:     envOrDefault("EVENT_PUBLISHER", composition.LogPublisher),
-		Brokers:  strings.Split(envOrDefault("KAFKA_BROKERS", "localhost:9092"), ","),
+		Brokers:  brokers,
 		RunRelay: false,
 	}
 }
 
-// catalogueConfigFromEnv resolves the same PATH_CATALOGUE_* settings
-// cmd/workforce uses, so MCP tools validate path ids against the same
-// catalogue (ADR-0013).
-func catalogueConfigFromEnv() composition.CatalogueConfig {
-	return composition.CatalogueConfig{
-		Source:  envOrDefault("PATH_CATALOGUE_SOURCE", composition.CatalogueFromFile),
-		File:    envOrDefault("PATH_CATALOGUE_FILE", "/etc/workforce-management/process-paths.yaml"),
-		Brokers: strings.Split(os.Getenv("KAFKA_BROKERS"), ","),
-	}
+// catalogueConfigFromEnv builds the same catalogue settings cmd/workforce
+// uses, so MCP tools validate path ids against the same catalogue
+// (ADR-0013): replayed from Kafka (KAFKA_BROKERS arrives validated).
+func catalogueConfigFromEnv(brokers []string) composition.CatalogueConfig {
+	return composition.CatalogueConfig{Brokers: brokers}
 }
 
 // newLaborMetrics wires the SAME workforce.labor_assignments Tier-2 counter
@@ -200,12 +238,18 @@ func run() error {
 	logger := newLogger(envOrDefault("LOG_LEVEL", "info"))
 	slog.SetDefault(logger)
 
+	// Fail fast, before telemetry, any connection and the listener.
+	cfg, err := loadBootConfig()
+	if err != nil {
+		return err
+	}
+
 	ctx := context.Background()
 	serviceName, flushTelemetry := setupTelemetry(ctx, logger)
 	defer flushTelemetry()
 
 	httpAddr := envOrDefault("MCP_ADDR", ":8090")
-	databaseURL := os.Getenv("DATABASE_URL")
+	databaseURL := cfg.databaseURL
 	// See cmd/workforce/main.go's openPostgresPool doc comment for the
 	// full "why" (session-scoped pg_advisory_lock vs PgBouncer
 	// transaction-pooling incompatibility, ADR
@@ -223,7 +267,7 @@ func run() error {
 	// cancellable context.
 	catalogueCtx, cancelCatalogue := context.WithCancel(context.Background())
 	defer cancelCatalogue()
-	catalogue, kafkaCatalogue, err := composition.BuildCatalogue(ctx, catalogueCtx, catalogueConfigFromEnv(), logger)
+	catalogue, kafkaCatalogue, err := composition.BuildCatalogue(ctx, catalogueCtx, catalogueConfigFromEnv(cfg.brokers), logger)
 	if err != nil {
 		return err
 	}
@@ -238,11 +282,10 @@ func run() error {
 	// assign_labor is a WRITE use case, so it must publish LaborAssigned /
 	// LaborReassigned exactly like the REST path does (ADR-0008, ADR-0016):
 	// through the same composition.BuildEventPublisher wiring cmd/workforce
-	// uses, with the same UnitOfWork. With EVENT_PUBLISHER=kafka and
-	// DATABASE_URL the events go into outbox_events (integration +
-	// analytics topics) in the use case's transaction; the outbox relay keeps
-	// running only in cmd/workforce.
-	built, err := composition.BuildEventPublisher(publisherConfigFromEnv(), r.pool, r.shiftPlans, logger)
+	// uses, with the same UnitOfWork. The events go into outbox_events
+	// (integration + analytics topics) in the use case's transaction; the
+	// outbox relay keeps running only in cmd/workforce.
+	built, err := composition.BuildEventPublisher(publisherConfigFromEnv(cfg.brokers), r.pool, r.shiftPlans, logger)
 	if err != nil {
 		return err
 	}

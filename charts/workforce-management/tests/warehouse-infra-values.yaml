@@ -1,0 +1,84 @@
+# Mirror of what warehouse-infra sets for workforce-management
+# (helm-values/_platform.yaml + helm-values/workforce-management.yaml on
+# origin/develop, 2026-10-19), trimmed to the keys that matter for the real
+# runtime. tests/render_test.sh renders the chart with this file and asserts it
+# still works after ADR-0038: infra needs NO values change.
+kafka:
+  enabled: true
+  brokers: kafka.warehouse-systems.svc.cluster.local:9092
+config:
+  httpAddr: ":8080"
+  eventPublisher: "kafka"
+  migrationsPath: "migrations"
+  maxHoursPerShift: "8.0"
+database:
+  existingSecret: workforce-management-db
+analytics:
+  enabled: true
+  database:
+    existingSecret: workforce-management-analytics-db
+  reports:
+    route:
+      enabled: true
+      path: /api/workforce-management/reports
+      parentRefs:
+        - name: warehouse-gateway
+          namespace: kong
+          sectionName: http
+mcp:
+  enabled: true
+  route:
+    enabled: true
+    path: /api/mcp/workforce-management
+    parentRefs:
+      - name: warehouse-gateway
+        namespace: kong
+        sectionName: http
+frontend:
+  enabled: true
+gatewayApi:
+  enabled: true
+  parentRefs:
+    - name: warehouse-gateway
+      namespace: kong
+      sectionName: http
+  hosts:
+    - path: /api/workforce-management
+      pathType: PathPrefix
+  stripPath: true
+kongPlugins:
+  cors:
+    enabled: true
+    origin: http://localhost
+  opentelemetry:
+    enabled: true
+  prometheus:
+    enabled: true
+pathCatalogue:
+  content: ''
+  enabled: false
+extraEnv:
+  - name: PATH_CATALOGUE_SOURCE
+    value: kafka
+  - name: INSTALLED_CAPACITY_MODE
+    value: http
+  - name: FULFILLMENT_EXECUTION_BASE_URL
+    value: http://fulfillment-execution.warehouse-systems.svc.cluster.local:80
+  - name: LABOR_PERFORMANCE_MODE
+    value: kafka-cache
+  - name: LABOR_PERFORMANCE_BASE_URL
+    value: http://labor-performance.warehouse-systems.svc.cluster.local:80
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  failureThreshold: 6
+readinessProbe:
+  httpGet:
+    path: /healthz
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 5
+  failureThreshold: 6

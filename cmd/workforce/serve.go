@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 	"time"
@@ -80,44 +79,44 @@ func (s shutdownSequence) run() error {
 	return err
 }
 
-// serveWorkforce runs the HTTP server until a signal arrives or the
-// listener fails, with the outbox relay draining alongside, then drains
-// everything under the ADR-0022 §8 shutdown sequence.
-func serveWorkforce(logger *slog.Logger, httpAddr string, server *http.Server, readiness *inbound.Readiness, relay *postgres.OutboxRelay,
+// serveWorkforce runs the HTTP server until a signal arrives, ctx is cancelled
+// (the in-process tests stop it that way) or the listener fails, with the
+// outbox relay draining alongside, then drains everything under the ADR-0022
+// §8 shutdown sequence.
+func serveWorkforce(ctx context.Context, logger *slog.Logger, httpAddr string, server *http.Server, readiness *inbound.Readiness, relay *postgres.OutboxRelay,
 	stopConsumers func(), stopSweeper func()) error {
+	if relay == nil {
+		return errors.New("the outbox relay is not optional: refusing to serve without it")
+	}
 	serverErr := make(chan error, 1)
 	go func() {
 		logger.Info("http server listening", "addr", httpAddr)
 		serverErr <- server.ListenAndServe()
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	sigCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
 	// The outbox relay (ADR 0016) runs alongside the HTTP server in the
 	// same process, draining outbox_events onto both Kafka topics. It is
-	// only wired in kafka mode (see composition.BuildEventPublisher).
+	// always on (ADR-0038).
 	relayDone := make(chan struct{})
 	relayCtx, stopRelay := context.WithCancel(context.Background())
 	defer stopRelay()
-	if relay != nil {
-		go func() {
-			defer close(relayDone)
-			logger.Info("outbox relay running", "topics", []string{kafka.Topic, kafka.AnalyticsTopic})
-			if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
-				serverErr <- err
-			}
-		}()
-	} else {
-		close(relayDone)
-	}
+	go func() {
+		defer close(relayDone)
+		logger.Info("outbox relay running", "topics", []string{kafka.Topic, kafka.AnalyticsTopic})
+		if err := relay.Run(relayCtx); err != nil && !errors.Is(err, context.Canceled) {
+			serverErr <- err
+		}
+	}()
 
 	select {
 	case err := <-serverErr:
 		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
-	case <-stop:
+	case <-sigCtx.Done():
 		return shutdownSequence{
 			logger:        logger,
 			readiness:     readiness,

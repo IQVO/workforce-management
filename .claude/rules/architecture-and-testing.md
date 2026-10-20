@@ -37,15 +37,15 @@ test (ADR-0007, `make arch-test`).
   `inbound/mcp` (MCP tools incl. the curated labor-report tool),
   `outbound/postgres` (pgxpool repos + golang-migrate), `outbound/analyticsstore`
   (projection writer + read-only reader + memory store), `outbound/memory`,
-  `outbound/events` (log/buffered + multi fan-out publisher), `kafka/cloudevents`
+  `outbound/events` (buffered test-double publishers; no log publisher in a
+  binary, ADR-0038), `kafka/cloudevents`
   (the ONLY CloudEvents 1.0 builder/decoder + exact type constants, ADR-0026),
   `outbound/kafka` (integration + analytics publishers, outbox relay sink,
   trace-context carrier), `outbound/fulfillmentexecution`
   (InstalledCapacityClient, ADR-0014), `outbound/laborperformance`
   (MeasuredRateClient, ADR-0012), `outbound/laborperformancecache`
   (event-fed measured-rate + idle-share cache, ADR-0019/0020),
-  `outbound/filecatalog` (process-path catalogue YAML, ADR-0013),
-  `outbound/kafkacatalog` (Kafka-sourced catalogue, `PATH_CATALOGUE_SOURCE=kafka`),
+  `outbound/kafkacatalog` (Kafka-sourced catalogue, the only source, ADR-0030/0038),
   `outbound/clock`, `outbound/telemetry` (OTel + trace-aware slog).
 - `migrations/` OLTP SQL (incl. outbox table); `migrations/analytics/`
   analytical DB SQL, owned by the projector.
@@ -54,8 +54,9 @@ test (ADR-0007, `make arch-test`).
 
 - Go 1.26, modules. Module path: `github.com/claudioed/workforce-management`.
 - chi (`go-chi/chi/v5`), pgx/v5 + pgxpool, golang-migrate SQL migrations.
-- Config via env (`DATABASE_URL`, `HTTP_ADDR`, see README.md's full env
-  table for every service/adapter mode variable).
+- Config via env (`DATABASE_URL` and `KAFKA_BROKERS` are REQUIRED — a missing
+  one is a boot error naming the variable, ADR-0038; `HTTP_ADDR`, see README.md's
+  full env table for every service/adapter mode variable).
 - Typed domain errors mapped to HTTP status + RFC 7807 `application/problem+json`
   in the adapter (ADR-0005) — never a bespoke error shape.
 - JSON DTOs live in the http adapter; never leak domain structs directly.
@@ -63,12 +64,16 @@ test (ADR-0007, `make arch-test`).
 
 ## Testing
 
-- Table-driven tests: domain + application (in-memory adapters); one
-  `httptest` case per endpoint; build-tagged Postgres integration tests
-  (`-tags=integration`, skipped without `DATABASE_URL`; outbox tests boot
-  their own Postgres via testcontainers).
-- BDD/acceptance: `features/*.feature` (Gherkin) run via godog against the
-  real HTTP surface wired to in-memory adapters (`go test ./... -run
+- Table-driven tests: domain + application (in-memory test doubles); one
+  `httptest` case per endpoint; build-tagged integration tests
+  (`-tags=integration`) boot their own Postgres and Kafka via testcontainers,
+  incl. `TestRunOnRealPostgresAndKafka` (`cmd/workforce`), which runs the real
+  `run()`. No `cmd/**` binary may import `outbound/memory`
+  (`TestRuntimeBinaryHasNoInMemoryAdapters`) and the repo root holds no Go
+  files (`TestNoGoFilesAtRepoRoot`), ADR-0038.
+- BDD/acceptance: `features/*.feature` (Gherkin) run via godog (runners in
+  `features/`) against the
+  real HTTP surface wired to in-memory test doubles (`go test ./... -run
   TestFeatures -v`, ADR-0006). One feature file per invariant area:
   shift_plan, labor_assignment, breaks, staffing_gap.
 - Mutation testing (gremlins, `.gremlins.yaml`): fast subset on

@@ -16,10 +16,11 @@ with upstream (U) / downstream (D), the pattern(s), and the technology.
 Every edge has code on both ends. Solid arrows are on in the reference
 deployment (warehouse-infra `terraform/locals.tf`); dotted arrows are
 wired but unused there: the REST labor-performance client, which the
-reference deployment replaces with the `kafka-cache` feed. Every Kafka and
-outbound REST edge is selected by an env var whose service default is off
-(`EVENT_PUBLISHER=log`, `INSTALLED_CAPACITY_MODE=permissive`,
-`LABOR_PERFORMANCE_MODE=permissive`, `PATH_CATALOGUE_SOURCE=file`). There
+reference deployment replaces with the `kafka-cache` feed. The Kafka edges and
+Postgres are mandatory ([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)).
+Only the outbound REST edges are selected by an env var
+(`INSTALLED_CAPACITY_MODE`, whose service default `permissive` rejects every commit, and
+`LABOR_PERFORMANCE_MODE=kafka-cache|http`). There
 are no arrows for deliberately absent relationships — those are listed in
 the table.
 Arrows point from upstream to downstream.
@@ -62,11 +63,11 @@ deployment sets `INSTALLED_CAPACITY_MODE=http`; the service default,
 
 | Relationship | U/D | Pattern | Technology | Status | Evidence |
 | --- | --- | --- | --- | --- | --- |
-| → `wes-work-planning` | WFM upstream | Customer/Supplier, Published Language; consumer-side translation into `LaborPlanObserved` | Kafka `warehouse.workforce.events`, `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | live when `EVENT_PUBLISHER=kafka` | here: `internal/adapters/outbound/kafka/publisher.go`; there: `wes-work-planning/internal/adapters/inbound/kafka/consumer.go` |
-| → `warehouse-planning` | WFM upstream | Customer/Supplier, Published Language | same topic and type | live when `EVENT_PUBLISHER=kafka` | there: `warehouse-planning/internal/adapters/inbound/kafka/labor_capacity_consumer.go` (group `warehouse-planning-labor-capacity`) |
+| → `wes-work-planning` | WFM upstream | Customer/Supplier, Published Language; consumer-side translation into `LaborPlanObserved` | Kafka `warehouse.workforce.events`, `com.warehouse.wes.workforce-management.shiftplan.ShiftPlanCommitted` | live (always on) | here: `internal/adapters/outbound/kafka/publisher.go`; there: `wes-work-planning/internal/adapters/inbound/kafka/consumer.go` |
+| → `warehouse-planning` | WFM upstream | Customer/Supplier, Published Language | same topic and type | live (always on) | there: `warehouse-planning/internal/adapters/inbound/kafka/labor_capacity_consumer.go` (group `warehouse-planning-labor-capacity`) |
 | ← `fulfillment-execution` | WFM downstream | Open Host Service upstream, Conformist here | REST `GET /capacity/{capability}`, fail-loud | live in the kind cluster (`INSTALLED_CAPACITY_MODE=http`); service default `permissive` rejects every commit | here: `internal/adapters/outbound/fulfillmentexecution/client.go`; there: `fulfillment-execution/internal/adapters/inbound/http/handlers.go` (`GetInstalledCapacityHandler`) |
-| ← `process-path-management` | WFM downstream | Published Language, Conformist | Kafka `warehouse.process-path-management.events`, `com.warehouse.wes.process-path-management.processpath.ProcessPath{Created,Updated,Deactivated}` | live in the warehouse-infra kind cluster (`deploy_process_path_kafka_source`); service default is `file` | `internal/adapters/outbound/kafkacatalog/consumer.go` |
-| ← `labor-performance` (events) | WFM downstream | Published Language, Conformist + ACL (`taskTypeForPathId`) | Kafka `warehouse.labor-performance.events`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` | live in the kind cluster (`LABOR_PERFORMANCE_MODE=kafka-cache`); service default is `permissive` | `internal/adapters/outbound/laborperformancecache/consumer.go` |
+| ← `process-path-management` | WFM downstream | Published Language, Conformist | Kafka `warehouse.process-path-management.events`, `com.warehouse.wes.process-path-management.processpath.ProcessPath{Created,Updated,Deactivated}` | live (always on; the only catalogue source) | `internal/adapters/outbound/kafkacatalog/consumer.go` |
+| ← `labor-performance` (events) | WFM downstream | Published Language, Conformist + ACL (`taskTypeForPathId`) | Kafka `warehouse.labor-performance.events`, `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded` | live (`LABOR_PERFORMANCE_MODE=kafka-cache`, the service default) | `internal/adapters/outbound/laborperformancecache/consumer.go` |
 | ← `labor-performance` (REST) | WFM downstream | Open Host Service upstream, Conformist + ACL here | REST `GET /task-types/{taskType}/performance`, fail-open | wired but unused in the kind cluster (it runs `kafka-cache`) | `internal/adapters/outbound/laborperformance/client.go`; there: `labor-performance/internal/adapters/inbound/http/server.go` |
 | → `warehouse-ops-agent` | WFM upstream | Open Host Service | MCP `get_staffing_gap`, `propose_path_heads`; REST `GET /reports/labor` (+ `/freshness`) | live | there: `internal/adapters/outbound/mcpclient/workforce_management.go`, `internal/adapters/outbound/restclient/reports_clients.go` |
 | → `warehouse-console` | WFM upstream | Open Host Service (presentation composition, not a domain edge) | REST via the `workforce_mfe` remote; REST `GET /reports/labor` | live | there: `src/features/context-reports/workforceManagement.config.tsx`; here: `web/` ([ADR 0011](../adr/0011-adopt-fleet-mfe-console-architecture.md)) |

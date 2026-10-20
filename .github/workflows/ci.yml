@@ -47,6 +47,7 @@ jobs:
       - run: python3 scripts/harness/guide_lint.py
       - run: python3 scripts/harness/repo_lint.py
       - run: python3 scripts/harness/test_hook.py
+      - run: python3 scripts/harness/test_red_issue.py
       - run: python3 scripts/harness/test_repo_lint.py
 
 
@@ -126,6 +127,13 @@ jobs:
   # ============================================================
   # CLASSIFICATION: CONTRACT TESTING (property-based, via Schemathesis)
   # ============================================================
+  # The service has no in-memory mode (ADR-0038): the job boots the real
+  # cmd/workforce against a Postgres AND a Kafka service container and the
+  # script waits for /readyz (Postgres ping + broker metadata). The broker is
+  # confluent-local (KRaft, single node, the image the integration tests
+  # use); its default PLAINTEXT_HOST listener advertises localhost:9092,
+  # which is the service-container port mapping below. No topic is
+  # pre-created: the broker auto-creates them like the cluster does.
   contract:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -142,6 +150,15 @@ jobs:
           --health-interval 5s
           --health-timeout 3s
           --health-retries 10
+      kafka:
+        image: confluentinc/confluent-local:7.6.1
+        ports: ["9092:9092"]
+        options: >-
+          --health-cmd "kafka-topics --bootstrap-server localhost:29092 --list"
+          --health-interval 5s
+          --health-timeout 10s
+          --health-retries 20
+          --health-start-period 10s
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
@@ -155,6 +172,7 @@ jobs:
       - name: Contract tests (Schemathesis over apis/openapi.yaml)
         env:
           DATABASE_URL: "postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
+          KAFKA_BROKERS: "localhost:9092"
         run: ./scripts/contract-test.sh
 
   # The MCP eval gate as its own named check: the eval suites from

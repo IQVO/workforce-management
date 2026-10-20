@@ -24,15 +24,20 @@ from pathlib import Path
 
 CHART_DIR = Path(__file__).resolve().parents[1]
 
-# This chart refuses to render without a database URL (it has no in-memory
-# fallback), so every render here supplies a dummy one. It is never connected
-# to -- only the rendered selectors are inspected.
-REQUIRED = ["--set", "database.url=postgres://u:p@example.invalid:5432/db"]
+# This chart refuses to render without a database URL and Kafka brokers (it
+# has no in-memory fallback and no log sink: ADR-0038), so every render here
+# supplies dummy ones. They are never connected to -- only the rendered
+# selectors are inspected.
+REQUIRED = [
+    "--set", "database.url=postgres://u@example.invalid:5432/db",
+    "--set", "kafka.brokers=kafka.example.invalid:9092",
+]
 
 ENABLE_EVERYTHING = [
     *REQUIRED,
     "--set", "frontend.enabled=true",
     "--set", "analytics.enabled=true",
+    "--set", "analytics.database.projectorUrl=postgres://projector@example.invalid:5432/analytics",
     "--set", "mcp.enabled=true",
 ]
 
