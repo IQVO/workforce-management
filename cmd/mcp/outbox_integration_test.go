@@ -86,7 +86,7 @@ func TestMCPAssignLabor_WritesOutboxRows(t *testing.T) {
 
 	// Brokers are never dialled: this process only inserts outbox rows.
 	built, err := composition.BuildEventPublisher(composition.PublisherConfig{
-		Kind: composition.KafkaPublisher, Brokers: []string{"127.0.0.1:1"}, RunRelay: false,
+		Brokers: []string{"127.0.0.1:1"}, RunRelay: false,
 	}, r.pool, r.shiftPlans, quietLogger())
 	if err != nil {
 		t.Fatalf("BuildEventPublisher: %v", err)

@@ -43,7 +43,7 @@ help:
 	@echo "                 (self-sufficient: testcontainers, needs Docker; not in check)"
 	@echo "  bdd            go test ./... -run TestFeatures -v — godog/Gherkin acceptance"
 	@echo "  contract       scripts/contract-test.sh — Schemathesis vs apis/openapi.yaml"
-	@echo "                 (needs DATABASE_URL and the st binary; not in check)"
+	@echo "                 (needs DATABASE_URL, KAFKA_BROKERS and the st binary; not in check)"
 	@echo "  arch-test      go test ./internal/architecture/... -v — hexagonal fitness"
 	@echo "  mutation       gremlins on $(MUTATION_FAST_PKG) — the fast blocking subset"
 	@echo "  mutation-full  gremlins on $(MUTATION_FULL_PKG) — the exhaustive scheduled run"
@@ -110,9 +110,10 @@ bdd:
 	$(GO) test ./... -run TestFeatures -v
 
 # Property-based contract tests against apis/openapi.yaml — mirrors the
-# `contract` CI job. Like `integration`, needs a running Postgres and
-# DATABASE_URL set (the service has no in-memory mode); also needs the
-# pinned Schemathesis on PATH. Not part of check/check-all.
+# `contract` CI job. Like `integration`, needs a running Postgres AND Kafka
+# broker (DATABASE_URL and KAFKA_BROKERS set; the service has no in-memory
+# mode, ADR-0038); also needs the pinned Schemathesis on PATH. Not part of
+# check/check-all.
 contract:
 	./scripts/contract-test.sh
 
@@ -172,3 +173,4 @@ guide-lint: ## lint agent guides: skills load, references resolve, context budge
 
 harness-test: ## unit-test the agent hooks (pre/post/stop)
 	python3 scripts/harness/test_hook.py
+	python3 scripts/harness/test_red_issue.py

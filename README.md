@@ -84,15 +84,14 @@ internal/
     inbound/mcp/                MCP tools incl. the curated labor-report tool
     outbound/postgres/          pgxpool repos + golang-migrate migrations
     outbound/analyticsstore/    analytical projection (writer) + report (read-only reader) + memory store
-    outbound/memory/            in-memory repos for tests/local
-    outbound/events/            log/buffered publisher + multi (fan-out) publisher
+    outbound/memory/            in-memory test doubles for unit and BDD tests ONLY; never imported by cmd/** (ADR-0038, sensor TestRuntimeBinaryHasNoInMemoryAdapters)
+    outbound/events/            buffered/log publisher (test doubles) + multi (fan-out) publisher
     outbound/clock/             system clock
     outbound/kafka/             integration publisher + analytics publisher + outbox relay sink + trace-context header carrier
     outbound/fulfillmentexecution/  InstalledCapacityClient: GET /capacity/{capability} (ADR-0014)
     outbound/laborperformance/      MeasuredRateClient over HTTP (ADR-0012)
     outbound/laborperformancecache/ event-fed measured-rate + idle-share cache (ADR-0019, ADR-0020)
-    outbound/filecatalog/           process-path catalogue from a YAML file (ADR-0013)
-    outbound/kafkacatalog/          process-path catalogue fed by process-path-management's topic
+    outbound/kafkacatalog/          process-path catalogue fed by process-path-management's topic (ADR-0013, ADR-0030)
     outbound/telemetry/         OTel setup (traces/metrics) + trace-aware slog handler
 migrations/                   golang-migrate SQL files (OLTP)
 migrations/analytics/         golang-migrate SQL files (analytical DB, owned by the projector)
@@ -139,23 +138,31 @@ migrations/analytics/         golang-migrate SQL files (analytical DB, owned by 
 
 ## Run it
 
+Postgres **and** Kafka are the only runtime ([ADR-0038](docs/docs/adr/0038-postgres-and-kafka-are-the-only-runtime.md)):
+there is no in-memory mode, no log sink and no file catalogue. Missing
+`DATABASE_URL` or `KAFKA_BROKERS` is a boot error that names the variable,
+raised before the listener binds.
+
 ```bash
-docker compose up -d                 # Postgres 16 on localhost:5432
+docker compose up -d --wait          # Postgres 16 on :5432 and a single-node Kafka (KRaft) on :9092
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
-export PATH_CATALOGUE_FILE=./process-paths.yaml   # required: see PATH_CATALOGUE_FILE below
+export KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce                # applies migrations, then serves on :8080
 ```
 
-`cmd/workforce` refuses to start without a readable process-path catalogue
-(copy `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, or see the
-minimal example in the
-[quickstart](docs/docs/overview/quickstart.md)).
+The process-path catalogue is replayed from `process-path-management`'s Kafka
+topic (`warehouse.process-path-management.events`); on a fresh local broker it
+is empty until that context publishes (the minimal way to seed it is shown in
+the [quickstart](docs/docs/overview/quickstart.md)). `/readyz` is `200` only
+while Postgres answers a ping **and** a Kafka broker answers; `/healthz` stays
+liveness only.
 
 Env vars:
 
 | Var | Required | Default | Meaning |
 |-----|----------|---------|---------|
-| `DATABASE_URL` | yes | — | Postgres connection string |
+| `DATABASE_URL` | **yes** | — | Postgres connection string; boot error `DATABASE_URL is required: this context runs on real Postgres` without it |
+| `KAFKA_BROKERS` | **yes** | — | comma-separated broker list; boot error `KAFKA_BROKERS is required: this context runs on real Kafka` without it. Used by the outbox relay, the catalogue and labor-performance consumers and `/readyz` |
 | `HTTP_ADDR` | no | `:8080` | listen address |
 | `MIGRATIONS_PATH` | no | `migrations` | path to golang-migrate SQL files |
 | `MIGRATIONS_DATABASE_URL` | no | `DATABASE_URL` | direct (non-PgBouncer) connection string used ONLY by the boot-time golang-migrate step ([ADR-0025](docs/docs/adr/0025-migrations-direct-postgres-connection.md)); the request pool always uses `DATABASE_URL` |
@@ -164,16 +171,14 @@ Env vars:
 | `IDEMPOTENCY_KEY_TTL` | no | `24h` | how long an `idempotency_keys` row is kept; `0` keeps them forever |
 | `OUTBOX_RETENTION` | no | `168h` | how long a PUBLISHED `outbox_events` row is kept; `0` keeps them forever |
 | `SHUTDOWN_DRAIN_DELAY` | no | `10s` | how long the process keeps serving after `/readyz` flips to 503 on SIGTERM ([ADR-0022](docs/docs/adr/0022-resilience-circuit-breakers-retry-dlq-shutdown.md)); `0` disables the wait |
-| `EVENT_PUBLISHER` | no | `log` | `log` or `kafka` — see [Integration](#integration). With `kafka`, events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both topics by an in-process relay ([ADR-0016](docs/docs/adr/0016-transactional-outbox.md)); they never go straight to the broker from a request |
-| `KAFKA_BROKERS` | no | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
-| `OUTBOX_RELAY_INTERVAL` | no | `1s` | how long the outbox relay sleeps between passes that found nothing to publish (Go duration; only meaningful with `EVENT_PUBLISHER=kafka`). A full batch is followed immediately by another pass |
-| `LABOR_PERFORMANCE_MODE` | no | `permissive` | `http`, `kafka-cache`, or `permissive` — selects the `ProposePathPlan` measured-rate feed from labor-performance. `http` calls labor-performance synchronously (ADR-0012); `kafka-cache` replaces that call with a local, in-memory read model fed by labor-performance's `warehouse.labor-performance.events` integration topic (ADR-0019), requiring `KAFKA_BROKERS`, and additionally feeds the idle-share staffing signal (see `IDLE_SHARE_TRIM_THRESHOLD` below and ADR-0020); `permissive` never reaches the network |
+| `EVENT_PUBLISHER` | no | `kafka` | kept only because the chart and warehouse-infra set it: unset or `kafka` are accepted; `log` fails the boot with `EVENT_PUBLISHER=log is not supported: this context publishes to real Kafka`, anything else with `unknown EVENT_PUBLISHER`. Events are written to the `outbox_events` table in the same transaction as the aggregate and relayed to both topics by an in-process relay that is always on ([ADR-0016](docs/docs/adr/0016-transactional-outbox.md), [ADR-0038](docs/docs/adr/0038-postgres-and-kafka-are-the-only-runtime.md)); they never go straight to the broker from a request |
+| `OUTBOX_RELAY_INTERVAL` | no | `1s` | how long the outbox relay sleeps between passes that found nothing to publish (Go duration). A full batch is followed immediately by another pass |
+| `LABOR_PERFORMANCE_MODE` | no | `kafka-cache` | `kafka-cache` (default) replaces the labor-performance call with a local read model fed by labor-performance's `warehouse.labor-performance.events` integration topic (ADR-0019), and additionally feeds the idle-share staffing signal (see `IDLE_SHARE_TRIM_THRESHOLD` below and ADR-0020). `http` is the REST rollback of that edge (needs `LABOR_PERFORMANCE_BASE_URL`; `docs/rollback-switches.md` R10), a REST sync edge ADR-0038 leaves alone. `permissive` is gone: `LABOR_PERFORMANCE_MODE=permissive is not supported: this context runs on real Kafka` |
 | `LABOR_PERFORMANCE_BASE_URL` | when `LABOR_PERFORMANCE_MODE=http` | — | labor-performance's base URL |
 | `IDLE_SHARE_TRIM_THRESHOLD` | no | `0.30` | Idle share (fraction, e.g. `0.3` = 30%) above which `ProposePathPlan` trims its proposed heads (idleness-as-staffing-signal, ADR-0020). Only takes effect when `LABOR_PERFORMANCE_MODE=kafka-cache` is also set — no other mode has an idle-share signal to trim against, so `ProposePathPlan` fails open (no trim) regardless of this value otherwise |
-| `INSTALLED_CAPACITY_MODE` | no | `permissive` | `http` or `permissive` — selects the `CommitShiftPlan` live installed-capacity ceiling client from fulfillment-execution (ADR-0014). Unlike `LABOR_PERFORMANCE_MODE`'s fail-open `permissive` default, this one is fail-LOUD: every `CommitShiftPlan` call is rejected until `http` mode is set, since a shift-plan commit mutates real state |
+| `INSTALLED_CAPACITY_MODE` | no | `permissive` | `http` or `permissive` — selects the `CommitShiftPlan` live installed-capacity ceiling client from fulfillment-execution (ADR-0014). This one is fail-LOUD: every `CommitShiftPlan` call is rejected until `http` mode is set, since a shift-plan commit mutates real state. It is a REST sync edge, so ADR-0038 deliberately leaves it unchanged (follow-up) |
 | `FULFILLMENT_EXECUTION_BASE_URL` | when `INSTALLED_CAPACITY_MODE=http` | — | fulfillment-execution's base URL |
-| `PATH_CATALOGUE_SOURCE` | no | `file` | `file` loads `PATH_CATALOGUE_FILE` once at boot; `kafka` instead replays `process-path-management`'s `warehouse.process-path-management.events` topic into an in-memory catalogue (requires `KAFKA_BROKERS`; the service waits up to 60s for the replay before serving) |
-| `PATH_CATALOGUE_FILE` | no | `/etc/workforce-management/process-paths.yaml` | Path to the declared process-path catalogue YAML (see `warehouse-infra`'s `config/process-paths/sortable-fc.yaml`, the same file `fulfillment-execution` and `wes-work-planning` read). Loaded once at startup; a missing or invalid file is a fatal boot-time error — see [ADR-0013](docs/docs/adr/0013-process-path-catalogue-validation.md) |
+| `PATH_CATALOGUE_SOURCE` | no | `kafka` | the only source: the process-path catalogue is replayed from `process-path-management`'s `warehouse.process-path-management.events` topic into a local catalogue (the service waits up to 60s for the replay before serving). `file` fails the boot with `PATH_CATALOGUE_SOURCE=file is not supported: this context runs on real Kafka`; `PATH_CATALOGUE_FILE` and the YAML loader are gone ([ADR-0038](docs/docs/adr/0038-postgres-and-kafka-are-the-only-runtime.md), [ADR-0030](docs/docs/adr/0030-kafka-sourced-process-path-catalogue.md)) |
 | `CORS_ALLOWED_ORIGINS` | no | `http://localhost:5173,http://localhost:5185` | comma-separated browser origins allowed by the CORS middleware |
 | `LOG_LEVEL` | no | `info` | `debug`\|`info`\|`warn`\|`error` (case-insensitive) |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | `localhost:4317` | OTel Collector gRPC endpoint — see [Observability](#observability) |
@@ -190,16 +195,15 @@ See [ADR-0010](docs/docs/adr/0010-analytical-data-product.md) and the
 [report contract](docs/docs/analytics/labor-report.md).
 
 The OLTP service fans domain events onto a **separate** analytics topic
-(`warehouse.workforce.analytics`) when `EVENT_PUBLISHER=kafka`; the integration
-topic and publisher are left untouched.
+(`warehouse.workforce.analytics`) through the same always-on outbox relay; the
+integration topic and publisher are left untouched.
 
 ```bash
 # 1. the fleet's shared broker reachable at localhost:9092 (the warehouse-infra
-#    kind cluster exposes it there) and an analytical Postgres database
-#    reachable via ANALYTICS_DATABASE_URL.
+#    kind cluster exposes it there; so does `docker compose up -d --wait`) and
+#    an analytical Postgres database reachable via ANALYTICS_DATABASE_URL.
 
 # 2. OLTP service, fanning events onto the analytics topic:
-export EVENT_PUBLISHER=kafka
 export KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce
 
@@ -373,27 +377,31 @@ Kafka broker so other bounded contexts can react to committed headcount
 without calling back into this service. Two consume it today:
 `wes-work-planning` (projects it into its own `LaborPlanObserved` read model,
 keyed by `path_id`) and `warehouse-planning` (its labor-capacity consumer,
-group `warehouse-planning-labor-capacity`). Inbound, it can optionally consume `process-path-management`'s
-catalogue topic (`PATH_CATALOGUE_SOURCE=kafka`) and `labor-performance`'s
-`warehouse.labor-performance.events` (`LABOR_PERFORMANCE_MODE=kafka-cache`),
-each into an in-memory cache rebuilt from the earliest offset under a
+group `warehouse-planning-labor-capacity`). Inbound,
+Kafka is the only event runtime: `KAFKA_BROKERS` is mandatory (the service
+refuses to boot without it) and the process-path catalogue
+(`warehouse.process-path-management.events`) and `labor-performance`'s
+`warehouse.labor-performance.events` (`LABOR_PERFORMANCE_MODE=kafka-cache`, the
+default) are always consumed,
+each into a local cache rebuilt from the earliest offset under a
 per-process consumer group. It also makes two synchronous calls:
 fulfillment-execution's `GET /capacity/{capability}` (`INSTALLED_CAPACITY_MODE=http`)
-and labor-performance's `GET /task-types/{taskType}/performance`
+and, only as the REST rollback, labor-performance's `GET /task-types/{taskType}/performance`
 (`LABOR_PERFORMANCE_MODE=http`). See
 [docs/docs/ecosystem/integration.md](docs/docs/ecosystem/integration.md) for
 the full edge list.
 
 - **Topic**: `warehouse.workforce.events`
-- **Broker**: `KAFKA_BROKERS` (default `localhost:9092`) — the fleet's one
+- **Broker**: `KAFKA_BROKERS` (mandatory, no default) — the fleet's one
   shared broker (in the `warehouse-infra` kind cluster, exposed on the host
-  at `localhost:9092`); this repo's own `docker-compose.yml` only runs
-  Postgres.
-- **Selection**: `EVENT_PUBLISHER=kafka` to publish to Kafka, `EVENT_PUBLISHER=log`
-  (default) to keep publishing to the in-memory/log publisher used by tests
-  and local runs that don't need cross-service integration.
-- **Delivery** ([ADR-0016](docs/docs/adr/0016-transactional-outbox.md)): with
-  `EVENT_PUBLISHER=kafka` the use case inserts the already-encoded message(s)
+  at `localhost:9092`); this repo's own `docker-compose.yml` also runs a
+  single-node broker for local runs.
+- **Selection**: none. The only publisher is Kafka through the outbox
+  (`EVENT_PUBLISHER` is kept only because the chart sets it: unset or `kafka`;
+  `log` is a boot error). The in-memory/log publisher is a test double and
+  never reaches a binary ([ADR-0038](docs/docs/adr/0038-postgres-and-kafka-are-the-only-runtime.md)).
+- **Delivery** ([ADR-0016](docs/docs/adr/0016-transactional-outbox.md)): the
+  use case inserts the already-encoded message(s)
   for BOTH topics into `outbox_events` inside the same Postgres transaction
   as the aggregate, and a relay goroutine in `cmd/workforce` drains that
   table onto Kafka every `OUTBOX_RELAY_INTERVAL`. The store and the topics
@@ -435,7 +443,7 @@ Smoke test against the shared broker:
 
 ```bash
 # shared broker reachable at localhost:9092 (warehouse-infra kind cluster)
-export EVENT_PUBLISHER=kafka
+export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
 go run ./cmd/workforce
 
@@ -579,8 +587,9 @@ dedicated failing-path test, at both the domain and use-case/HTTP layers:
 Executable specifications live in [`features/`](features/) as Gherkin
 `.feature` files and are run with [godog](https://github.com/cucumber/godog),
 the official Cucumber implementation for Go. They drive the **real REST API**
-end-to-end: the chi router is wired to the in-memory adapters (memory repos, a
-buffered event publisher, a fixed clock), served over an `httptest.Server`, and
+end-to-end: the chi router is wired to the in-memory test doubles (memory repos, a
+buffered event publisher, a fixed clock; the shipped binaries never import them,
+ADR-0038), served over an `httptest.Server`, and
 exercised with real `net/http` calls — nothing reaches past the HTTP boundary,
 so the scenarios document the published contract rather than internal wiring.
 Each scenario gets a fresh server and fresh repositories, so they are
@@ -603,7 +612,9 @@ go test ./... -run TestFeatures -v
 | `features/staffing_gap_read_model.feature` | `GetStaffingGap` — a fully staffed path is not flagged; no committed `ShiftPlan` is rejected |
 
 Step definitions and the suite entry point (`TestFeatures`) are in
-[`features_test.go`](features_test.go) at the repo root. CI runs them as a
+[`features/features_test.go`](features/features_test.go) (and
+`features_wave2_test.go`) next to the `.feature` files: the repository root
+holds no Go file (`TestNoGoFilesAtRepoRoot`). CI runs them as a
 dedicated `bdd` job.
 
 ## Operator micro-frontend (`web/`)

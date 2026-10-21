@@ -8,29 +8,29 @@ description: Bring up Postgres, run the service, and walk one shift end to end w
 
 # Run it locally
 
-The OLTP service is `cmd/workforce`. It needs Postgres and a process-path
-catalogue file. Kafka is optional and off by default.
+The OLTP service is `cmd/workforce`. It needs Postgres **and** Kafka: there is
+no in-memory mode and no log sink, and it refuses to boot without
+`DATABASE_URL` and `KAFKA_BROKERS`
+([ADR 0038](../adr/0038-postgres-and-kafka-are-the-only-runtime.md)).
 
-## 1. Start Postgres and the service
+## 1. Start Postgres, Kafka and the service
 
-The service refuses to boot without a process-path catalogue
-([ADR 0013](../adr/0013-process-path-catalogue-validation.md)). The default
-path, `/etc/workforce-management/process-paths.yaml`, rarely exists on a
-laptop, so point `PATH_CATALOGUE_FILE` at a local copy. The canonical file is
-`warehouse-infra`'s `config/process-paths/sortable-fc.yaml`. A minimal
-equivalent:
+`docker compose up -d --wait` starts a Postgres 16 and a single-node Kafka
+(KRaft) that the values below point at. The process-path catalogue is not a
+file any more: the service replays `process-path-management`'s topic
+`warehouse.process-path-management.events` before it accepts traffic
+([ADR 0013](../adr/0013-process-path-catalogue-validation.md),
+[ADR 0030](../adr/0030-kafka-sourced-process-path-catalogue.md)). On a fresh
+local broker that topic is empty, so every path id is rejected with
+`400 unknown-path-id` until a `ProcessPathCreated` event exists. Publish one
+(the same event `process-path-management` emits) after the service is up:
 
-```yaml
-# process-paths.yaml
-building: local
-paths:
-  - id: PACK
-    matchPrefix: pack
-    requiredCapabilities: [pack]
-  - id: PICK
-    matchPrefix: pick
-    requiredCapabilities: [pick]
+```bash
+docker compose exec -T kafka sh -c "echo '{\"specversion\":\"1.0\",\"id\":\"seed-pack\",\"source\":\"/warehouse/process-path-management\",\"type\":\"com.warehouse.wes.process-path-management.processpath.ProcessPathCreated\",\"subject\":\"PACK\",\"time\":\"2026-10-19T00:00:00Z\",\"datacontenttype\":\"application/json\",\"data\":{\"path_id\":\"PACK\",\"match_prefix\":\"pack\",\"direct\":true,\"required_capabilities\":[\"pack\"]}}' | kafka-console-producer --bootstrap-server localhost:29092 --topic warehouse.process-path-management.events"
 ```
+
+(Or point `KAFKA_BROKERS` at the kind cluster's broker, where the real
+catalogue is already published.)
 
 `CommitShiftPlan` also checks every line against the live installed capacity
 in `fulfillment-execution`
@@ -40,10 +40,10 @@ To commit a plan, point the service at a `fulfillment-execution` that has
 stations registered for the path:
 
 ```bash
-docker compose up -d   # Postgres 16 on localhost:5432
+docker compose up -d --wait   # Postgres 16 on :5432, Kafka on :9092
 
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
-export PATH_CATALOGUE_FILE=./process-paths.yaml
+export KAFKA_BROKERS=localhost:9092
 export INSTALLED_CAPACITY_MODE=http
 export FULFILLMENT_EXECUTION_BASE_URL=http://localhost:8000/api/fulfillment-execution   # e.g. via the kind cluster's Kong
 go run ./cmd/workforce   # applies migrations, then serves on :8080
@@ -55,17 +55,16 @@ Everything is environment-driven — there is no config file.
 
 | Variable | Required | Default | Meaning |
 | --- | --- | --- | --- |
-| `DATABASE_URL` | yes | — | Postgres connection string |
+| `DATABASE_URL` | **yes** | — | Postgres connection string; `DATABASE_URL is required: this context runs on real Postgres` without it |
+| `KAFKA_BROKERS` | **yes** | — | comma-separated broker list; `KAFKA_BROKERS is required: this context runs on real Kafka` without it |
 | `HTTP_ADDR` | no | `:8080` | listen address |
 | `MIGRATIONS_PATH` | no | `migrations` | path to the golang-migrate SQL files |
 | `MAX_HOURS_PER_SHIFT` | no | `8` | the configured max-hours-per-shift cap |
-| `PATH_CATALOGUE_SOURCE` | no | `file` | `file` reads `PATH_CATALOGUE_FILE` once at boot; `kafka` replays `process-path-management`'s topic instead (requires `KAFKA_BROKERS`) |
-| `PATH_CATALOGUE_FILE` | with `file` source | `/etc/workforce-management/process-paths.yaml` | process-path catalogue YAML; missing or invalid is a fatal boot error |
-| `INSTALLED_CAPACITY_MODE` | no | `permissive` | `http` or `permissive`. **Permissive rejects every `CommitShiftPlan` with `503`** |
+| `PATH_CATALOGUE_SOURCE` | no | `kafka` | the only source: `process-path-management`'s topic is replayed. `file` is a boot error |
+| `INSTALLED_CAPACITY_MODE` | no | `permissive` | `http` or `permissive`. **Permissive rejects every `CommitShiftPlan` with `503`** (a REST sync edge, unchanged by ADR 0038) |
 | `FULFILLMENT_EXECUTION_BASE_URL` | with `http` capacity mode | — | `fulfillment-execution` base URL |
-| `LABOR_PERFORMANCE_MODE` | no | `permissive` | `http`, `kafka-cache` or `permissive` — measured-rate / idle-share feed for `ProposePathPlan` and `GetStaffingGap` |
-| `EVENT_PUBLISHER` | no | `log` | `log` or `kafka` — see [Integration](../ecosystem/integration.md) |
-| `KAFKA_BROKERS` | no | `localhost:9092` | comma-separated broker list, used when `EVENT_PUBLISHER=kafka` |
+| `LABOR_PERFORMANCE_MODE` | no | `kafka-cache` | `kafka-cache` (default) or `http` (REST rollback) — measured-rate / idle-share feed for `ProposePathPlan` and `GetStaffingGap`. `permissive` is a boot error |
+| `EVENT_PUBLISHER` | no | `kafka` | kept for the chart: unset or `kafka`; `log` is a boot error — see [Integration](../ecosystem/integration.md) |
 
 [Configuration](../operations/configuration.md) lists every remaining knob
 per binary (`LABOR_PERFORMANCE_BASE_URL`, `IDLE_SHARE_TRIM_THRESHOLD`,
@@ -119,7 +118,7 @@ curl "localhost:8080/paths/pack/staffing-gap?siteCode=WH1&shiftId=shift-1"
 curl -X POST localhost:8080/associates/assoc-1/end-shift
 
 curl localhost:8080/healthz   # liveness
-curl localhost:8080/readyz    # readiness (503 once graceful shutdown starts)
+curl localhost:8080/readyz    # readiness: 200 only while Postgres AND a Kafka broker answer; 503 once graceful shutdown starts
 ```
 
 Step 7 returns the staffing-gap read model — planned versus active, and the
@@ -129,7 +128,7 @@ Step 7 returns the staffing-gap read model — planned versus active, and the
 {"pathId":"pack","plannedHeads":3,"activeHeads":1,"understaffed":true}
 ```
 
-With `LABOR_PERFORMANCE_MODE=kafka-cache` the response can also carry
+With `LABOR_PERFORMANCE_MODE=kafka-cache` (the default) the response can also carry
 `observedIdleShare` (a fraction in [0, 1]; the deprecated `observedIdlePct`
 carries the same value): the path's recently observed idle share, taken from
 `labor-performance`. It is omitted when there is no signal

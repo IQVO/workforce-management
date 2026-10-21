@@ -38,8 +38,8 @@ flowchart LR
 
   subgraph outbound["Outbound adapters (driven)"]
     PG["postgres<br/>pgxpool + golang-migrate"]
-    MEM["memory<br/>in-memory repos"]
-    EV["events<br/>log / buffered publisher"]
+    MEM["memory<br/>in-memory repos (test doubles)"]
+    EV["events<br/>buffered publisher (test double)"]
     KA["kafka<br/>segmentio/kafka-go"]
     SIB["sibling clients + caches<br/>fulfillment-execution, labor-performance,<br/>process-path catalogue"]
     CL["clock<br/>system clock"]
@@ -84,14 +84,13 @@ internal/
     inbound/mcp/               MCP tools, resources, prompts
     inbound/kafka/             analytics-topic consumer for the projector
     outbound/postgres/         pgxpool repos, unit of work, transactional outbox + relay
-    outbound/memory/           in-memory repos for tests and local runs
-    outbound/events/           log/buffered publisher
+    outbound/memory/           in-memory repos: test doubles for unit and BDD tests, never imported by a cmd/** binary (ADR 0038)
+    outbound/events/           buffered publisher: test double
     outbound/kafka/            Kafka publishers (segmentio/kafka-go)
     outbound/analyticsstore/   analytical projection + report store
     outbound/fulfillmentexecution/  installed-capacity client (ADR 0014)
     outbound/laborperformance/      measured-rate HTTP client (ADR 0012)
     outbound/laborperformancecache/ event-fed measured-rate + idle-share cache (ADR 0019, 0020)
-    outbound/filecatalog/      process-path catalogue from a YAML file
     outbound/kafkacatalog/     process-path catalogue from process-path-management's topic
     outbound/telemetry/        OpenTelemetry setup
     outbound/clock/            system clock

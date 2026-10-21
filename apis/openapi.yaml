@@ -89,12 +89,15 @@ paths:
       summary: Readiness check
       description: >-
         Reports whether this instance should receive traffic. Returns 200
-        `{"status":"ready"}` while serving and 503 `{"status":"not_ready"}`
-        once graceful shutdown has begun (ADR-0022): readiness is flipped
-        first so a Kubernetes readinessProbe stops routing new requests
-        during the drain window, while the liveness probe (`/healthz`)
-        stays green. Like `/healthz` it does not probe downstream
-        dependencies.
+        `{"status":"ready"}` only while serving AND Postgres answers a ping
+        AND a Kafka broker answers a metadata request (ADR-0038; topics are
+        never required and the verdict is cached for 3 s). Returns 503
+        `{"status":"not_ready"}` once graceful shutdown has begun (ADR-0022):
+        readiness is flipped first so a Kubernetes readinessProbe stops
+        routing new requests during the drain window, while the liveness
+        probe (`/healthz`) stays green. Returns 503 problem+json
+        (`dependency-unavailable`) naming `postgres` and/or `kafka` while a
+        dependency is unreachable.
       tags: [System]
       responses:
         "200":
@@ -106,13 +109,25 @@ paths:
               example:
                 status: ready
         "503":
-          description: Instance is draining for shutdown and must not receive new traffic.
+          description: >-
+            Instance is draining for shutdown (`not_ready`) or a runtime
+            dependency (Postgres, Kafka) is unavailable
+            (`dependency-unavailable`); it must not receive new traffic.
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ReadyzResponse"
               example:
                 status: not_ready
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.workforce-management.warehouse-systems.dev/dependency-unavailable
+                title: A runtime dependency is unavailable
+                status: 503
+                detail: "not ready: kafka"
+                instance: /readyz
 
   /associates/{id}/start-shift:
     post:

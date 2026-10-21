@@ -174,7 +174,10 @@ autoscaling:
 # D14); explicit env/extraEnv entries win for the same key.
 config:
   httpAddr: ":8080"
-  eventPublisher: "log"   # "log" or "kafka"
+  # The only publisher is "kafka" (ADR-0038): the log sink is gone and the
+  # chart refuses any other value. The key stays because warehouse-infra and
+  # the binaries read EVENT_PUBLISHER.
+  eventPublisher: "kafka"
   migrationsPath: "migrations"
   maxHoursPerShift: "8.0"
   # OUTBOX_RELAY_INTERVAL: how long the outbox relay sleeps after a pass that
@@ -211,11 +214,11 @@ config:
   # drain budget and ~5s telemetry flush.
   shutdownDrainDelay: "10s"
 
-# UNLIKE THE OTHER THREE SERVICES: this binary calls requireEnv("DATABASE_URL")
-# and log.Fatalf's (crash-loops) if it's unset — there is no in-memory
-# fallback. You MUST set database.url or database.existingSecret; the chart
-# refuses to render (a clear `helm install`-time error) rather than let you
-# ship a crash-looping pod, matching the binary's own fail-fast design.
+# Postgres is the ONLY runtime (ADR-0038): cmd/workforce, cmd/mcp and the
+# projector exit at boot without DATABASE_URL, there is no in-memory fallback.
+# You MUST set database.url or database.existingSecret; the chart refuses to
+# render (a clear `helm install`-time error naming the value) rather than let
+# you ship a crash-looping pod.
 database:
   url: ""
   existingSecret: ""
@@ -234,9 +237,15 @@ database:
   # route migrations around.
   migrationsExistingSecretKey: "MIGRATIONS_DATABASE_URL"
 
+# Kafka is the ONLY event runtime (ADR-0038). kafka.brokers is MANDATORY
+# (KAFKA_BROKERS, comma-separated): there is deliberately NO default, the chart
+# refuses to render without it, and the binaries exit at boot without it.
+# kafka.enabled is a legacy key kept only so values written before ADR-0038
+# (warehouse-infra sets it to true) keep rendering: it may be true, setting it
+# to false fails the render. It is no longer a switch.
 kafka:
-  enabled: false
-  brokers: "kafka:9092"
+  enabled: true
+  brokers: ""
 
 # OpenTelemetry. Traces and metrics are PUSHED over OTLP/gRPC to a Collector;
 # there is no scrape endpoint on the pod. Export is non-blocking, so pointing
@@ -255,23 +264,14 @@ logLevel: "info"
 
 extraEnv: []
 
-# ---------------------------------------------------------------------------
-# Process-path catalogue (ADR-0013 here / ADR-0017 in fulfillment-execution):
-# a boot-time-required file this binary reads via PATH_CATALOGUE_FILE.
-# warehouse-infra owns the canonical content (config/process-paths/*.yaml is
-# the fleet's published-language source of truth, shared verbatim with
-# fulfillment-execution and wes-work-planning) -- this chart just knows how
-# to mount whatever content it's given.
-# ---------------------------------------------------------------------------
+# Process-path catalogue (ADR-0013 / ADR-0038): replayed from
+# process-path-management's CloudEvents on Kafka (PATH_CATALOGUE_SOURCE=kafka,
+# the binary's only and default source). The boot-time file catalogue
+# (PATH_CATALOGUE_FILE) was removed; this block is a retired stub kept only so
+# values that still say `pathCatalogue.enabled: false` (warehouse-infra does)
+# render. `enabled: true` fails the render.
 pathCatalogue:
-  enabled: true
-  mountPath: "/etc/workforce-management"
-  # Raw YAML content of the catalogue file (e.g. via --set-file or a
-  # values.yaml `content: |` block). Ignored when existingConfigMap is set.
-  content: ""
-  # Name of a pre-existing ConfigMap with a "process-paths.yaml" data key.
-  # When set, content above is ignored and no ConfigMap is created here.
-  existingConfigMap: ""
+  enabled: false
 
 # Gates liveness and readiness until the process is actually serving.
 #
@@ -356,8 +356,13 @@ analytics:
   projector:
     replicaCount: 1
     adminAddr: ":8091"
-    # HPA min 1 / max 2, NOT 4: kafka.AnalyticsConsumerGroup
-    # ("workforce-analytics") is a STABLE, shared consumer-group name
+    # ANALYTICS_CONSUMER_GROUP (ADR-0038): the projector's stable, shared Kafka
+    # group id. The binary has no default and exits at boot without it; the
+    # chart fails the render if this is emptied. The default is the group the
+    # projector has always used, so committed offsets survive the rollout.
+    consumerGroup: "workforce-analytics"
+    # HPA min 1 / max 2, NOT 4: ANALYTICS_CONSUMER_GROUP (consumerGroup above,
+    # "workforce-analytics") is a STABLE, shared consumer-group name
     # with no per-instance uniqueness (internal/adapters/inbound/kafka/
     # analytics_consumer.go) -- the fleet's correctly-scalable
     # convention (same shape as order-management's projector) -- so N

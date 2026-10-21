@@ -51,10 +51,10 @@ import (
 // tracerName identifies this adapter's instrumentation scope.
 const tracerName = "github.com/claudioed/workforce-management/internal/adapters/inbound/kafka"
 
-// AnalyticsConsumerGroup is the Kafka consumer group the analytics projector
-// reads under. It is distinct from any OLTP consumer group so the two pipelines
-// track their offsets independently.
-const AnalyticsConsumerGroup = "workforce-analytics"
+// The consumer group the analytics projector reads under is NOT a constant of
+// this package: it comes from the projector's ANALYTICS_CONSUMER_GROUP with no
+// default (ADR-0038), is stable and shared, and stays distinct from any OLTP
+// consumer group so the two pipelines track their offsets independently.
 
 // analyticsDLQTopicSuffix names the dead-letter topic this consumer
 // publishes a poison message to, relative to its OWN source topic
@@ -154,16 +154,19 @@ type AnalyticsConsumer struct {
 }
 
 // NewAnalyticsConsumer constructs an AnalyticsConsumer reading topic from
-// brokers under AnalyticsConsumerGroup. The dead-letter topic is always
-// derived as topic+analyticsDLQTopicSuffix.
-func NewAnalyticsConsumer(brokers []string, topic string, projection report.ProjectionStore, processed ports.ProcessedEvents, logger *slog.Logger) *AnalyticsConsumer {
+// brokers under group (the projector's ANALYTICS_CONSUMER_GROUP: a stable,
+// shared id with no default, ADR-0038; distinct from any OLTP consumer group
+// so the two pipelines track their offsets independently). An empty group is a
+// programming error here: the composition root refuses to boot without it.
+// The dead-letter topic is always derived as topic+analyticsDLQTopicSuffix.
+func NewAnalyticsConsumer(brokers []string, topic, group string, projection report.ProjectionStore, processed ports.ProcessedEvents, logger *slog.Logger) *AnalyticsConsumer {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	reader := segmentio.NewReader(segmentio.ReaderConfig{
 		Brokers: brokers,
 		Topic:   topic,
-		GroupID: AnalyticsConsumerGroup,
+		GroupID: group,
 		// Start a brand-new consumer group at the EARLIEST offset. The analytics
 		// projection must see the full history of the topic (it is a replayable
 		// read model, not a live integration reaction), so a fresh projector — or
