@@ -11,7 +11,7 @@ the **path boundary**: it never links an associate to a specific task —
 individual task dispatch belongs to `fulfillment-execution`. Docs:
 <https://iqvo.github.io/workforce-management/> and [`docs/`](docs/).
 
-Source of truth for the domain model: `/Users/claudioed/docs/amazon-fulfillment-ddd.md`
+Source of truth for the domain model: `/Users/claudioed/docs/fulfillment-reference-ddd.md`
 and `/Users/claudioed/warehouse-systems-ddd.md`. Honor that ubiquitous language.
 
 ## Hard rules (read before writing any code)
