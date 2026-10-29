@@ -6,6 +6,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -281,6 +282,23 @@ func TestWireArgumentValidation(t *testing.T) {
 			env, _ := w.skill(t, tc.skill, tc.args)
 			wantProblem(t, env, 400, tc.slug)
 		})
+	}
+}
+
+// TestWireNeverTeachesTheDeprecatedAlias: the shared domain error for a missing
+// site key mentions buildingId, which this surface does not offer. No answer an
+// agent can receive may mention it.
+func TestWireNeverTeachesTheDeprecatedAlias(t *testing.T) {
+	w := newWire(t, newHarness(t, false).deps)
+	env, text := w.skill(t, skillStaffingStatus, map[string]any{"shiftId": "S1", "pathId": "pack"})
+	wantProblem(t, env, 400, "validation")
+	if env.Problem.Detail != "siteCode is required" {
+		t.Fatalf("detail = %q, want exactly %q", env.Problem.Detail, "siteCode is required")
+	}
+	for _, s := range []string{env.Problem.Detail, env.Problem.Title, text} {
+		if strings.Contains(s, "buildingId") {
+			t.Fatalf("an answer teaches the deprecated alias: %q", s)
+		}
 	}
 }
 
