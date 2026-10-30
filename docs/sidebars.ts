@@ -170,6 +170,7 @@ const sidebars: SidebarsConfig = {
         'adr/0036-outbox-relay-attempt-cap',
         'adr/0037-reports-api-openapi-contract',
         'adr/0038-postgres-and-kafka-are-the-only-runtime',
+        'adr/0039-a2a-inbound-adapter',
       ],
     },
   ],

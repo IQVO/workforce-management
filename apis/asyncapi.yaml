@@ -216,6 +216,40 @@ channels:
       message:
         $ref: "#/components/messages/TaskPerformanceRecorded"
 
+  warehouse.process-path-management.events:
+    description: |
+      process-path-management's integration topic (the `Topic` constant in
+      `internal/adapters/outbound/kafkacatalog/consumer.go`), CONSUMED by this
+      service, not published: key and `subject` = the path id,
+      `source=/warehouse/process-path-management`. This service acts on
+      `ProcessPathCreated`, `ProcessPathUpdated` and `ProcessPathDeactivated`
+      and ignores every other type (`CPTScheduleChanged` included). The
+      consumer is the process-path catalogue (`PATH_CATALOGUE_SOURCE=kafka`,
+      the default; `file` is rejected at boot): a per-process, unique consumer
+      group (prefix `workforce-management-process-path-catalogue`) replays the
+      topic's full history from the earliest offset at startup, and readiness
+      waits for that replay. Both `cmd/workforce` and `cmd/mcp` run one, so
+      path ids are validated against the same catalogue. This channel mirrors
+      process-path-management's own apis/asyncapi.yaml read-only.
+    subscribe:
+      operationId: consumeProcessPathEvents
+      summary: Keep the local process-path catalogue current.
+      description: |
+        Upsert the path definition on Created and Updated (`path_id`,
+        `match_prefix`, `required_capabilities`,
+        `destination_location_role`; `direct` is decoded and discarded) and
+        remove it on Deactivated. Messages are CloudEvents 1.0
+        structured-mode JSON (dataschema
+        `urn:warehouse:process-path-management:events:<EventName>:v1`).
+      tags:
+        - name: process-path-management
+          description: Consumed from the process-path-management bounded context.
+      message:
+        oneOf:
+          - $ref: "#/components/messages/ProcessPathCreated"
+          - $ref: "#/components/messages/ProcessPathUpdated"
+          - $ref: "#/components/messages/ProcessPathDeactivated"
+
 components:
   messages:
     ShiftPlanCommitted:
@@ -690,6 +724,54 @@ components:
               idle_seconds_before: 90
               completed_at: "2026-09-05T09:30:00Z"
 
+    ProcessPathCreated:
+      name: ProcessPathCreated
+      title: ProcessPathCreated (from process-path-management, consumed)
+      summary: A process path was defined.
+      description: |
+        CONSUMED, not produced. Pinned by process-path-management's
+        `apis/asyncapi.yaml`: type
+        `com.warehouse.wes.process-path-management.processpath.ProcessPathCreated`,
+        `source=/warehouse/process-path-management`, subject and Kafka key =
+        the path id.
+      contentType: application/cloudevents+json
+      tags:
+        - name: process-path-management
+          description: Consumed from process-path-management.
+      payload:
+        $ref: "#/components/schemas/ProcessPathCreatedEvent"
+    ProcessPathUpdated:
+      name: ProcessPathUpdated
+      title: ProcessPathUpdated (from process-path-management, consumed)
+      summary: A process path definition changed.
+      description: |
+        CONSUMED, not produced. Pinned by process-path-management's
+        `apis/asyncapi.yaml`: type
+        `com.warehouse.wes.process-path-management.processpath.ProcessPathUpdated`,
+        `source=/warehouse/process-path-management`, subject and Kafka key =
+        the path id.
+      contentType: application/cloudevents+json
+      tags:
+        - name: process-path-management
+          description: Consumed from process-path-management.
+      payload:
+        $ref: "#/components/schemas/ProcessPathUpdatedEvent"
+    ProcessPathDeactivated:
+      name: ProcessPathDeactivated
+      title: ProcessPathDeactivated (from process-path-management, consumed)
+      summary: A process path was deactivated; it carries only the path id.
+      description: |
+        CONSUMED, not produced. Pinned by process-path-management's
+        `apis/asyncapi.yaml`: type
+        `com.warehouse.wes.process-path-management.processpath.ProcessPathDeactivated`,
+        `source=/warehouse/process-path-management`, subject and Kafka key =
+        the path id.
+      contentType: application/cloudevents+json
+      tags:
+        - name: process-path-management
+          description: Consumed from process-path-management.
+      payload:
+        $ref: "#/components/schemas/ProcessPathDeactivatedEvent"
   schemas:
     CloudEventBase:
       type: object
@@ -1275,3 +1357,139 @@ components:
               type: string
               format: date-time
               description: When the associate finished — the business time, distinct from the CloudEvents `time`.
+    ProcessPathCreatedEvent:
+      type: object
+      description: |
+        CloudEvents 1.0 envelope of process-path-management's ProcessPathCreated, the
+        integration payload, as consumed here.
+      required: [specversion, id, source, type, subject, time, datacontenttype, dataschema, data]
+      properties:
+        specversion:
+          type: string
+          enum: ["1.0"]
+        id:
+          type: string
+        source:
+          type: string
+          enum: ["/warehouse/process-path-management"]
+        type:
+          type: string
+          const: "com.warehouse.wes.process-path-management.processpath.ProcessPathCreated"
+        subject:
+          type: string
+          description: The path id (also the Kafka key).
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          enum: ["application/json"]
+        dataschema:
+          type: string
+          const: "urn:warehouse:process-path-management:events:ProcessPathCreated:v1"
+        data:
+          type: object
+          description: The fields this service reads; the producer's payload carries more (cycle_time_p95, eligibility, intake), ignored here.
+          required: [path_id]
+          properties:
+            path_id:
+              type: string
+            match_prefix:
+              type: string
+            direct:
+              type: boolean
+              description: Decoded and discarded; absent means false.
+            required_capabilities:
+              type: array
+              items:
+                type: string
+            destination_location_role:
+              type: string
+              enum: [Drop, WorkCenter, Shipping]
+              description: Omitted when the path declares none.
+    ProcessPathUpdatedEvent:
+      type: object
+      description: |
+        CloudEvents 1.0 envelope of process-path-management's ProcessPathUpdated, the
+        integration payload, as consumed here.
+      required: [specversion, id, source, type, subject, time, datacontenttype, dataschema, data]
+      properties:
+        specversion:
+          type: string
+          enum: ["1.0"]
+        id:
+          type: string
+        source:
+          type: string
+          enum: ["/warehouse/process-path-management"]
+        type:
+          type: string
+          const: "com.warehouse.wes.process-path-management.processpath.ProcessPathUpdated"
+        subject:
+          type: string
+          description: The path id (also the Kafka key).
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          enum: ["application/json"]
+        dataschema:
+          type: string
+          const: "urn:warehouse:process-path-management:events:ProcessPathUpdated:v1"
+        data:
+          type: object
+          description: The fields this service reads; the producer's payload carries more (cycle_time_p95, eligibility, intake), ignored here.
+          required: [path_id]
+          properties:
+            path_id:
+              type: string
+            match_prefix:
+              type: string
+            direct:
+              type: boolean
+              description: Decoded and discarded; absent means false.
+            required_capabilities:
+              type: array
+              items:
+                type: string
+            destination_location_role:
+              type: string
+              enum: [Drop, WorkCenter, Shipping]
+              description: Omitted when the path declares none.
+    ProcessPathDeactivatedEvent:
+      type: object
+      description: |
+        CloudEvents 1.0 envelope of process-path-management's ProcessPathDeactivated, the
+        integration payload, as consumed here.
+      required: [specversion, id, source, type, subject, time, datacontenttype, dataschema, data]
+      properties:
+        specversion:
+          type: string
+          enum: ["1.0"]
+        id:
+          type: string
+        source:
+          type: string
+          enum: ["/warehouse/process-path-management"]
+        type:
+          type: string
+          const: "com.warehouse.wes.process-path-management.processpath.ProcessPathDeactivated"
+        subject:
+          type: string
+          description: The path id (also the Kafka key).
+        time:
+          type: string
+          format: date-time
+        datacontenttype:
+          type: string
+          enum: ["application/json"]
+        dataschema:
+          type: string
+          const: "urn:warehouse:process-path-management:events:ProcessPathDeactivated:v1"
+        data:
+          type: object
+          required: [path_id]
+          properties:
+            path_id:
+              type: string
