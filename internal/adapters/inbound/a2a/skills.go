@@ -250,10 +250,15 @@ func problemFromUseCase(err error) *problem {
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
 		return &problem{Type: problemTypeBase + "/not-found", Title: "Resource not found", Detail: err.Error(), Status: 404}
+	case errors.Is(err, shared.ErrMissingSiteKey):
+		// The shared domain error also names the deprecated buildingId alias.
+		// This surface does not offer that alias, so the answer must not teach
+		// it to an agent client (which would then be refused as an unknown
+		// argument): say only what A2A accepts.
+		return &problem{Type: problemTypeBase + "/validation", Title: "Request failed validation", Detail: "siteCode is required", Status: 400}
 	case errors.Is(err, shared.ErrEmptyAssociateId),
 		errors.Is(err, shared.ErrEmptyPathId),
 		errors.Is(err, shared.ErrEmptyCertification),
-		errors.Is(err, shared.ErrMissingSiteKey),
 		errors.Is(err, pathcatalog.ErrUnknownPath),
 		errors.Is(err, shiftplan.ErrNoPathPlans),
 		errors.Is(err, shiftplan.ErrMissingInstalledStations):

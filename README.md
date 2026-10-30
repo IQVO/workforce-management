@@ -1,18 +1,18 @@
 # Workforce Management
 
-> **⚠️ Study project.** This repository is an educational exercise in
-> Domain-Driven Design applied to warehouse management/execution systems. It
-> follows real industry-standard patterns and terminology (WMS/WES/WCS,
-> certification-gated assignment, CloudEvents, RFC 7807, hexagonal
-> architecture) but is **not a production system** and is **not affiliated
-> with, endorsed by, or representative of any real-world company**.
-
 A Supporting bounded context that owns "who is on shift, on which process
 path, at what rate; direct vs indirect hours." It covers the shift-start
 planning horizon (a human commits a split of headcount across paths) and
 intra-shift assignment tracking (moving people between paths as backlogs
 deviate — the move itself stays a human call; this context makes the gap
 legible, it does not decide).
+
+## Disclaimer
+
+This project is a domain-driven design study. It is not associated with,
+endorsed by or affiliated with any company, and it uses no company's code,
+data, logos or trademarks. All names, figures and examples are illustrative
+or synthetic.
 
 ## Documentation
 
@@ -160,6 +160,7 @@ the [quickstart](docs/docs/overview/quickstart.md)). `/readyz` is `200` only
 while Postgres answers a ping **and** a Kafka broker answers; `/healthz` stays
 liveness only.
 
+### Configuration
 Env vars:
 
 | Var | Required | Default | Meaning |
@@ -647,6 +648,17 @@ Step definitions and the suite entry point (`TestFeatures`) are in
 holds no Go file (`TestNoGoFilesAtRepoRoot`). CI runs them as a
 dedicated `bdd` job.
 
+## Helm chart
+
+`charts/workforce-management` deploys the OLTP service with optional components behind
+values flags: the analytics projector and reports reader (`analytics.enabled`), the read-only MCP server (`mcp.enabled`) and the operator micro-frontend (`frontend.enabled`). Mandatory values are the Postgres secret and the Kafka
+broker list; the deployed consumer-group ids and mode flags come from
+`warehouse-infra`'s helm-values.
+
+The chart is linted in CI (`helm-lint`, `chart-tests`) and its invariants are
+asserted by the tests in `charts/workforce-management/tests/` — `render_test.sh`,
+`test_service_selectors.py` (every Service selects exactly one Deployment) and
+`test_kong_config.py`.
 ## Operator micro-frontend (`web/`)
 
 `web/` is `workforce_mfe`, this context's Module Federation remote. It talks only to
@@ -695,3 +707,13 @@ python3 charts/workforce-management/tests/test_service_selectors.py
 
 which proves every Service selects exactly one Deployment — the OLTP Service
 must never select the frontend, analytics or MCP pods.
+
+## Architecture Decision Records
+
+The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 38 decisions, from the
+hexagonal layout to the CloudEvents-only envelope and the transactional
+outbox.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
