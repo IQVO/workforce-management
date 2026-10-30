@@ -183,6 +183,13 @@ Fully qualified name of the MCP server deployment/service (ADR-0008).
 {{- include "workforce-management.fullname" . }}-mcp
 {{- end }}
 
+{{/*
+Fully qualified name of the A2A agent Deployment/Service (<release>-a2a, ADR-0039).
+*/}}
+{{- define "workforce-management.a2aFullname" -}}
+{{- include "workforce-management.fullname" . }}-a2a
+{{- end }}
+
 
 {{/*
 Fully qualified name of the frontend Module Federation remote deployment/service.
