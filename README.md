@@ -1,18 +1,18 @@
 # Workforce Management
 
-> **⚠️ Study project.** This repository is an educational exercise in
-> Domain-Driven Design applied to warehouse management/execution systems. It
-> follows real industry-standard patterns and terminology (WMS/WES/WCS,
-> certification-gated assignment, CloudEvents, RFC 7807, hexagonal
-> architecture) but is **not a production system** and is **not affiliated
-> with, endorsed by, or representative of any real-world company**.
-
 A Supporting bounded context that owns "who is on shift, on which process
 path, at what rate; direct vs indirect hours." It covers the shift-start
 planning horizon (a human commits a split of headcount across paths) and
 intra-shift assignment tracking (moving people between paths as backlogs
 deviate — the move itself stays a human call; this context makes the gap
 legible, it does not decide).
+
+## Disclaimer
+
+This project is a domain-driven design study. It is not associated with,
+endorsed by or affiliated with any company, and it uses no company's code,
+data, logos or trademarks. All names, figures and examples are illustrative
+or synthetic.
 
 ## Documentation
 
@@ -36,6 +36,7 @@ on every push to `main`.
 | DDD | [Use cases](docs/docs/ddd/use-cases.md), [Subdomain classification](docs/docs/ddd/subdomain-classification.md), [DDD artifact pack](docs/docs/ddd/ddd-artifacts.md) |
 | Ecosystem | [Integration](docs/docs/ecosystem/integration.md), [Context map](docs/docs/ecosystem/context-map.md) |
 | MCP | [Tools, resources and prompts](docs/docs/mcp/tools.md), [Governance charter](docs/docs/mcp/governance-charter.md) |
+| A2A | [A2A inbound adapter (ADR-0039)](docs/docs/adr/0039-a2a-inbound-adapter.md) |
 | Analytics | [Labor report](docs/docs/analytics/labor-report.md) |
 | Decisions | [ADR index](docs/docs/adr/index.md) |
 
@@ -65,6 +66,7 @@ cmd/workforce/                composition root (OLTP)
 cmd/workforce-projector/      analytics writer: consumes the analytics topic, projects
 cmd/workforce-reports/        analytics reader: read-only REST over the analytical DB
 cmd/mcp/                       MCP server (Streamable HTTP)
+cmd/a2a/                       A2A agent (JSON-RPC over HTTP, Agent Card at /.well-known/agent-card.json)
 internal/
   domain/
     associate/                 AssociateShift aggregate
@@ -82,6 +84,7 @@ internal/
     inbound/http/               chi handlers (OLTP + reports), DTOs, error mapping
     inbound/kafka/              analytics consumer (projector)
     inbound/mcp/                MCP tools incl. the curated labor-report tool
+    inbound/a2a/                A2A skills: staffing_status (read), assign_labor (write)
     outbound/postgres/          pgxpool repos + golang-migrate migrations
     outbound/analyticsstore/    analytical projection (writer) + report (read-only reader) + memory store
     outbound/memory/            in-memory test doubles for unit and BDD tests ONLY; never imported by cmd/** (ADR-0038, sensor TestRuntimeBinaryHasNoInMemoryAdapters)
@@ -157,6 +160,7 @@ the [quickstart](docs/docs/overview/quickstart.md)). `/readyz` is `200` only
 while Postgres answers a ping **and** a Kafka broker answers; `/healthz` stays
 liveness only.
 
+### Configuration
 Env vars:
 
 | Var | Required | Default | Meaning |
@@ -255,6 +259,33 @@ helm upgrade --install workforce-management charts/workforce-management \
   --set database.url="postgres://..." \
   --set mcp.enabled=true
 ```
+
+## Running the A2A agent in Kubernetes
+
+The A2A agent ([ADR-0039](docs/docs/adr/0039-a2a-inbound-adapter.md)) is a
+fifth binary in the same image, `/app/a2a`, and the Helm chart deploys it as a
+separate Deployment + ClusterIP Service (`<release>-a2a`, port 8093) when
+`a2a.enabled=true` (default `false`). It runs the same use cases over the same
+`DATABASE_URL` secret as the HTTP service and reads `A2A_ADDR` (default
+`:8093`) and the mandatory `A2A_AGENT_URL`, the absolute URL advertised on the
+Agent Card (the chart defaults it to the in-cluster Service DNS). `GET /healthz`
+serves the probes; the Agent Card is at `/.well-known/agent-card.json` and the
+JSON-RPC endpoint is mounted at both `/` and `/a2a`
+(`http://<release>-a2a:8093/a2a` is the fleet's `*_A2A_ENDPOINT` convention).
+
+Two skills, called as a `SendMessage` data part
+`{"skill": "<id>", "arguments": {...}}`:
+
+- `staffing_status` (read): `{siteCode, shiftId, pathId[, charge, plannedRate]}`
+  returns planned vs active heads and whether the path is understaffed, plus the
+  headcount needed for the charge when both optional arguments are given.
+- `assign_labor` (write): `{associateId, pathId}` assigns an associate to a path
+  and publishes `LaborAssigned` / `LaborReassigned` through the outbox. Not
+  idempotent: do not blindly retry an ambiguous failure.
+
+Domain rejections come back as an in-band RFC 7807 `problem` with the same
+status classification as REST. A2A carries delegation only; the facts still
+leave as CloudEvents on Kafka.
 
 ## API
 
@@ -617,6 +648,17 @@ Step definitions and the suite entry point (`TestFeatures`) are in
 holds no Go file (`TestNoGoFilesAtRepoRoot`). CI runs them as a
 dedicated `bdd` job.
 
+## Helm chart
+
+`charts/workforce-management` deploys the OLTP service with optional components behind
+values flags: the analytics projector and reports reader (`analytics.enabled`), the read-only MCP server (`mcp.enabled`) and the operator micro-frontend (`frontend.enabled`). Mandatory values are the Postgres secret and the Kafka
+broker list; the deployed consumer-group ids and mode flags come from
+`warehouse-infra`'s helm-values.
+
+The chart is linted in CI (`helm-lint`, `chart-tests`) and its invariants are
+asserted by the tests in `charts/workforce-management/tests/` — `render_test.sh`,
+`test_service_selectors.py` (every Service selects exactly one Deployment) and
+`test_kong_config.py`.
 ## Operator micro-frontend (`web/`)
 
 `web/` is `workforce_mfe`, this context's Module Federation remote. It talks only to
@@ -665,3 +707,13 @@ python3 charts/workforce-management/tests/test_service_selectors.py
 
 which proves every Service selects exactly one Deployment — the OLTP Service
 must never select the frontend, analytics or MCP pods.
+
+## Architecture Decision Records
+
+The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 38 decisions, from the
+hexagonal layout to the CloudEvents-only envelope and the transactional
+outbox.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
