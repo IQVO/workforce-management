@@ -1,5 +1,7 @@
 # Workforce Management
 
+[![CI](https://github.com/IQVO/workforce-management/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/IQVO/workforce-management/actions/workflows/ci.yml?query=branch%3Adevelop) [![coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen)](https://github.com/IQVO/workforce-management/blob/develop/Makefile) [![Go](https://img.shields.io/badge/go-1.26.10-00ADD8?logo=go&logoColor=white)](https://github.com/IQVO/workforce-management/blob/develop/go.mod) [![release](https://img.shields.io/github/v/release/IQVO/workforce-management?sort=semver)](https://github.com/IQVO/workforce-management/releases) [![docs](https://img.shields.io/badge/docs-iqvo.github.io-blue)](https://iqvo.github.io/workforce-management/) [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/IQVO/workforce-management/blob/develop/LICENSE)
+
 A Supporting bounded context that owns "who is on shift, on which process
 path, at what rate; direct vs indirect hours." It covers the shift-start
 planning horizon (a human commits a split of headcount across paths) and
