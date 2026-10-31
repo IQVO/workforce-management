@@ -23,6 +23,6 @@ picture.
 
 The two reference documents behind this model are the platform-level
 `warehouse-systems-ddd.md` (WMS/WES/WCS layering, worker-assignment ownership,
-context-mapping vocabulary) and `amazon-fulfillment-ddd.md` (subdomain
+context-mapping vocabulary) and `fulfillment-reference-ddd.md` (subdomain
 classification, aggregates, domain events, glossary). Where this page cites a
 classification or a relationship pattern, it is citing those.
