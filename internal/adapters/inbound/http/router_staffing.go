@@ -67,13 +67,17 @@ func (h *Handler) staffingGapForSiteShift(w http.ResponseWriter, r *http.Request
 		return
 	}
 	shiftId := chi.URLParam(r, "shiftId")
+	limit, after, ok := pageParams(w, r)
+	if !ok {
+		return
+	}
 
 	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), siteCode, shiftId, shared.NewSiteCode(siteCode))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toStaffingGapResponses(gaps))
+	writeJSON(w, http.StatusOK, staffingGapPage(gaps, limit, after))
 }
 
 // staffingGapForShift answers the DEPRECATED
@@ -96,11 +100,15 @@ func (h *Handler) staffingGapForSiteShift(w http.ResponseWriter, r *http.Request
 func (h *Handler) staffingGapForShift(w http.ResponseWriter, r *http.Request) {
 	buildingId := chi.URLParam(r, "buildingId")
 	shiftId := chi.URLParam(r, "shiftId")
+	limit, after, ok := pageParams(w, r, "siteCode")
+	if !ok {
+		return
+	}
 
 	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), buildingId, shiftId, shared.NewSiteCode(r.URL.Query().Get("siteCode")))
 	if err != nil {
 		writeError(w, r, statusFor(err), err)
 		return
 	}
-	writeJSON(w, http.StatusOK, toStaffingGapResponses(gaps))
+	writeJSON(w, http.StatusOK, staffingGapPage(gaps, limit, after))
 }

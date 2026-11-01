@@ -119,25 +119,22 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	r.Get("/healthz", h.healthz)
 	r.Get("/readyz", h.handleReadyz)
 
-	r.Post("/associates/{id}/start-shift", h.startShift)
-	r.Post("/associates/{id}/certifications", h.certify)
-	r.Post("/paths/{pathId}/plan/propose", h.proposePathPlan)
-	// POST /shift-plans and POST /associates/{id}/assignments are the two
-	// mutating endpoints whose blind retry after a lost response would
-	// re-apply real state and re-publish events (ADR-0027). They are
-	// route-scoped (r.With, not r.Use) behind RequireIdempotencyKey when an
-	// IdempotencyPool is wired; a nil pool (in-memory dev/test) leaves them
+	// EVERY POST sits behind RequireIdempotencyKey when an IdempotencyPool is
+	// wired (fleet REST guideline 2.1, ADR-0027 as amended); route-scoped via
+	// r.With, not r.Use. A nil pool (in-memory dev/test) leaves them
 	// unprotected, matching every other optional Postgres-backed capability.
-	// start-shift is idempotent by associate id, certify/break/end-shift act
-	// on a caller-supplied id, and propose is a pure computation.
 	idempotent := r.With()
 	if h.IdempotencyPool != nil {
 		idempotent = r.With(RequireIdempotencyKey(h.IdempotencyPool))
 	}
+	idempotent.Post("/associates/{id}/shift-starts", h.startShift)
+	idempotent.Post("/associates/{id}/certifications", h.certify)
+	idempotent.Post("/paths/{pathId}/plan-proposals", h.proposePathPlan)
 	idempotent.Post("/shift-plans", h.commitShiftPlan)
 	idempotent.Post("/associates/{id}/assignments", h.assignLabor)
-	r.Post("/associates/{id}/break/start", h.startBreak)
-	r.Post("/associates/{id}/break/end", h.endBreak)
+	idempotent.Post("/associates/{id}/break-starts", h.startBreak)
+	idempotent.Post("/associates/{id}/break-ends", h.endBreak)
+	idempotent.Post("/associates/{id}/shift-ends", h.endShift)
 	r.Get("/paths/{pathId}/staffing-gap", h.staffingGap)
 	// Canonical route (ADR 0035): the path segment is the Site code, both the
 	// plan lookup key and the associate scope.
@@ -146,7 +143,6 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	// shape): buildingId is the legacy name of the plan key. Kept working,
 	// announced with `Deprecation: true`, removed only by a later ADR.
 	r.With(deprecatedRoute).Get("/buildings/{buildingId}/shifts/{shiftId}/staffing-gap", h.staffingGapForShift)
-	r.Post("/associates/{id}/end-shift", h.endShift)
 
 	return r
 }

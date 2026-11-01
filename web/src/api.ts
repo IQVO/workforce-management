@@ -75,3 +75,28 @@ export async function apiPost<TResponse>(
   if (res.status === 204) return undefined as TResponse;
   return (await res.json()) as TResponse;
 }
+
+/** Upper bound on pages followed by fetchAllPages, so a misbehaving server
+ *  that keeps returning a nextCursor cannot loop the browser forever. */
+const MAX_PAGES = 50;
+
+/** GET a paged collection and follow nextCursor until it is absent (fleet
+ *  REST guideline 5.2/5.3): reads `items`, never a bare array. `url` may
+ *  already carry a query string; the cursor is appended with the same
+ *  filters on every page request. */
+export async function fetchAllPages<T>(url: string, signal?: AbortSignal): Promise<T[]> {
+  const out: T[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < MAX_PAGES; i++) {
+    const u = cursor
+      ? `${url}${url.includes("?") ? "&" : "?"}cursor=${encodeURIComponent(cursor)}`
+      : url;
+    const res = await fetch(u, { signal });
+    if (!res.ok) await parseProblemOrThrow(res);
+    const page = (await res.json()) as { items: T[]; nextCursor?: string };
+    out.push(...page.items);
+    if (!page.nextCursor) return out;
+    cursor = page.nextCursor;
+  }
+  throw new Error(`collection ${url} did not end after ${MAX_PAGES} pages`);
+}

@@ -1,9 +1,9 @@
 # Derived from apis/openapi.yaml:
-# - POST /associates/{id}/break/start 409: "the associate is already on
+# - POST /associates/{id}/break-starts 409: "the associate is already on
 #   break (associate-already-on-break)" — "Not idempotent: calling this
 #   while already on break is rejected as a conflict rather than treated
 #   as a no-op, since it represents a discrete state transition".
-# - POST /associates/{id}/break/end 409: "the associate is not currently
+# - POST /associates/{id}/break-ends 409: "the associate is not currently
 #   on break (associate-not-on-break)" — same non-idempotent discipline.
 Feature: Break state transitions are discrete, not upserts
   As a shift manager

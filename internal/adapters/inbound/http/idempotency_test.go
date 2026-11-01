@@ -38,25 +38,20 @@ func TestRequireIdempotencyKey_MissingHeaderIsRejectedBeforeAnyDatabaseWork(t *t
 	}
 }
 
-// ADR-0027: with an IdempotencyPool wired, exactly the two
-// resource-creation POSTs require the header; every other route is
-// untouched.
-func TestRouter_IdempotencyPoolProtectsOnlyTheCreationRoutes(t *testing.T) {
+// Fleet REST guideline 2.1: with an IdempotencyPool wired, EVERY POST
+// requires the header; GETs are untouched.
+func TestRouter_IdempotencyPoolProtectsEveryPost(t *testing.T) {
 	h := newTestHandler()
 	h.IdempotencyPool = lazyIdempotencyPool(t)
 	router := NewRouter(h, testLogger, "")
 
-	for _, path := range []string{"/shift-plans", "/associates/assoc-1/assignments"} {
+	for _, path := range []string{
+		"/shift-plans", "/associates/assoc-1/assignments", "/associates/assoc-1/shift-starts",
+		"/associates/assoc-1/certifications", "/paths/pack/plan-proposals",
+		"/associates/assoc-1/break-starts", "/associates/assoc-1/break-ends", "/associates/assoc-1/shift-ends",
+	} {
 		rec := doRequest(t, router, http.MethodPost, path, map[string]any{})
 		assertProblemDetails(t, rec, http.StatusBadRequest, "idempotency-key-required", path)
-	}
-
-	// Unprotected: reaches its handler (201 / 204), no idempotency 400.
-	if rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}}); rec.Code != http.StatusCreated {
-		t.Fatalf("start-shift must not require Idempotency-Key, got %d: %s", rec.Code, rec.Body.String())
-	}
-	if rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/certifications", certifyRequest{Certification: "pick"}); rec.Code != http.StatusNoContent {
-		t.Fatalf("certifications must not require Idempotency-Key, got %d: %s", rec.Code, rec.Body.String())
 	}
 }
 
@@ -64,7 +59,7 @@ func TestRouter_IdempotencyPoolProtectsOnlyTheCreationRoutes(t *testing.T) {
 // with no header at all.
 func TestRouter_NilIdempotencyPoolLeavesCreationRoutesUnprotected(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pack"}})
 	if rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "pack"}); rec.Code != http.StatusCreated {
 		t.Fatalf("assignments without a pool = %d, want 201: %s", rec.Code, rec.Body.String())
 	}
@@ -83,5 +78,33 @@ func TestCORS_AllowsIdempotencyKeyHeader(t *testing.T) {
 	allow := strings.ToLower(rec.Header().Get("Access-Control-Allow-Headers"))
 	if !strings.Contains(allow, "idempotency-key") {
 		t.Fatalf("Access-Control-Allow-Headers = %q, want it to include Idempotency-Key", allow)
+	}
+}
+
+func TestRequireIdempotencyKey_MalformedKeyIsRejected(t *testing.T) {
+	h := RequireIdempotencyKey(nil)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }))
+	for _, key := range []string{strings.Repeat("a", 129), "tab\there", "ç"} {
+		req := httptest.NewRequest(http.MethodPost, "/shift-plans", strings.NewReader(`{}`))
+		req.Header.Set(IdempotencyKeyHeader, key)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assertProblemDetails(t, rec, http.StatusBadRequest, "idempotency-key-invalid", "/shift-plans")
+	}
+}
+
+// TestRetiredRoutesAreGone: the pre-guideline command routes answer 404/405.
+func TestRetiredRoutesAreGone(t *testing.T) {
+	router := NewRouter(newTestHandler(), testLogger, "")
+	for _, path := range []string{
+		"/associates/assoc-1/start-shift",
+		"/associates/assoc-1/end-shift",
+		"/associates/assoc-1/break/start",
+		"/associates/assoc-1/break/end",
+		"/paths/pack/plan/propose",
+	} {
+		rec := doRequest(t, router, http.MethodPost, path, map[string]any{})
+		if rec.Code != http.StatusNotFound && rec.Code != http.StatusMethodNotAllowed {
+			t.Errorf("POST %s = %d, want 404 or 405", path, rec.Code)
+		}
 	}
 }
