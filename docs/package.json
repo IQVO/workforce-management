@@ -75,6 +75,6 @@
     "launch-editor": "^2.14.2",
     "follow-redirects": "^1.16.2",
     "joi": "^17.13.9",
-    "minimatch": "^11.0.1"
+    "minimatch": "^11.0.3"
   }
 }
