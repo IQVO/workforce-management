@@ -365,7 +365,7 @@ components:
             id: "3d4a1f60-2b8e-4c17-8a55-0c6f9d2b41aa"
             source: "/warehouse/workforce-management"
             type: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed"
-            subject: "BLD1/pack"
+            subject: "pack"
             time: "2026-08-21T21:30:00Z"
             datacontenttype: "application/json"
             dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1"
