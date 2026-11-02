@@ -19,15 +19,23 @@ surface are in the [Governance charter](./governance-charter.md).
 
 ## Tools
 
-| Tool | Annotations | Use case | Registered |
-|---|---|---|---|
-| `get_staffing_gap` | `readOnlyHint: true` | `GetStaffingGap.ExecuteForSite` | always |
-| `propose_path_heads` | `readOnlyHint: true` | `ProposePathPlan.Execute` | always |
-| `assign_labor` | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false` | `AssignLabor.Execute` | always |
-| `get_workforce_labor_report` | `readOnlyHint: true` | none. Calls `GET /reports/labor` on `cmd/workforce-reports`. | only when `REPORTS_BASE_URL` is set |
+| Tool | Annotations | Authority | Use case | Registered |
+|---|---|---|---|---|
+| `get_staffing_gap` | `readOnlyHint: true` | `L1` | `GetStaffingGap.ExecuteForSite` | always |
+| `propose_path_heads` | `readOnlyHint: true` | `L2` | `ProposePathPlan.Execute` | always |
+| `assign_labor` | `readOnlyHint: false`, `destructiveHint: true`, `idempotentHint: false` | `L3` | `AssignLabor.ExecuteInitiatedBy` | always |
+| `get_workforce_labor_report` | `readOnlyHint: true` | `L1` | none. Calls `GET /reports/labor` on `cmd/workforce-reports`. | only when `REPORTS_BASE_URL` is set |
+
+Every tool declares its authority level in its `Meta` under
+`com.warehouse/authority` (returned in `tools/list` `_meta`); the A2A skills
+carry the same level as the tag `authority:L<n>`. `L2` marks a pure
+recommendation. The level is a label, not access control
+([ADR 0041](../adr/0041-agent-authority-levels-and-attributable-assignments.md)).
+The server is stateless: it answers the `2026-07-28` `server/discover`
+handshake and still answers a legacy `initialize`.
 
 The registry is pinned by `testdata/tool_registry.golden` (name, read-only,
-destructive) and checked for fleet-wide name uniqueness against
+destructive, authority) and checked for fleet-wide name uniqueness against
 `testdata/fleet_tool_snapshot.golden`. See [Testing](../development/testing.md#mcp-evals).
 
 "Read-only" describes the client contract. `get_staffing_gap` and
@@ -75,6 +83,16 @@ Puts an associate on a path and ends their previous active assignment.
 |---|---|---|---|
 | `associateId` | string | yes | Associate to move. |
 | `pathId` | string | yes | Target path, validated against the catalogue. The associate must hold the path family's certification. |
+| `proposalId` | string | no | Proposal this assignment executes. Trimmed, at most 128 characters. |
+| `approvedBy` | string | no | Who approved the proposal. Trimmed, at most 128 characters. |
+| `agentId` | string | no | The calling agent. Trimmed, at most 128 characters. |
+
+The three optional inputs are attribution labels, not credentials: they grant
+nothing and never change whether the call is accepted. The adapter stamps
+`via: "mcp"` itself (it is not an argument), and the published event gains
+`data.initiated_by` (`via`, plus `proposal_id`, `approved_by`, `agent_id` when
+given). REST never produces it. See the `LaborAssigned` and `LaborReassigned`
+schemas in `apis/asyncapi.yaml`.
 
 Output: `associateId`, `pathId`, `assignmentId` (`<associateId>@<pathId>`).
 Domain rejections (not found, missing certification, on break, shift ended,
@@ -122,6 +140,8 @@ reports API's `rows` array (see
 
 ## Scaling note
 
-Sessions (`Mcp-Session-Id`) live in process memory, and the chart's MCP
-Service has no session affinity. Run **one** replica (see
+Since [ADR 0041](../adr/0041-agent-authority-levels-and-attributable-assignments.md)
+the server is stateless: no `Mcp-Session-Id` is issued and no session state is
+kept in process memory. The chart still deploys **one** replica with no HPA;
+raising that is a separate, deliberate change (see
 [Runbook](../operations/runbook.md#scaling)).

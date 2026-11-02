@@ -64,7 +64,7 @@ for metrics see [Observability](./observability.md).
 | `GET /reports/labor/freshness` returns `0` but the report is empty | `lagSeconds` is `0` both when caught up and when `analytics_processed_events` is empty | `SELECT count(*) FROM analytics_processed_events;` | Check that the API relay publishes (`outbox_events` drains) and that the projector consumes. |
 | `GET /reports/labor` returns `400 invalid-report-query` | `from`/`to` missing or not RFC 3339, or `granularity` is not `hour` | Query string | `?from=2026-01-01T00:00:00Z&to=2026-01-02T00:00:00Z`. |
 | MCP has no `get_workforce_labor_report` tool | `REPORTS_BASE_URL` unset | `reports data-product tool enabled` absent from the MCP boot log | Set `mcp.reportsBaseUrl`, or enable `analytics` so the chart defaults it. |
-| MCP client gets session errors with 2+ MCP replicas | Per-process `Mcp-Session-Id` state and no session affinity | `mcp.replicaCount` | Keep 1 replica (see [Runbook](./runbook.md#scaling)). |
+| MCP client gets session errors with 2+ MCP replicas | Only on a build before [ADR 0041](../adr/0041-agent-authority-levels-and-attributable-assignments.md): per-process `Mcp-Session-Id` state and no session affinity. Current builds are stateless. | the image tag, `mcp.replicaCount` | Upgrade; on an older build keep 1 replica (see [Runbook](./runbook.md#scaling)). |
 
 ## Local development
 

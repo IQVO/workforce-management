@@ -104,6 +104,14 @@ func (l *LaborAssignment) History() []Interval { return append([]Interval(nil), 
 // assignment is already active, it is closed first and LaborReassigned is
 // raised; otherwise LaborAssigned is raised.
 func (l *LaborAssignment) Assign(pathId shared.PathId, hasCertification bool, at time.Time) error {
+	return l.AssignBy(pathId, hasCertification, at, shared.Initiator{})
+}
+
+// AssignBy is Assign with the raised event attributed to initiator (the zero
+// Initiator means the change was not agent-initiated). Attribution is
+// metadata on the event only: it never affects whether the assignment is
+// accepted.
+func (l *LaborAssignment) AssignBy(pathId shared.PathId, hasCertification bool, at time.Time, initiator shared.Initiator) error {
 	if !hasCertification {
 		return ErrCertificationRequired
 	}
@@ -111,11 +119,11 @@ func (l *LaborAssignment) Assign(pathId shared.PathId, hasCertification bool, at
 		fromPath := l.active.PathId
 		l.closeActive(at)
 		l.active = &Interval{PathId: pathId, Start: at}
-		l.record(shared.NewLaborReassigned(at, l.associateId, fromPath, pathId))
+		l.record(shared.NewLaborReassignedBy(at, l.associateId, fromPath, pathId, initiator))
 		return nil
 	}
 	l.active = &Interval{PathId: pathId, Start: at}
-	l.record(shared.NewLaborAssigned(at, l.associateId, pathId))
+	l.record(shared.NewLaborAssignedBy(at, l.associateId, pathId, initiator))
 	return nil
 }
 

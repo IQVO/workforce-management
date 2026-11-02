@@ -1,3 +1,3 @@
-assign_labor	false	true
-get_staffing_gap	true	false
-propose_path_heads	true	false
+assign_labor	false	true	L3
+get_staffing_gap	true	false	L1
+propose_path_heads	true	false	L2

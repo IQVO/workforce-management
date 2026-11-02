@@ -57,6 +57,12 @@ type staffingStatusArgs struct {
 type assignLaborArgs struct {
 	AssociateId string `json:"associateId"`
 	PathId      string `json:"pathId"`
+	// Optional attribution labels (trimmed, max 128 characters), recorded on
+	// the published event as initiated_by. via is NOT an argument: this
+	// adapter stamps it.
+	ProposalId string `json:"proposalId,omitempty"`
+	ApprovedBy string `json:"approvedBy,omitempty"`
+	AgentId    string `json:"agentId,omitempty"`
 }
 
 // answer maps one incoming message to a skill and returns the agent's reply
@@ -229,10 +235,14 @@ func (d Deps) assignLabor(ctx context.Context, rawArgs json.RawMessage) (laborAs
 	if strings.TrimSpace(args.AssociateId) == "" || strings.TrimSpace(args.PathId) == "" {
 		return laborAssigned{}, problemInvalidArgument(errors.New("associateId and pathId are required"))
 	}
+	initiator, err := shared.NewInitiator(shared.ViaA2A, args.ProposalId, args.ApprovedBy, args.AgentId)
+	if err != nil {
+		return laborAssigned{}, problemInvalidArgument(err)
+	}
 	if err := d.validatePathId(args.PathId); err != nil {
 		return laborAssigned{}, problemFromUseCase(err)
 	}
-	la, err := d.AssignLabor.Execute(ctx, shared.AssociateId(args.AssociateId), shared.PathId(args.PathId))
+	la, err := d.AssignLabor.ExecuteInitiatedBy(ctx, shared.AssociateId(args.AssociateId), shared.PathId(args.PathId), initiator)
 	if err != nil {
 		return laborAssigned{}, problemFromUseCase(err)
 	}
