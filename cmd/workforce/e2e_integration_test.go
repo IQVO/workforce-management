@@ -608,6 +608,15 @@ func assertLaborAssigned(t *testing.T, m kafkago.Message) {
 	if err := json.Unmarshal(la.Data, &assigned); err != nil || assigned.AssociateID != "assoc-1" || !strings.EqualFold(assigned.PathID, "PACK") {
 		t.Fatalf("LaborAssigned data = %+v (%v)", assigned, err)
 	}
+	// Agentic Standard v2: the REST path is never agent-initiated, so the
+	// published fact carries no initiated_by.
+	var keys map[string]json.RawMessage
+	if err := json.Unmarshal(la.Data, &keys); err != nil {
+		t.Fatalf("LaborAssigned data is not an object: %v", err)
+	}
+	if _, ok := keys["initiated_by"]; ok {
+		t.Fatalf("a REST-initiated LaborAssigned carries initiated_by: %s", la.Data)
+	}
 }
 
 // Phase 6: repeating the same keyed request adds no row and no event.
