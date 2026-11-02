@@ -129,7 +129,7 @@ paths:
                 detail: "not ready: kafka"
                 instance: /readyz
 
-  /associates/{id}/start-shift:
+  /associates/{id}/shift-starts:
     post:
       operationId: startAssociateShift
       summary: Start an associate's shift
@@ -144,6 +144,7 @@ paths:
         0034) so the staffing gap can be scoped to a site.
       tags: [Associates]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AssociateId"
       requestBody:
         required: true
@@ -161,6 +162,8 @@ paths:
             (this service has no GET route for an individual associate yet;
             the URI identifies the resource per RFC 7231 §7.1.2 regardless).
           headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
             Location:
               description: URI of the started associate's shift resource.
               schema:
@@ -182,6 +185,7 @@ paths:
             Only possible on a restart (the associate already has a
             roster entry) racing another concurrent write for the same
             associate; reload and retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -191,9 +195,10 @@ paths:
                 title: The resource was modified by another request; reload and retry
                 status: 409
                 detail: aggregate was concurrently modified; reload and retry
-                instance: /associates/assoc-1/start-shift
+                instance: /associates/assoc-1/shift-starts
         "500":
           $ref: "#/components/responses/InternalError"
+
 
   /associates/{id}/certifications:
     post:
@@ -210,6 +215,7 @@ paths:
         than 201.
       tags: [Associates]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AssociateId"
       requestBody:
         required: true
@@ -221,6 +227,9 @@ paths:
               certification: hazmat
       responses:
         "204":
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           description: Certification added. No response body.
         "400":
           $ref: "#/components/responses/BadRequest"
@@ -233,6 +242,7 @@ paths:
             concurrently modified by another request between when it was
             read and when this write was attempted
             (concurrent-modification, ADR 0021); reload and retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -246,7 +256,8 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /paths/{pathId}/plan/propose:
+
+  /paths/{pathId}/plan-proposals:
     post:
       operationId: proposePathPlan
       summary: Propose planned heads for a path (pure computation, not committed)
@@ -264,6 +275,7 @@ paths:
         available applies no trim.
       tags: [Shift Plans]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/PathId"
       requestBody:
         required: true
@@ -277,6 +289,9 @@ paths:
               plannedRate: 30
       responses:
         "200":
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           description: Proposed heads for this path, not committed.
           content:
             application/json:
@@ -289,10 +304,13 @@ paths:
                 rateSource: caller
         "400":
           $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/IdempotencyKeyReused"
         "422":
           $ref: "#/components/responses/ConflictingSiteAndBuilding"
         "500":
           $ref: "#/components/responses/InternalError"
+
 
   /shift-plans:
     post:
@@ -353,6 +371,8 @@ paths:
         "201":
           description: Shift plan committed.
           headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
             Location:
               description: URI of the committed shift plan.
               schema:
@@ -402,6 +422,7 @@ paths:
             installedStations), or plannedHours exceeds what plannedHeads
             can work within the shift's max hours
             (planned-hours-exceed-capacity).
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -414,11 +435,9 @@ paths:
                 instance: /shift-plans
         "422":
           description: >-
-            Unprocessable — either siteCode and its deprecated alias
-            buildingId were both sent with DIFFERENT values
-            (conflicting-site-and-building, ADR 0035), or the
-            Idempotency-Key was already used with a request that had a
-            different body (idempotency-key-reused, ADR-0027).
+            Unprocessable — siteCode and its deprecated alias buildingId
+            were both sent with DIFFERENT values
+            (conflicting-site-and-building, ADR 0035).
           content:
             application/problem+json:
               schema:
@@ -429,6 +448,9 @@ paths:
                 status: 422
                 detail: siteCode and buildingId (a deprecated alias of siteCode) are both present with different values
                 instance: /shift-plans
+        "500":
+          $ref: "#/components/responses/InternalError"
+
         "503":
           description: >-
             Service unavailable — fulfillment-execution could not be
@@ -447,8 +469,6 @@ paths:
                 status: 503
                 detail: installed capacity unavailable
                 instance: /shift-plans
-        "500":
-          $ref: "#/components/responses/InternalError"
 
   /associates/{id}/assignments:
     post:
@@ -490,6 +510,8 @@ paths:
             assignment resource (at most one active assignment exists per
             associate, so the collection URI identifies it).
           headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
             Location:
               description: URI of the associate's assignment resource.
               schema:
@@ -519,6 +541,7 @@ paths:
             request between when it was read and when this write was
             attempted (concurrent-modification, ADR 0021); reload and
             retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -529,12 +552,11 @@ paths:
                 status: 409
                 detail: associate lacks the certification required for this path
                 instance: /associates/assoc-1/assignments
-        "422":
-          $ref: "#/components/responses/IdempotencyKeyReused"
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /associates/{id}/break/start:
+
+  /associates/{id}/break-starts:
     post:
       operationId: startAssociateBreak
       summary: Start a logged break for an associate
@@ -547,9 +569,13 @@ paths:
         discrete state transition, not an upsert.
       tags: [Associates]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AssociateId"
       responses:
         "204":
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           description: Break started. No response body.
         "400":
           $ref: "#/components/responses/BadRequest"
@@ -563,6 +589,7 @@ paths:
             concurrently modified by another request between when it was
             read and when this write was attempted
             (concurrent-modification, ADR 0021); reload and retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -572,11 +599,12 @@ paths:
                 title: Associate is already on break
                 status: 409
                 detail: associate is already on break
-                instance: /associates/assoc-1/break/start
+                instance: /associates/assoc-1/break-starts
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /associates/{id}/break/end:
+
+  /associates/{id}/break-ends:
     post:
       operationId: endAssociateBreak
       summary: End a logged break for an associate
@@ -586,9 +614,13 @@ paths:
         is rejected as a conflict rather than treated as a no-op.
       tags: [Associates]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AssociateId"
       responses:
         "204":
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           description: Break ended. No response body.
         "400":
           $ref: "#/components/responses/BadRequest"
@@ -602,6 +634,7 @@ paths:
             concurrently modified by another request between when it was
             read and when this write was attempted
             (concurrent-modification, ADR 0021); reload and retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -611,9 +644,10 @@ paths:
                 title: Associate is not on break
                 status: 409
                 detail: associate is not on break
-                instance: /associates/assoc-1/break/end
+                instance: /associates/assoc-1/break-ends
         "500":
           $ref: "#/components/responses/InternalError"
+
 
   /paths/{pathId}/staffing-gap:
     get:
@@ -726,6 +760,8 @@ paths:
       parameters:
         - $ref: "#/components/parameters/SiteCodePath"
         - $ref: "#/components/parameters/ShiftId"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: >-
@@ -734,22 +770,21 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/StaffingGapResponse"
+                $ref: "#/components/schemas/StaffingGapPage"
               example:
-                - pathId: pack
-                  plannedHeads: 3
-                  activeHeads: 1
-                  understaffed: true
-                  observedIdleShare: 0.42
-                  observedIdlePct: 0.42
-                  siteCode: WH1
-                - pathId: pick
-                  plannedHeads: 1
-                  activeHeads: 1
-                  understaffed: false
-                  siteCode: WH1
+                items:
+                    - pathId: pack
+                      plannedHeads: 3
+                      activeHeads: 1
+                      understaffed: true
+                      observedIdleShare: 0.42
+                      observedIdlePct: 0.42
+                      siteCode: WH1
+                    - pathId: pick
+                      plannedHeads: 1
+                      activeHeads: 1
+                      understaffed: false
+                      siteCode: WH1
         "400":
           $ref: '#/components/responses/BadRequest'
         "404":
@@ -800,6 +835,8 @@ paths:
         - $ref: "#/components/parameters/BuildingId"
         - $ref: "#/components/parameters/ShiftId"
         - $ref: "#/components/parameters/SiteCodeQuery"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
       responses:
         "200":
           description: >-
@@ -817,20 +854,19 @@ paths:
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/StaffingGapResponse"
+                $ref: "#/components/schemas/StaffingGapPage"
               example:
-                - pathId: pack
-                  plannedHeads: 3
-                  activeHeads: 1
-                  understaffed: true
-                  observedIdleShare: 0.42
-                  observedIdlePct: 0.42
-                - pathId: pick
-                  plannedHeads: 1
-                  activeHeads: 1
-                  understaffed: false
+                items:
+                    - pathId: pack
+                      plannedHeads: 3
+                      activeHeads: 1
+                      understaffed: true
+                      observedIdleShare: 0.42
+                      observedIdlePct: 0.42
+                    - pathId: pick
+                      plannedHeads: 1
+                      activeHeads: 1
+                      understaffed: false
         "400":
           $ref: '#/components/responses/BadRequest'
         "404":
@@ -856,7 +892,7 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
-  /associates/{id}/end-shift:
+  /associates/{id}/shift-ends:
     post:
       operationId: endAssociateShift
       summary: End an associate's shift
@@ -867,9 +903,13 @@ paths:
         no-op — no error, no event, still 204.
       tags: [Associates]
       parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
         - $ref: "#/components/parameters/AssociateId"
       responses:
         "204":
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
           description: Shift ended (or was already ended). No response body.
         "400":
           $ref: "#/components/responses/BadRequest"
@@ -883,6 +923,7 @@ paths:
             concurrently modified by another request between when it was
             read and when this write was attempted
             (concurrent-modification, ADR 0021); reload and retry.
+            Also returned (idempotency-key-reused) when the Idempotency-Key was already used with a different request (method, path or body).
           content:
             application/problem+json:
               schema:
@@ -892,12 +933,33 @@ paths:
                 title: Max hours per shift exceeded
                 status: 409
                 detail: logging these hours would exceed the max hours per shift
-                instance: /associates/assoc-1/end-shift
+                instance: /associates/assoc-1/shift-ends
         "500":
           $ref: "#/components/responses/InternalError"
 
+
 components:
   parameters:
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Page size, 1-500 (default 100). Empty or repeated is 400 invalid-limit.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 500
+        default: 100
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: >-
+        Opaque page token from the previous page's nextCursor; repeat the
+        same filters. Undecodable or repeated is 400 invalid-cursor. Any
+        other undeclared query parameter is 400 unknown-query-parameter.
+      schema:
+        type: string
     AssociateId:
       name: id
       in: path
@@ -982,23 +1044,36 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       description: >-
         Caller-generated key (e.g. a UUID v4) that makes a retried request
-        safe (ADR-0027). Clients MUST always send a non-empty value on the
-        routes that declare it: a deployment backed by Postgres (every real
-        deployment) rejects a request without it with 400
-        idempotency-key-required. It is declared optional here only because
-        the in-memory development mode (which the contract test boots) does
-        not enforce it. Reuse the SAME key for retries of one logical
+        safe (ADR-0027). Required on every POST: the service runs on Postgres in
+        every deployment (ADR-0038) and rejects a request without it with
+        400 idempotency-key-required. Reuse the SAME key for retries of one logical
         request (same body) — the first response, success or business
         error, is stored and replayed byte-for-byte for the key's TTL
         (24h by default) — and a NEW key for each new logical request.
-        Reusing a key with a different body is rejected with 422
-        idempotency-key-reused.
+        Reusing a key with a different request (method, path or body) is
+        rejected with 409 idempotency-key-reused. A key that is not 1-128
+        printable ASCII characters is a 400 idempotency-key-invalid. Every
+        POST of this service takes the key; the key is global (looked up by
+        key alone), so one key must never be reused across routes.
       schema:
         type: string
+        minLength: 1
+        maxLength: 128
+        pattern: '^[!-~]([ -~]*[!-~])?$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
+
+  headers:
+    IdempotencyReplayed:
+      description: >-
+        "true" when this answer is the stored replay of an earlier request
+        with the same Idempotency-Key and fingerprint; absent on the first
+        execution.
+      schema:
+        type: string
+        enum: ["true"]
 
   responses:
     BadRequest:
@@ -1007,9 +1082,9 @@ components:
         (empty-associate-id, empty-path-id, empty-certification,
         missing-building-id -- neither siteCode nor its deprecated alias
         buildingId was sent --, missing-shift-id, missing-charge, or
-        malformed-request-body). On the two Idempotency-Key-protected routes
-        (POST /shift-plans, POST /associates/{id}/assignments) a missing
-        Idempotency-Key header is also a 400 (idempotency-key-required).
+        malformed-request-body). On every POST a missing Idempotency-Key
+        header is also a 400 (idempotency-key-required) and a malformed one
+        (not 1-128 printable ASCII) a 400 (idempotency-key-invalid).
       content:
         application/problem+json:
           schema:
@@ -1019,7 +1094,7 @@ components:
             title: Certification must not be empty
             status: 400
             detail: certification must not be empty
-            instance: /associates/assoc-1/start-shift
+            instance: /associates/assoc-1/shift-starts
     NotFound:
       description: The referenced associate has no started shift (resource-not-found).
       content:
@@ -1047,12 +1122,12 @@ components:
             title: siteCode and its deprecated alias buildingId have different values
             status: 422
             detail: siteCode and buildingId (a deprecated alias of siteCode) are both present with different values
-            instance: /paths/pack/plan/propose
+            instance: /paths/pack/plan-proposals
     IdempotencyKeyReused:
       description: >-
-        The Idempotency-Key was already used with a request that had a
-        different body (idempotency-key-reused, ADR-0027). Use a new key for
-        a genuinely different request.
+        The Idempotency-Key was already used with a different request
+        (method, path or body) (idempotency-key-reused, ADR-0027). Use a new
+        key for a genuinely different request.
       content:
         application/problem+json:
           schema:
@@ -1060,8 +1135,8 @@ components:
           example:
             type: https://errors.workforce-management.warehouse-systems.dev/idempotency-key-reused
             title: Idempotency-Key was already used with a different request
-            status: 422
-            detail: The Idempotency-Key header on this request was already used with a request that had a different body. Use a new Idempotency-Key for a genuinely different request.
+            status: 409
+            detail: The Idempotency-Key header on this request was already used with a different request (method, path or body). Use a new Idempotency-Key for a genuinely different request.
             instance: /shift-plans
     InternalError:
       description: >-
@@ -1424,6 +1499,17 @@ components:
           description: Whether the associate currently has an active assignment.
           example: true
 
+    StaffingGapPage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StaffingGapResponse"
+        nextCursor:
+          type: string
+          description: Opaque cursor of the next page; absent on the last page. Paths are ordered by pathId.
     StaffingGapResponse:
       type: object
       required: [pathId, plannedHeads, activeHeads, understaffed]

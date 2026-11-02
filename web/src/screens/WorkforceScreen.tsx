@@ -1,4 +1,5 @@
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
+import { fetchAllPages } from "../api";
 import { WORKFORCE_API_BASE } from "../config";
 import {
   allPathsStaffingGapUrl,
@@ -51,14 +52,30 @@ export function WorkforceScreen() {
         ? allPathsStaffingGapUrl(WORKFORCE_API_BASE, query.buildingId, query.shiftId)
         : singlePathStaffingGapUrl(WORKFORCE_API_BASE, query.pathId, query.siteCode, query.shiftId)
     : null;
-  // Both shift views answer with an array; the single-path lookup with one
-  // object. Normalise both to a list for rendering.
-  const { data, loading, error } = useFetch<StaffingGap[] | StaffingGap>(url);
-  const gaps: StaffingGap[] = !data
-    ? []
-    : Array.isArray(data)
-      ? data
-      : [data];
+  // The two shift views answer with a {items,nextCursor} page (followed to
+  // the end by fetchAllPages); the single-path lookup with one object.
+  const isList = query !== null && query.mode !== "path";
+  const single = useFetch<StaffingGap>(isList ? null : url);
+  const [list, setList] = useState<{
+    data: StaffingGap[];
+    loading: boolean;
+    error: Error | null;
+  }>({ data: [], loading: false, error: null });
+  useEffect(() => {
+    if (!isList || !url) return;
+    const ctrl = new AbortController();
+    setList({ data: [], loading: true, error: null });
+    fetchAllPages<StaffingGap>(url, ctrl.signal)
+      .then((data) => setList({ data, loading: false, error: null }))
+      .catch((e: unknown) => {
+        if (ctrl.signal.aborted) return;
+        setList({ data: [], loading: false, error: e instanceof Error ? e : new Error(String(e)) });
+      });
+    return () => ctrl.abort();
+  }, [isList, url]);
+  const loading = isList ? list.loading : single.loading;
+  const error = isList ? list.error : single.error;
+  const gaps: StaffingGap[] = isList ? list.data : single.data ? [single.data] : [];
 
   function onSubmit(e: FormEvent) {
     e.preventDefault();

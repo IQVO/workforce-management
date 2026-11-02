@@ -41,7 +41,7 @@ record is the additive, backward-compatible step.
    deprecated **alias** with the **same value** and the **same stored column**
    (`shift_plan.building_id`; the `path_plan`/`shift_plan` tables are untouched).
    **No migration is needed and none is added.**
-2. **Write requests** (`POST /paths/{pathId}/plan/propose`,
+2. **Write requests** (`POST /paths/{pathId}/plan-proposals`,
    `POST /shift-plans`; MCP `propose_path_heads`) accept `siteCode` **or**
    `buildingId`. At least one is required (neither → `400 missing-building-id`;
    the slug keeps its historic name so clients that match it keep working).

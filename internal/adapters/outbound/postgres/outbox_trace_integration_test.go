@@ -185,7 +185,7 @@ func TestOutboxTrace_TraceparentCrossesTheOutboxToKafka(t *testing.T) {
 
 	d := newDeps(pool)
 	start := &usecases.StartAssociateShift{Associates: d.associates, Events: d.pub, Clock: fixedClock{t: time.Now().UTC()}, UnitOfWork: d.uow}
-	reqCtx, reqSpan := tracer.Start(ctx, "POST /associates/{id}/start-shift", trace.WithSpanKind(trace.SpanKindServer))
+	reqCtx, reqSpan := tracer.Start(ctx, "POST /associates/{id}/shift-starts", trace.WithSpanKind(trace.SpanKindServer))
 	if _, err := start.Execute(reqCtx, "A1", nil); err != nil {
 		t.Fatalf("start shift: %v", err)
 	}

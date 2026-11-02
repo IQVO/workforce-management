@@ -56,7 +56,7 @@ Contract (identical to order-management and inventory-storage):
      Every normal response is cached, including a business-logic 4xx.
    - **0 rows (key seen):** Postgres' unique-index lock guarantees the
      original transaction has already resolved, so a plain read follows:
-     hash mismatch → **422** `idempotency-key-reused`; hash match → replay the
+     hash mismatch → **409** `idempotency-key-reused` (was 422 before [ADR 0040](./0040-adopt-the-fleet-rest-api-guideline.md)); hash match → replay the
      stored status, headers (including `Location`) and body verbatim, without
      calling the handler.
    - A **panic** rolls the transaction back (no idempotency row, no domain
@@ -84,13 +84,7 @@ assert an unchanged `outbox_events` count after a replay.
 
 | Route | Protected? | Reason |
 | --- | --- | --- |
-| `POST /shift-plans` | **yes** | republishes `ShiftPlanCommitted` per line on every call |
-| `POST /associates/{id}/assignments` | **yes** | closes an interval, logs hours, raises an event on every call |
-| `POST /associates/{id}/start-shift` | no | documented idempotent by associate id (restarts the roster entry) |
-| `POST /associates/{id}/certifications` | no | acts on a caller-supplied id; certifying twice is a no-op |
-| `POST /associates/{id}/break/start`, `/break/end` | no | state-machine guarded (`associate-already-on-break` / `associate-not-on-break`) |
-| `POST /associates/{id}/end-shift` | no | guarded by `associate-shift-ended` |
-| `POST /paths/{pathId}/plan/propose` | no | pure computation; persists nothing |
+| every `POST` route | **yes** (ADR 0040) | the v1 scope below (only the two creation routes) was superseded: the fleet guideline keys EVERY POST |
 
 Revisit if a real double-apply incident surfaces on one of the unprotected
 routes.
@@ -124,7 +118,7 @@ after that is a brand-new request.
   fleet.
 - **OpenAPI.** The header is the reusable `IdempotencyKey` parameter in
   `apis/openapi.yaml` with `400 idempotency-key-required` and
-  `422 idempotency-key-reused` documented. It is declared
+  `409 idempotency-key-reused` documented. It is declared
   `required: false` with **no** `minLength` only because the in-memory mode
   the Schemathesis contract job boots does not enforce it; with Postgres —
   every deployment — a non-empty key is mandatory, and the description says
@@ -155,7 +149,7 @@ after that is a brand-new request.
 
 Real-Postgres integration tests (testcontainers) through the real chi router:
 fresh key, replay without a second publish or outbox row, same key with a
-different body → 422, missing header → 400, five goroutines racing one key →
+different request → 409, missing header → 400, five goroutines racing one key →
 exactly one effect, a cached business error, the transaction being bound into
 the request context, and a panic rolling back with nothing cached — for both
 routes (`internal/adapters/inbound/http/idempotency_integration_test.go`).

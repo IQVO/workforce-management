@@ -296,7 +296,7 @@ All bodies are JSON. `{id}` and `{pathId}` are path parameters.
 ```bash
 # Start an associate's shift with initial certifications. siteCode is OPTIONAL
 # (ADR-0034): the canonical facility-layout Site code the associate works at.
-curl -X POST localhost:8080/associates/assoc-1/start-shift \
+curl -X POST localhost:8080/associates/assoc-1/shift-starts \
   -d '{"certifications":["pack"],"siteCode":"WH1"}'
 
 # Add a certification
@@ -313,14 +313,14 @@ curl -X POST localhost:8080/associates/assoc-1/certifications \
 # IDLE_SHARE_TRIM_THRESHOLD (default 0.30), proposedHeads is further
 # trimmed (floored at 1 head) and trimReason explains why
 # (idleness-as-staffing-signal, ADR-0020).
-curl -X POST localhost:8080/paths/pack/plan/propose \
+curl -X POST localhost:8080/paths/pack/plan-proposals \
   -d '{"siteCode":"WH1","charge":100,"plannedRate":30}'
 # -> {"pathId":"pack","proposedHeads":4,"resolvedRate":30,"rateSource":"caller"}
 # (siteCode is canonical; "buildingId" is a deprecated alias with the same
 #  value, and sending both with different values is 422
 #  conflicting-site-and-building -- ADR-0035)
 
-curl -X POST localhost:8080/paths/pack/plan/propose \
+curl -X POST localhost:8080/paths/pack/plan-proposals \
   -d '{"siteCode":"WH1","charge":100}'
 # -> falls back to labor-performance's measured rate for PACK when
 #    LABOR_PERFORMANCE_MODE=http and data exists; otherwise 0 proposed heads.
@@ -329,11 +329,12 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 # Requires INSTALLED_CAPACITY_MODE=http: in the default permissive mode every
 # commit is rejected with 503 installed-capacity-unavailable (ADR-0014), and a
 # line whose plannedHeads exceeds fulfillment-execution's live capacity is 409.
-# POST /shift-plans and POST /associates/{id}/assignments require an
-# Idempotency-Key header (ADR-0027): a missing key is 400
-# idempotency-key-required, the same key with a different body is 422
-# idempotency-key-reused, and a retry with the same key + body replays the
-# stored response.
+# EVERY POST requires an Idempotency-Key header (ADR-0027, ADR-0040): a
+# missing key is 400 idempotency-key-required, a key that is not 1-128
+# printable ASCII is 400 idempotency-key-invalid, the same key with a
+# different method/path/body is 409 idempotency-key-reused, and a retry with
+# the same key + request replays the stored response with
+# "Idempotency-Replayed: true". The key is global (not per route).
 curl -X POST localhost:8080/shift-plans \
   -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
   -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
@@ -346,8 +347,8 @@ curl -X POST localhost:8080/associates/assoc-1/assignments \
   -d '{"pathId":"pack"}'
 
 # Break start/end
-curl -X POST localhost:8080/associates/assoc-1/break/start
-curl -X POST localhost:8080/associates/assoc-1/break/end
+curl -X POST localhost:8080/associates/assoc-1/break-starts
+curl -X POST localhost:8080/associates/assoc-1/break-ends
 
 # Staffing gap read model for a path within a committed plan
 # -> {"pathId":"pack","plannedHeads":3,"activeHeads":1,"understaffed":true}
@@ -365,11 +366,13 @@ curl "localhost:8080/paths/pack/staffing-gap?buildingId=WH1&shiftId=shift-1"
 
 # Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)
 # -> a JSON array of the same per-path objects (canonical route, ADR-0035)
-curl localhost:8080/sites/WH1/shifts/shift-1/staffing-gap
+# Paged: {"items":[...],"nextCursor":"..."}; pass ?limit=1-500 and ?cursor=
+# (the previous nextCursor) until nextCursor is absent.
+curl "localhost:8080/sites/WH1/shifts/shift-1/staffing-gap?limit=100"
 # Deprecated alias (answers "Deprecation: true"): /buildings/WH1/shifts/shift-1/staffing-gap
 
 # End an associate's shift (closes any active assignment first)
-curl -X POST localhost:8080/associates/assoc-1/end-shift
+curl -X POST localhost:8080/associates/assoc-1/shift-ends
 
 curl localhost:8080/healthz   # liveness
 curl localhost:8080/readyz    # readiness: 503 {"status":"not_ready"} once shutdown begins (ADR-0022)

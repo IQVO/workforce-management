@@ -193,10 +193,13 @@ func (w *world) fieldIsAbsent(path string) error {
 }
 
 func (w *world) responseIsListOf(want int) error {
-	var list []any
-	if err := json.Unmarshal(w.lastBody, &list); err != nil {
-		return fmt.Errorf("response is not a JSON array: %q", string(w.lastBody))
+	var env struct {
+		Items []any `json:"items"`
 	}
+	if err := json.Unmarshal(w.lastBody, &env); err != nil || env.Items == nil {
+		return fmt.Errorf("response is not a {items:[...]} page: %q", string(w.lastBody))
+	}
+	list := env.Items
 	if len(list) != want {
 		return fmt.Errorf("response lists %d entries, want %d: %s", len(list), want, string(w.lastBody))
 	}

@@ -20,10 +20,28 @@ import (
 // route wrapped by RequireIdempotencyKey.
 const IdempotencyKeyHeader = "Idempotency-Key"
 
+// IdempotencyReplayedHeader is set to "true" on every replayed answer and
+// never on a first execution (fleet REST guideline 2.3/2.4).
+const IdempotencyReplayedHeader = "Idempotency-Replayed"
+
+// validIdempotencyKey reports whether key is 1-128 printable ASCII characters.
+func validIdempotencyKey(key string) bool {
+	if len(key) < 1 || len(key) > 128 {
+		return false
+	}
+	for i := 0; i < len(key); i++ {
+		if key[i] < 0x20 || key[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // RequireIdempotencyKey is route-scoped (chi's r.With(...)) transactional
-// idempotency-key middleware for a true resource-CREATION endpoint — today,
-// POST /shift-plans and POST /associates/{id}/assignments (see router.go;
-// it is deliberately NOT applied to the whole router). Ported from
+// idempotency-key middleware wrapping EVERY POST route (see router.go;
+// it is deliberately NOT applied to the whole router, GETs need no key).
+// The key is global: the stored row is found by key alone and compared by
+// fingerprint (method + path + sha256(body)). Ported from
 // order-management (ADR 0023) and inventory-storage (ADR 0018); see
 // docs/docs/adr/0027-idempotency-key-middleware.md in this repo for the
 // header contract, the transactional design, the concurrency argument and
@@ -68,7 +86,14 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			if key == "" {
 				writeProblem(w, http.StatusBadRequest,
 					problemCategory{"idempotency-key-required", "Idempotency-Key header is required"},
-					"This endpoint creates a new resource on every call and requires a caller-supplied "+IdempotencyKeyHeader+" header so a retried request is never applied twice.",
+					"Every POST requires a caller-supplied "+IdempotencyKeyHeader+" header so a retried request is never applied twice.",
+					r.URL.Path)
+				return
+			}
+			if !validIdempotencyKey(key) {
+				writeProblem(w, http.StatusBadRequest,
+					problemCategory{"idempotency-key-invalid", "Idempotency-Key header is invalid"},
+					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters.",
 					r.URL.Path)
 				return
 			}
@@ -156,23 +181,23 @@ type storedResponseHeaders = http.Header
 func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, key, requestHash string) {
 	ctx := r.Context()
 
-	var storedHash string
+	var storedHash, storedMethod, storedPath string
 	var statusCode *int
 	var responseBody []byte
 	var responseHeadersRaw []byte
 	err := pool.QueryRow(ctx, `
-		SELECT request_hash, status_code, response_body, response_headers
+		SELECT request_hash, method, path, status_code, response_body, response_headers
 		FROM idempotency_keys WHERE key = $1
-	`, key).Scan(&storedHash, &statusCode, &responseBody, &responseHeadersRaw)
+	`, key).Scan(&storedHash, &storedMethod, &storedPath, &statusCode, &responseBody, &responseHeadersRaw)
 	if err != nil {
 		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
 		return
 	}
 
-	if storedHash != requestHash {
-		writeProblem(w, http.StatusUnprocessableEntity,
+	if storedHash != requestHash || storedMethod != r.Method || storedPath != r.URL.Path {
+		writeProblem(w, http.StatusConflict,
 			problemCategory{"idempotency-key-reused", "Idempotency-Key was already used with a different request"},
-			"The Idempotency-Key header on this request was already used with a request that had a different body. "+
+			"The Idempotency-Key header on this request was already used with a different request (method, path or body). "+
 				"Use a new Idempotency-Key for a genuinely different request.",
 			r.URL.Path)
 		return
@@ -199,6 +224,7 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 			}
 		}
 	}
+	w.Header().Set(IdempotencyReplayedHeader, "true")
 	w.WriteHeader(*statusCode)
 	_, _ = w.Write(responseBody)
 }

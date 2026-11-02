@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -270,6 +271,8 @@ func (s *service) stopQuietly() {
 	}
 }
 
+var idemSeq atomic.Int64
+
 // try performs a request and returns -1 when the connection fails.
 func (s *service) try(method, path, body string, headers map[string]string) (int, string) {
 	req, err := http.NewRequestWithContext(context.Background(), method, s.base+path, strings.NewReader(body))
@@ -278,6 +281,11 @@ func (s *service) try(method, path, body string, headers map[string]string) (int
 	}
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	// Every POST needs an Idempotency-Key (fleet REST guideline); a caller
+	// that did not pass one gets a fresh key per logical call.
+	if method == http.MethodPost || method == http.MethodPatch {
+		req.Header.Set("Idempotency-Key", fmt.Sprintf("e2e-%s-%d", s.t.Name(), idemSeq.Add(1)))
 	}
 	for k, v := range headers {
 		req.Header.Set(k, v)
@@ -474,7 +482,7 @@ func phaseTopicsMissing(t *testing.T, s *service, brokers []string) {
 // the Idempotency-Key of the assignment that finally succeeded.
 func phaseConsumers(t *testing.T, s *service, brokers []string) string {
 	t.Helper()
-	s.call(http.MethodPost, "/associates/assoc-1/start-shift", `{"certifications":["pack"],"siteCode":"WH1"}`, http.StatusCreated)
+	s.call(http.MethodPost, "/associates/assoc-1/shift-starts", `{"certifications":["pack"],"siteCode":"WH1"}`, http.StatusCreated)
 	if status, _ := s.try(http.MethodPost, "/associates/assoc-1/assignments", `{"pathId":"PACK"}`, map[string]string{"Idempotency-Key": "assign-before-catalogue"}); status != http.StatusBadRequest {
 		t.Fatalf("assigning an unknown path = %d, want 400 unknown-path-id before the catalogue is replayed", status)
 	}
@@ -495,7 +503,7 @@ func phaseConsumers(t *testing.T, s *service, brokers []string) string {
 		map[string]any{"task_id": "task-1", "associate_id": "assoc-1", "task_type": "PACK", "efficiency_pct": 100.0, "actual_seconds": 120,
 			"completed_at": time.Now().UTC().Format(time.RFC3339)})
 	waitFor(t, 60*time.Second, "the measured-rate cache to learn PACK", func() bool {
-		_, body := s.try(http.MethodPost, "/paths/pack/plan/propose", `{"siteCode":"WH1","charge":300}`, nil)
+		_, body := s.try(http.MethodPost, "/paths/pack/plan-proposals", `{"siteCode":"WH1","charge":300}`, nil)
 		return strings.Contains(body, `"rateSource":"measured"`)
 	})
 	var got struct {
@@ -503,7 +511,7 @@ func phaseConsumers(t *testing.T, s *service, brokers []string) string {
 		ResolvedRate  float64 `json:"resolvedRate"`
 		RateSource    string  `json:"rateSource"`
 	}
-	if err := json.Unmarshal([]byte(s.call(http.MethodPost, "/paths/pack/plan/propose", `{"siteCode":"WH1","charge":300}`, http.StatusOK)), &got); err != nil {
+	if err := json.Unmarshal([]byte(s.call(http.MethodPost, "/paths/pack/plan-proposals", `{"siteCode":"WH1","charge":300}`, http.StatusOK)), &got); err != nil {
 		t.Fatal(err)
 	}
 	if got.RateSource != "measured" || got.ResolvedRate != 30 || got.ProposedHeads != 10 {
@@ -626,7 +634,7 @@ func phaseRestart(t *testing.T, e env, s *service, db pgView, brokers []string) 
 	if !strings.Contains(body, `"plannedHeads":2`) || !strings.Contains(body, `"activeHeads":1`) {
 		t.Fatalf("after the restart the staffing gap = %s, want 2 planned and 1 active head", body)
 	}
-	s2.call(http.MethodPost, "/associates/assoc-2/start-shift", `{"certifications":["pack"],"siteCode":"WH1"}`, http.StatusCreated)
+	s2.call(http.MethodPost, "/associates/assoc-2/shift-starts", `{"certifications":["pack"],"siteCode":"WH1"}`, http.StatusCreated)
 	waitFor(t, 60*time.Second, "the relay to publish assoc-2's event after the restart", func() bool {
 		return db.count(`SELECT count(*) FROM outbox_events WHERE published_at IS NULL`) == 0
 	})

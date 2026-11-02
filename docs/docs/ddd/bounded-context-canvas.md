@@ -160,13 +160,13 @@ and it never decides who moves — that is a human call it records.
 
 | Collaborator | Message | Type | Channel | Relationship |
 | --- | --- | --- | --- | --- |
-| Shift lead (console `workforce_mfe`, curl) | StartAssociateShift | Command | `POST /associates/{id}/start-shift` (optional `siteCode`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) | OHS (REST, OpenAPI) |
+| Shift lead (console `workforce_mfe`, curl) | StartAssociateShift | Command | `POST /associates/{id}/shift-starts` (optional `siteCode`, [ADR 0034](../adr/0034-site-scoped-staffing-gap.md)) | OHS (REST, OpenAPI) |
 | Shift lead | CertifyAssociate | Command | `POST /associates/{id}/certifications` | OHS |
-| Shift lead | ProposePathPlan | Command (pure computation; publishes `ShiftPlanProposed`) | `POST /paths/{pathId}/plan/propose` (body `siteCode`, deprecated alias `buildingId`; [ADR 0035](../adr/0035-sitecode-converges-building-id.md)) | OHS |
+| Shift lead | ProposePathPlan | Command (pure computation; publishes `ShiftPlanProposed`) | `POST /paths/{pathId}/plan-proposals` (body `siteCode`, deprecated alias `buildingId`; [ADR 0035](../adr/0035-sitecode-converges-building-id.md)) | OHS |
 | Shift lead | CommitShiftPlan | Command | `POST /shift-plans` (requires `Idempotency-Key`; body `siteCode`, deprecated alias `buildingId`) | OHS |
 | Shift lead | AssignLabor | Command | `POST /associates/{id}/assignments` (requires `Idempotency-Key`) | OHS |
-| Shift lead | StartBreak / EndBreak | Command | `POST /associates/{id}/break/start`, `POST /associates/{id}/break/end` | OHS |
-| Shift lead | EndAssociateShift | Command | `POST /associates/{id}/end-shift` | OHS |
+| Shift lead | StartBreak / EndBreak | Command | `POST /associates/{id}/break-starts`, `POST /associates/{id}/break-ends` | OHS |
+| Shift lead | EndAssociateShift | Command | `POST /associates/{id}/shift-ends` | OHS |
 | Shift lead, console | GetStaffingGap | Query | `GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=` (deprecated alias `buildingId`: plan lookup only, not scoped), canonical `GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap`, deprecated `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap[?siteCode=]` | OHS |
 | `warehouse-ops-agent` | get_staffing_gap | Query | MCP tool `get_staffing_gap` (`cmd/mcp`; `siteCode`, deprecated alias `buildingId`) | OHS (MCP) |
 | `warehouse-ops-agent` | propose_path_heads | Command (pure computation) | MCP tool `propose_path_heads` (`siteCode`, deprecated alias `buildingId`) | OHS (MCP) |

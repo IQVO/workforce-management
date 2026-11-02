@@ -20,7 +20,7 @@ Accepted.
 ## Context
 
 This service's HTTP surface accepts a caller-supplied `path_id` at four
-endpoints: `POST /paths/{pathId}/plan/propose`, `POST /shift-plans`
+endpoints: `POST /paths/{pathId}/plan-proposals`, `POST /shift-plans`
 (one `path_id` per line), `POST /associates/{id}/assignments`, and
 `GET /paths/{pathId}/staffing-gap`. Until now, every one of these simply
 called `shared.NewPathId(value)` — which only rejects an *empty*

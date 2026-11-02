@@ -258,6 +258,9 @@ func TestIdempotency_Commit_Replay_ReturnsIdenticalResponseNoDoubleEffect(t *tes
 	}
 
 	second := post(fx.router, "/shift-plans", "commit-replay-1", commitBody)
+	if first.Header().Get("Idempotency-Replayed") != "" || second.Header().Get("Idempotency-Replayed") != "true" {
+		t.Fatalf("Idempotency-Replayed first=%q replay=%q, want absent then true", first.Header().Get("Idempotency-Replayed"), second.Header().Get("Idempotency-Replayed"))
+	}
 	if second.Code != first.Code || second.Body.String() != first.Body.String() {
 		t.Fatalf("replay differs:\nfirst:  %d %s\nsecond: %d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
 	}
@@ -272,8 +275,8 @@ func TestIdempotency_Commit_Replay_ReturnsIdenticalResponseNoDoubleEffect(t *tes
 	}
 }
 
-// (c) same key + different body -> 422.
-func TestIdempotency_Commit_SameKeyDifferentBody_Returns422(t *testing.T) {
+// (c) same key + different body -> 409.
+func TestIdempotency_Commit_SameKeyDifferentBody_Returns409(t *testing.T) {
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 
@@ -281,8 +284,8 @@ func TestIdempotency_Commit_SameKeyDifferentBody_Returns422(t *testing.T) {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
 	second := post(fx.router, "/shift-plans", "commit-mismatch-1", strings.Replace(commitBody, `"S1"`, `"S2"`, 1))
-	if second.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (body: %s)", second.Code, second.Body.String())
+	if second.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", second.Code, second.Body.String())
 	}
 	if slug := problemSlug(t, second.Body.Bytes()); slug != "idempotency-key-reused" {
 		t.Fatalf("problem.type slug = %q, want idempotency-key-reused", slug)
@@ -403,7 +406,7 @@ func TestIdempotency_Assign_FreshKeyThenReplay_NoDoubleEffect(t *testing.T) {
 	}
 }
 
-func TestIdempotency_Assign_SameKeyDifferentBody_Returns422(t *testing.T) {
+func TestIdempotency_Assign_SameKeyDifferentBody_Returns409(t *testing.T) {
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 	seedAssociate(t, pool, "assoc-1", "pack")
@@ -412,8 +415,8 @@ func TestIdempotency_Assign_SameKeyDifferentBody_Returns422(t *testing.T) {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
 	second := post(fx.router, "/associates/assoc-1/assignments", "assign-mismatch", `{"pathId":"pack-zone-a"}`)
-	if second.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("status = %d, want 422 (body: %s)", second.Code, second.Body.String())
+	if second.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", second.Code, second.Body.String())
 	}
 	if slug := problemSlug(t, second.Body.Bytes()); slug != "idempotency-key-reused" {
 		t.Fatalf("problem.type slug = %q, want idempotency-key-reused", slug)
