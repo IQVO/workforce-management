@@ -160,16 +160,27 @@ func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (propo
 type assignLaborInput struct {
 	AssociateId string `json:"associateId" jsonschema:"the associate to place on the path"`
 	PathId      string `json:"pathId" jsonschema:"the process path to assign the associate to; the associate must hold the matching certification"`
+	// The three attribution fields are optional free-form labels (max 128
+	// characters each, trimmed). They are recorded on the published event as
+	// initiated_by; they grant nothing and never change what is accepted.
+	ProposalId string `json:"proposalId,omitempty" jsonschema:"optional id of the proposal this assignment executes, recorded on the LaborAssigned event for attribution (max 128 characters)"`
+	ApprovedBy string `json:"approvedBy,omitempty" jsonschema:"optional id of the human who approved the proposal, recorded on the LaborAssigned event for attribution (max 128 characters)"`
+	AgentId    string `json:"agentId,omitempty" jsonschema:"optional id of the calling agent, recorded on the LaborAssigned event for attribution (max 128 characters)"`
 }
 
 func (d Deps) assignLabor(ctx context.Context, in assignLaborInput) (laborAssignmentView, error) {
 	if in.AssociateId == "" || in.PathId == "" {
 		return laborAssignmentView{}, fmt.Errorf("associateId and pathId are required")
 	}
+	// The adapter, not the caller, stamps the surface: via is always mcp here.
+	initiator, err := shared.NewInitiator(shared.ViaMCP, in.ProposalId, in.ApprovedBy, in.AgentId)
+	if err != nil {
+		return laborAssignmentView{}, err
+	}
 	if err := d.validatePathId(in.PathId); err != nil {
 		return laborAssignmentView{}, err
 	}
-	la, err := d.AssignLabor.Execute(ctx, shared.AssociateId(in.AssociateId), shared.PathId(in.PathId))
+	la, err := d.AssignLabor.ExecuteInitiatedBy(ctx, shared.AssociateId(in.AssociateId), shared.PathId(in.PathId), initiator)
 	if err != nil {
 		// The use case's domain errors (associate not found, lacks the required
 		// certification, is on break, shift ended) surface unchanged as the tool

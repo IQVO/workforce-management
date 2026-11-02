@@ -125,6 +125,9 @@ type LaborAssigned struct {
 	baseEvent
 	AssociateId AssociateId
 	PathId      PathId
+	// InitiatedBy is the zero Initiator unless an agent (MCP or A2A) made the
+	// call; the zero value is never published.
+	InitiatedBy Initiator
 }
 
 // EventName implements DomainEvent.
@@ -132,7 +135,13 @@ func (LaborAssigned) EventName() string { return "LaborAssigned" }
 
 // NewLaborAssigned constructs a LaborAssigned event.
 func NewLaborAssigned(at time.Time, associateId AssociateId, pathId PathId) LaborAssigned {
-	return LaborAssigned{baseEvent{at}, associateId, pathId}
+	return NewLaborAssignedBy(at, associateId, pathId, Initiator{})
+}
+
+// NewLaborAssignedBy constructs a LaborAssigned event attributed to initiator
+// (the zero Initiator means not agent-initiated).
+func NewLaborAssignedBy(at time.Time, associateId AssociateId, pathId PathId, initiator Initiator) LaborAssigned {
+	return LaborAssigned{baseEvent{at}, associateId, pathId, initiator}
 }
 
 // LaborReassigned is raised when an associate's prior active assignment is
@@ -142,6 +151,9 @@ type LaborReassigned struct {
 	AssociateId AssociateId
 	FromPathId  PathId
 	ToPathId    PathId
+	// InitiatedBy is the zero Initiator unless an agent (MCP or A2A) made the
+	// call; the zero value is never published.
+	InitiatedBy Initiator
 }
 
 // EventName implements DomainEvent.
@@ -149,7 +161,13 @@ func (LaborReassigned) EventName() string { return "LaborReassigned" }
 
 // NewLaborReassigned constructs a LaborReassigned event.
 func NewLaborReassigned(at time.Time, associateId AssociateId, fromPathId, toPathId PathId) LaborReassigned {
-	return LaborReassigned{baseEvent{at}, associateId, fromPathId, toPathId}
+	return NewLaborReassignedBy(at, associateId, fromPathId, toPathId, Initiator{})
+}
+
+// NewLaborReassignedBy constructs a LaborReassigned event attributed to
+// initiator (the zero Initiator means not agent-initiated).
+func NewLaborReassignedBy(at time.Time, associateId AssociateId, fromPathId, toPathId PathId, initiator Initiator) LaborReassigned {
+	return LaborReassigned{baseEvent{at}, associateId, fromPathId, toPathId, initiator}
 }
 
 // PathUnderstaffed is raised when a path's active assignments fall short of

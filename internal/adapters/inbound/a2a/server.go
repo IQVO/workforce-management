@@ -100,11 +100,12 @@ func Card(cfg Config) *a2a.AgentCard {
 			{
 				ID:          skillAssignLabor,
 				Name:        "Assign an associate to a process path",
-				Description: "Puts an associate on a process path, ending their prior active assignment if any, exactly as the REST and MCP surfaces do, and publishes LaborAssigned or LaborReassigned through the transactional outbox. Rejected (as a problem answer, nothing written) when the associate is unknown, lacks the path's required certification, is on break, or their shift has ended. NOT idempotent: each accepted call closes the prior interval and starts a new one, so a caller must not blindly retry an ambiguous failure.",
+				Description: "Puts an associate on a process path, ending their prior active assignment if any, exactly as the REST and MCP surfaces do, and publishes LaborAssigned or LaborReassigned through the transactional outbox. Rejected (as a problem answer, nothing written) when the associate is unknown, lacks the path's required certification, is on break, or their shift has ended. NOT idempotent: each accepted call closes the prior interval and starts a new one, so a caller must not blindly retry an ambiguous failure. Optional proposalId, approvedBy and agentId (trimmed, max 128 characters each) are recorded on the published event as initiated_by so the assignment is attributable; they grant nothing, and the adapter itself stamps via=a2a.",
 				Tags:        []string{"workforce", "assignment", "write", "authority:L3"},
 				InputModes:  []string{"application/json"},
 				Examples: []string{
 					`{"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK"}}`,
+					`{"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK","proposalId":"prop-42","approvedBy":"supervisor-7","agentId":"warehouse-ops-agent"}}`,
 				},
 			},
 		},

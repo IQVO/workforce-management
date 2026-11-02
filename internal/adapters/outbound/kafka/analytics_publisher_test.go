@@ -82,6 +82,33 @@ var analyticsGoldenCases = []analyticsGoldenCase{
 		key:    "a7",
 		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborReassigned","subject":"a7","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborReassigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a7","from_path_id":"pick","to_path_id":"pack"}}`,
 	},
+	// Agentic Standard v2: initiated_by is ADDITIVE event data, present only for
+	// an MCP/A2A call, each optional member omitted when absent. The plain
+	// LaborAssigned / LaborReassigned goldens above are unchanged (REST).
+	{
+		name:   "LaborAssigned initiated by an agent (all attribution)",
+		event:  shared.NewLaborAssignedBy(goldenAt, "a6", "pack", mustInitiator(shared.ViaA2A, "prop-9", "sup-1", "ops-agent")),
+		key:    "a6",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborAssigned","subject":"a6","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborAssigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a6","initiated_by":{"agent_id":"ops-agent","approved_by":"sup-1","proposal_id":"prop-9","via":"a2a"},"path_id":"pack"}}`,
+	},
+	{
+		name:   "LaborAssigned initiated via MCP with no attribution",
+		event:  shared.NewLaborAssignedBy(goldenAt, "a6", "pack", mustInitiator(shared.ViaMCP, "", "", "")),
+		key:    "a6",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborAssigned","subject":"a6","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborAssigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a6","initiated_by":{"via":"mcp"},"path_id":"pack"}}`,
+	},
+	{
+		name:   "LaborAssigned initiated via MCP with a proposal only",
+		event:  shared.NewLaborAssignedBy(goldenAt, "a6", "pack", mustInitiator(shared.ViaMCP, "prop-9", "", "")),
+		key:    "a6",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborAssigned","subject":"a6","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborAssigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a6","initiated_by":{"proposal_id":"prop-9","via":"mcp"},"path_id":"pack"}}`,
+	},
+	{
+		name:   "LaborReassigned initiated by an agent",
+		event:  shared.NewLaborReassignedBy(goldenAt, "a7", "pick", "pack", mustInitiator(shared.ViaA2A, "prop-9", "sup-1", "ops-agent")),
+		key:    "a7",
+		golden: `{"specversion":"1.0","id":"evt-fixed","source":"/warehouse/workforce-management","type":"com.warehouse.wes.workforce-management.assignment.LaborReassigned","subject":"a7","datacontenttype":"application/json","dataschema":"urn:warehouse:workforce-management:analytics:LaborReassigned:v1","time":"2026-01-02T03:04:05Z","data":{"associate_id":"a7","from_path_id":"pick","initiated_by":{"agent_id":"ops-agent","approved_by":"sup-1","proposal_id":"prop-9","via":"a2a"},"to_path_id":"pack"}}`,
+	},
 	{
 		name:   "PathUnderstaffed",
 		event:  shared.NewPathUnderstaffed(goldenAt, "pack", 5, 3),
@@ -160,3 +187,12 @@ type unknownEvent struct{}
 
 func (unknownEvent) EventName() string     { return "Unknown" }
 func (unknownEvent) OccurredAt() time.Time { return time.Time{} }
+
+// mustInitiator builds a valid Initiator for the golden table.
+func mustInitiator(via shared.Via, proposal, approver, agent string) shared.Initiator {
+	in, err := shared.NewInitiator(via, proposal, approver, agent)
+	if err != nil {
+		panic(err)
+	}
+	return in
+}
