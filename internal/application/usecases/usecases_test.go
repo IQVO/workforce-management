@@ -2161,36 +2161,49 @@ func TestAssignLabor_Attribution(t *testing.T) {
 				rec.got = nil
 			}
 
-			if tc.initiator == nil {
-				_, err = uc.Execute(context.Background(), "assoc-1", "pack")
-			} else {
-				_, err = uc.ExecuteInitiatedBy(context.Background(), "assoc-1", "pack", *tc.initiator)
-			}
-			if err != nil {
+			if err := executeAssign(uc, tc.initiator); err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
 			if len(rec.got) != 1 {
 				t.Fatalf("published %d events, want 1: %+v", len(rec.got), rec.got)
 			}
-			var got shared.Initiator
-			switch ev := rec.got[0].(type) {
-			case shared.LaborAssigned:
-				if tc.prior {
-					t.Fatalf("a move raised LaborAssigned")
-				}
-				got = ev.InitiatedBy
-			case shared.LaborReassigned:
-				if !tc.prior {
-					t.Fatalf("a first assignment raised LaborReassigned")
-				}
-				got = ev.InitiatedBy
-			default:
-				t.Fatalf("unexpected event %T", ev)
-			}
+			got := assertAssignmentEventKind(t, rec.got[0], tc.prior)
 			if got != tc.want {
 				t.Fatalf("event initiator = %+v, want %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// executeAssign assigns assoc-1 to pack through Execute (REST, nil initiator)
+// or the agent entry point ExecuteInitiatedBy.
+func executeAssign(uc *AssignLabor, initiator *shared.Initiator) error {
+	if initiator == nil {
+		_, err := uc.Execute(context.Background(), "assoc-1", "pack")
+		return err
+	}
+	_, err := uc.ExecuteInitiatedBy(context.Background(), "assoc-1", "pack", *initiator)
+	return err
+}
+
+// assertAssignmentEventKind checks that ev is LaborReassigned for a move and
+// LaborAssigned for a first assignment, and returns its initiator.
+func assertAssignmentEventKind(t *testing.T, ev shared.DomainEvent, move bool) shared.Initiator {
+	t.Helper()
+	switch e := ev.(type) {
+	case shared.LaborAssigned:
+		if move {
+			t.Fatalf("a move raised LaborAssigned")
+		}
+		return e.InitiatedBy
+	case shared.LaborReassigned:
+		if !move {
+			t.Fatalf("a first assignment raised LaborReassigned")
+		}
+		return e.InitiatedBy
+	default:
+		t.Fatalf("unexpected event %T", ev)
+		return shared.Initiator{}
 	}
 }
 
