@@ -148,7 +148,7 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{statusKey: "ok"})
 }
 
 // corsMiddleware allows the warehouse-console browser SPA (and this

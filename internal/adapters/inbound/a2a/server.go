@@ -29,6 +29,9 @@ import (
 	"github.com/claudioed/workforce-management/internal/application/usecases"
 )
 
+// mimeTypeJSON is the content type every A2A mode list must include.
+const mimeTypeJSON = "application/json"
+
 // Config carries the deployment-specific identity of this agent: the absolute
 // URL clients use to reach its JSON-RPC endpoint (advertised on the Agent
 // Card) and the card version. It is supplied by the composition root from
@@ -82,8 +85,8 @@ func Card(cfg Config) *a2a.AgentCard {
 		SupportedInterfaces: []*a2a.AgentInterface{
 			a2a.NewAgentInterface(cfg.AgentURL, a2a.TransportProtocolJSONRPC),
 		},
-		DefaultInputModes:  []string{"application/json", "text/plain"},
-		DefaultOutputModes: []string{"application/json", "text/plain"},
+		DefaultInputModes:  []string{mimeTypeJSON, "text/plain"},
+		DefaultOutputModes: []string{mimeTypeJSON, "text/plain"},
 		Capabilities:       a2a.AgentCapabilities{Streaming: false},
 		Skills: []a2a.AgentSkill{
 			{
@@ -91,7 +94,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				Name:        "Staffing status for a process path",
 				Description: "Composed read for one process path in one site's committed shift plan: planned vs active heads and whether the path is understaffed. When charge and plannedRate are both given, also the headcount needed to clear that charge at that rate (ceil(charge/rate)); the sizing persists nothing. Identify the site with siteCode (the canonical facility-layout Site code, e.g. WH1).",
 				Tags:        []string{"workforce", "staffing", "read", "authority:L1"},
-				InputModes:  []string{"application/json"},
+				InputModes:  []string{mimeTypeJSON},
 				Examples: []string{
 					`{"skill":"staffing_status","arguments":{"siteCode":"WH1","shiftId":"shift-1","pathId":"PICK"}}`,
 					`{"skill":"staffing_status","arguments":{"siteCode":"WH1","shiftId":"shift-1","pathId":"PICK","charge":120,"plannedRate":30}}`,
@@ -102,7 +105,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				Name:        "Assign an associate to a process path",
 				Description: "Puts an associate on a process path, ending their prior active assignment if any, exactly as the REST and MCP surfaces do, and publishes LaborAssigned or LaborReassigned through the transactional outbox. Rejected (as a problem answer, nothing written) when the associate is unknown, lacks the path's required certification, is on break, or their shift has ended. NOT idempotent: each accepted call closes the prior interval and starts a new one, so a caller must not blindly retry an ambiguous failure. Optional proposalId, approvedBy and agentId (trimmed, max 128 characters each) are recorded on the published event as initiated_by so the assignment is attributable; they grant nothing, and the adapter itself stamps via=a2a.",
 				Tags:        []string{"workforce", "assignment", "write", "authority:L3"},
-				InputModes:  []string{"application/json"},
+				InputModes:  []string{mimeTypeJSON},
 				Examples: []string{
 					`{"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK"}}`,
 					`{"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK","proposalId":"prop-42","approvedBy":"supervisor-7","agentId":"warehouse-ops-agent"}}`,

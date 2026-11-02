@@ -17,6 +17,12 @@ import (
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
 
+// CloudEvents extension / payload keys published on the analytics topic.
+const (
+	keyAssociateID = "associate_id"
+	keyPathID      = "path_id"
+)
+
 // AnalyticsTopic is the dedicated topic the analytics data product consumes.
 // It is separate from the integration topic (Topic) so the OLTP integration
 // contract and the analytical read-model stream evolve independently
@@ -137,29 +143,29 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 	switch ev := e.(type) {
 	case shared.AssociateShiftStarted:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateShiftEnded:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateBreakStarted:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateBreakEnded:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateCertified:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id":  string(ev.AssociateId),
+			keyAssociateID:  string(ev.AssociateId),
 			"certification": string(ev.Certification),
 		}), true
 	case shared.LaborAssigned:
 		data := map[string]any{
-			"associate_id": string(ev.AssociateId),
-			"path_id":      string(ev.PathId),
+			keyAssociateID: string(ev.AssociateId),
+			keyPathID:      string(ev.PathId),
 		}
 		addInitiatedBy(data, ev.InitiatedBy)
 		return analyticsEvent{entity: cloudevents.EntityAssignment, eventName: ev.EventName(),
@@ -167,7 +173,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			data: mustMarshal(data)}, true
 	case shared.LaborReassigned:
 		data := map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 			"from_path_id": string(ev.FromPathId),
 			"to_path_id":   string(ev.ToPathId),
 		}
@@ -177,7 +183,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			data: mustMarshal(data)}, true
 	case shared.PathUnderstaffed:
 		data := map[string]any{
-			"path_id":       string(ev.PathId),
+			keyPathID:       string(ev.PathId),
 			"planned_heads": ev.PlannedHeads,
 			"active_heads":  ev.ActiveHeads,
 		}
@@ -196,7 +202,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			data: mustMarshal(map[string]any{
 				"building_id":   ev.BuildingId,
 				"site_code":     ev.SiteCode(),
-				"path_id":       string(ev.PathId),
+				keyPathID:       string(ev.PathId),
 				"planned_heads": ev.PlannedHeads,
 				"planned_rate":  ev.PlannedRate,
 			})}, true
