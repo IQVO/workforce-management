@@ -121,17 +121,17 @@ raised and consumed in-process.
 
 | Method | Path | Use case |
 |---|---|---|
-| POST | `/associates/{id}/start-shift` | StartAssociateShift (optional `siteCode`, ADR-0034) |
+| POST | `/associates/{id}/shift-starts` | StartAssociateShift (optional `siteCode`, ADR-0034) |
 | POST | `/associates/{id}/certifications` | CertifyAssociate |
-| POST | `/paths/{pathId}/plan/propose` | ProposePathPlan |
+| POST | `/paths/{pathId}/plan-proposals` | ProposePathPlan |
 | POST | `/shift-plans` | CommitShiftPlan (requires `Idempotency-Key`, ADR-0027) |
 | POST | `/associates/{id}/assignments` | AssignLabor (requires `Idempotency-Key`, ADR-0027) |
-| POST | `/associates/{id}/break/start` | StartBreak |
-| POST | `/associates/{id}/break/end` | EndBreak |
+| POST | `/associates/{id}/break-starts` | StartBreak |
+| POST | `/associates/{id}/break-ends` | EndBreak |
 | GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap (optional `siteCode`) |
 | GET | `/sites/{siteCode}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029; canonical, ADR-0035) |
 | GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | DEPRECATED alias of the route above (answers `Deprecation: true`; removed only by a later ADR) |
-| POST | `/associates/{id}/end-shift` | EndAssociateShift |
+| POST | `/associates/{id}/shift-ends` | EndAssociateShift |
 | GET | `/healthz` | liveness |
 | GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); declared in `apis/openapi.yaml` |
 
