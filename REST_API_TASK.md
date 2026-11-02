@@ -21,7 +21,7 @@ violations found. Specifically check for:
    /tasks/expire-leases` (a collection-level action on the tasks resource,
    analogous to how `/tasks/{id}/complete` is an action on a single task).
    Keep verb-suffixed action endpoints for genuine domain commands (e.g.
-   `/tasks/{id}/complete`, `/associates/{id}/start-shift`,
+   `/tasks/{id}/complete`, `/associates/{id}/shift-starts`,
    `/reservations/{id}/confirm-pick`) — this is correct DDD/REST practice for
    non-CRUD commands (see Stripe/GitHub APIs), do NOT force these into
    PUT/PATCH.

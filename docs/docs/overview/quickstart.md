@@ -77,7 +77,7 @@ per binary (`LABOR_PERFORMANCE_BASE_URL`, `IDLE_SHARE_TRIM_THRESHOLD`,
 
 ```bash
 # 1. Someone clocks on, certified to pack
-curl -X POST localhost:8080/associates/assoc-1/start-shift \
+curl -X POST localhost:8080/associates/assoc-1/shift-starts \
   -d '{"certifications":["pack"],"siteCode":"WH1"}'
 
 # 2. Give them a second qualification
@@ -85,7 +85,7 @@ curl -X POST localhost:8080/associates/assoc-1/certifications \
   -d '{"certification":"hazmat"}'
 
 # 3. The software proposes: 100 units of charge at 30 units/hour needs 4 heads
-curl -X POST localhost:8080/paths/pack/plan/propose \
+curl -X POST localhost:8080/paths/pack/plan-proposals \
   -d '{"siteCode":"WH1","charge":100,"plannedRate":30}'
 
 # 4. A human commits the split (this is the ShiftPlan). Needs
@@ -105,8 +105,8 @@ curl -X POST localhost:8080/associates/assoc-1/assignments \
   -d '{"pathId":"pack"}'
 
 # 6. Breaks gate assignment while they are open
-curl -X POST localhost:8080/associates/assoc-1/break/start
-curl -X POST localhost:8080/associates/assoc-1/break/end
+curl -X POST localhost:8080/associates/assoc-1/break-starts
+curl -X POST localhost:8080/associates/assoc-1/break-ends
 
 # 7. Is the pack path short of its committed heads?
 curl "localhost:8080/paths/pack/staffing-gap?siteCode=WH1&shiftId=shift-1"
@@ -115,7 +115,7 @@ curl "localhost:8080/paths/pack/staffing-gap?siteCode=WH1&shiftId=shift-1"
 # plan but is not scoped — ADR 0035)
 
 # 8. Clock off — closes any active assignment first
-curl -X POST localhost:8080/associates/assoc-1/end-shift
+curl -X POST localhost:8080/associates/assoc-1/shift-ends
 
 curl localhost:8080/healthz   # liveness
 curl localhost:8080/readyz    # readiness: 200 only while Postgres AND a Kafka broker answer; 503 once graceful shutdown starts

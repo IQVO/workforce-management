@@ -55,7 +55,7 @@ instrumentation.
 
 | Span name | Kind | Where | Attributes |
 |---|---|---|---|
-| chi route pattern, e.g. `/associates/{id}/start-shift` | server | otelchi middleware on every REST, reports and MCP request | HTTP semconv |
+| chi route pattern, e.g. `/associates/{id}/shift-starts` | server | otelchi middleware on every REST, reports and MCP request | HTTP semconv |
 | otelpgx query spans | client | every Postgres round-trip (OLTP and analytics pools) | sanitized SQL statement |
 | `kafka.publish warehouse.workforce.events` | producer | direct (no-database) integration publisher | `messaging.system=kafka`, `messaging.operation.name=publish`, `messaging.destination.name`, `messaging.batch.message_count` |
 | `kafka.publish warehouse.workforce.analytics` | producer | direct analytics publisher | same |

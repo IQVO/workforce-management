@@ -30,7 +30,7 @@ sequenceDiagram
     participant FE as fulfillment-execution
     participant WP as wes-work-planning
     participant PL as warehouse-planning
-    Lead->>WFM: cmd: POST /paths/pathId/plan/propose
+    Lead->>WFM: cmd: POST /paths/pathId/plan-proposals
     WFM->>LP: qry: GET /task-types/taskType/performance, http mode, only if no plannedRate
     LP-->>WFM: meanActualSeconds or unavailable, fail-open
     WFM-->>WFM: evt: ShiftPlanProposed to warehouse.workforce.analytics
@@ -95,15 +95,15 @@ sequenceDiagram
     participant AN as workforce-projector
     participant RP as workforce-reports
     participant Con as warehouse-console
-    Lead->>WFM: cmd: POST /associates/id/start-shift, optional siteCode
+    Lead->>WFM: cmd: POST /associates/id/shift-starts, optional siteCode
     WFM-->>AN: evt: AssociateShiftStarted
     Lead->>WFM: cmd: POST /associates/id/certifications
     WFM-->>AN: evt: AssociateCertified
-    Lead->>WFM: cmd: POST /associates/id/break/start
+    Lead->>WFM: cmd: POST /associates/id/break-starts
     WFM-->>AN: evt: AssociateBreakStarted
-    Lead->>WFM: cmd: POST /associates/id/break/end
+    Lead->>WFM: cmd: POST /associates/id/break-ends
     WFM-->>AN: evt: AssociateBreakEnded
-    Lead->>WFM: cmd: POST /associates/id/end-shift
+    Lead->>WFM: cmd: POST /associates/id/shift-ends
     WFM-->>AN: evt: AssociateShiftEnded
     Con->>RP: qry: GET /reports/labor
     RP-->>Con: hourly labor rollup per path

@@ -57,7 +57,7 @@ sequenceDiagram
     end
     IK->>IK: BEGIN, INSERT idempotency_keys ON CONFLICT DO NOTHING
     alt key already stored
-        IK-->>Client: replay stored response, or 422 if body hash differs
+        IK-->>Client: replay stored response (Idempotency-Replayed: true), or 409 if the fingerprint differs
     end
     IK->>H: request with the savepoint's tx bound to ctx
     H->>Cat: validatePathId for every line
@@ -173,7 +173,7 @@ Source: `internal/application/usecases/assign_labor.go`, `metrics.go`,
 deferred `recordLaborAssignment` call that counts every attempt on
 `workforce.labor_assignments`, and the MCP error-to-tool-result mapping.
 
-## StartAssociateShift — `POST /associates/{id}/start-shift`
+## StartAssociateShift — `POST /associates/{id}/shift-starts`
 
 ```mermaid
 sequenceDiagram
@@ -185,7 +185,7 @@ sequenceDiagram
     participant AR as AssociateRepo
     participant UoW as UnitOfWork
     participant OB as OutboxPublisher
-    Client->>H: POST /associates/id/start-shift, certifications, optional siteCode
+    Client->>H: POST /associates/id/shift-starts, certifications, optional siteCode
     H->>UC: ExecuteAtSite associateId, certifications, siteCode
     UC->>AS: NewAssociateShiftAtSite, raises AssociateShiftStarted
     UC->>AR: FindByID
@@ -226,7 +226,7 @@ sequenceDiagram
     participant AS as AssociateShift
     participant UoW as UnitOfWork
     participant OB as OutboxPublisher
-    Client->>H: POST /associates/id/certifications or /break/start or /break/end
+    Client->>H: POST /associates/id/certifications or /break-starts or /break-ends
     H->>UC: Execute associateId
     UC->>AR: FindByID
     alt not found
@@ -247,7 +247,7 @@ Source: `internal/application/usecases/certify_associate.go`, `breaks.go`,
 `internal/domain/associate/associate_shift.go`. Omits: request decoding of
 the certification body.
 
-## EndAssociateShift — `POST /associates/{id}/end-shift`
+## EndAssociateShift — `POST /associates/{id}/shift-ends`
 
 ```mermaid
 sequenceDiagram
@@ -261,7 +261,7 @@ sequenceDiagram
     participant LA as LaborAssignment
     participant UoW as UnitOfWork
     participant OB as OutboxPublisher
-    Client->>H: POST /associates/id/end-shift
+    Client->>H: POST /associates/id/shift-ends
     H->>UC: Execute associateId
     UC->>AR: FindByID
     alt not found
@@ -287,7 +287,7 @@ sequenceDiagram
 Source: `internal/application/usecases/end_associate_shift.go`. Omits:
 nothing material; `EndActive` raises no event of its own.
 
-## ProposePathPlan — `POST /paths/{pathId}/plan/propose` and MCP `propose_path_heads`
+## ProposePathPlan — `POST /paths/{pathId}/plan-proposals` and MCP `propose_path_heads`
 
 ```mermaid
 sequenceDiagram
