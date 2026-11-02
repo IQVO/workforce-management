@@ -38,7 +38,7 @@ on every push to `main`.
 | DDD | [Use cases](docs/docs/ddd/use-cases.md), [Subdomain classification](docs/docs/ddd/subdomain-classification.md), [DDD artifact pack](docs/docs/ddd/ddd-artifacts.md) |
 | Ecosystem | [Integration](docs/docs/ecosystem/integration.md), [Context map](docs/docs/ecosystem/context-map.md) |
 | MCP | [Tools, resources and prompts](docs/docs/mcp/tools.md), [Governance charter](docs/docs/mcp/governance-charter.md) |
-| A2A | [A2A inbound adapter (ADR-0039)](docs/docs/adr/0039-a2a-inbound-adapter.md) |
+| A2A | [A2A inbound adapter (ADR-0039)](docs/docs/adr/0039-a2a-inbound-adapter.md), [Agent authority and attribution (ADR-0041)](docs/docs/adr/0041-agent-authority-levels-and-attributable-assignments.md) |
 | Analytics | [Labor report](docs/docs/analytics/labor-report.md) |
 | Decisions | [ADR index](docs/docs/adr/index.md) |
 
@@ -288,6 +288,25 @@ Two skills, called as a `SendMessage` data part
 Domain rejections come back as an in-band RFC 7807 `problem` with the same
 status classification as REST. A2A carries delegation only; the facts still
 leave as CloudEvents on Kafka.
+
+### Agent authority and attribution
+
+Every MCP tool and A2A skill declares one authority level
+([ADR-0041](docs/docs/adr/0041-agent-authority-levels-and-attributable-assignments.md)):
+`get_staffing_gap` / `staffing_status` / `get_workforce_labor_report` are `L1`,
+`propose_path_heads` (a pure recommendation) is `L2`, `assign_labor` is `L3`.
+MCP carries it in the tool `Meta` key `com.warehouse/authority`, A2A as the skill
+tag `authority:L<n>`. The MCP server is stateless, so it also answers the
+`2026-07-28` `server/discover` handshake. `assign_labor` (MCP and A2A) takes
+three optional attribution labels, and the adapter stamps the surface:
+
+```bash
+# A2A: {"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK",
+#        "proposalId":"prop-42","approvedBy":"supervisor-7","agentId":"warehouse-ops-agent"}}
+# publishes LaborAssigned (or LaborReassigned) with, in its data:
+#   "initiated_by": {"via":"a2a","proposal_id":"prop-42","approved_by":"supervisor-7","agent_id":"warehouse-ops-agent"}
+# REST produces no initiated_by.
+```
 
 ## API
 
@@ -715,7 +734,7 @@ must never select the frontend, analytics or MCP pods.
 
 ## Architecture Decision Records
 
-The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 38 decisions, from the
+The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 41 decisions, from the
 hexagonal layout to the CloudEvents-only envelope and the transactional
 outbox.
 
