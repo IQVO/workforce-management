@@ -90,7 +90,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				ID:          skillStaffingStatus,
 				Name:        "Staffing status for a process path",
 				Description: "Composed read for one process path in one site's committed shift plan: planned vs active heads and whether the path is understaffed. When charge and plannedRate are both given, also the headcount needed to clear that charge at that rate (ceil(charge/rate)); the sizing persists nothing. Identify the site with siteCode (the canonical facility-layout Site code, e.g. WH1).",
-				Tags:        []string{"workforce", "staffing", "read"},
+				Tags:        []string{"workforce", "staffing", "read", "authority:L1"},
 				InputModes:  []string{"application/json"},
 				Examples: []string{
 					`{"skill":"staffing_status","arguments":{"siteCode":"WH1","shiftId":"shift-1","pathId":"PICK"}}`,
@@ -101,7 +101,7 @@ func Card(cfg Config) *a2a.AgentCard {
 				ID:          skillAssignLabor,
 				Name:        "Assign an associate to a process path",
 				Description: "Puts an associate on a process path, ending their prior active assignment if any, exactly as the REST and MCP surfaces do, and publishes LaborAssigned or LaborReassigned through the transactional outbox. Rejected (as a problem answer, nothing written) when the associate is unknown, lacks the path's required certification, is on break, or their shift has ended. NOT idempotent: each accepted call closes the prior interval and starts a new one, so a caller must not blindly retry an ambiguous failure.",
-				Tags:        []string{"workforce", "assignment", "write"},
+				Tags:        []string{"workforce", "assignment", "write", "authority:L3"},
 				InputModes:  []string{"application/json"},
 				Examples: []string{
 					`{"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK"}}`,

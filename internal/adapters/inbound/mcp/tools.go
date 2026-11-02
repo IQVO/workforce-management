@@ -18,6 +18,23 @@ import (
 // tracerName is the OTel instrumentation scope for MCP tool spans.
 const tracerName = "github.com/claudioed/workforce-management/internal/adapters/inbound/mcp"
 
+// Authority levels (Agentic Standard v2, AS-1). Every registered tool
+// declares exactly one of these in its Meta under authorityMetaKey; the fleet
+// rule is in .claude/rules/fleet/agent-authority.md.
+const (
+	// authorityMetaKey is the tools/list _meta key carrying a tool's level.
+	authorityMetaKey = "com.warehouse/authority"
+	// authorityL1 reads facts and changes nothing.
+	authorityL1 = "L1"
+	// authorityL2 is a pure recommendation: computes a proposal, changes nothing.
+	authorityL2 = "L2"
+	// authorityL3 mutates state; the caller is accountable (see Initiator).
+	authorityL3 = "L3"
+)
+
+// authorityMeta is the Meta a tool registers to declare its authority level.
+func authorityMeta(level string) mcp.Meta { return mcp.Meta{authorityMetaKey: level} }
+
 // Deps is everything the MCP tools need, injected by the composition root.
 // It carries the same use cases the HTTP adapter uses; the adapter never
 // constructs an outbound adapter itself.
@@ -182,12 +199,15 @@ func (d Deps) registerTools(server *mcp.Server) {
 		Name:        "get_staffing_gap",
 		Description: "Return planned vs active heads for a process path within a site's committed shift plan, and whether it is understaffed. Identify the site with siteCode (the canonical argument: it is both the plan key and the associate scope); buildingId is deprecated in favour of siteCode, accepted as an alias for the plan key only and not scoped by site. Read-only; surfaces the gap, it does not move anyone.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+		Meta:        authorityMeta(authorityL1),
 	}, d.getStaffingGap)
 
 	addTool(server, &mcp.Tool{
 		Name:        "propose_path_heads",
 		Description: "Compute the headcount needed to cover a path's charge at a planned rate (ceil(charge/rate)) for a site (siteCode; buildingId is deprecated in favour of siteCode and is an alias with the same value). A pure proposal; it commits nothing and a human still commits the shift plan.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+		// A pure recommendation: ceil(charge/rate), nothing is persisted.
+		Meta: authorityMeta(authorityL2),
 	}, d.proposePathHeads)
 
 	// Write tool: assigns an associate to a path. Annotated destructive
@@ -201,6 +221,7 @@ func (d Deps) registerTools(server *mcp.Server) {
 		Name:        "assign_labor",
 		Description: "Assign an associate to a process path, ending their prior active assignment if any. Rejected if the associate is unknown, lacks the path's required certification, is on break, or the shift has ended.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: false, DestructiveHint: &destructive, IdempotentHint: notIdempotent},
+		Meta:        authorityMeta(authorityL3),
 	}, d.assignLabor)
 
 	// Curated read-only data-product tool, registered only when the reports
