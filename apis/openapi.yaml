@@ -1044,15 +1044,12 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
+      required: true
       description: >-
         Caller-generated key (e.g. a UUID v4) that makes a retried request
-        safe (ADR-0027). Clients MUST always send a non-empty value on the
-        routes that declare it: a deployment backed by Postgres (every real
-        deployment) rejects a request without it with 400
-        idempotency-key-required. It is declared optional here only because
-        the in-memory development mode (which the contract test boots) does
-        not enforce it. Reuse the SAME key for retries of one logical
+        safe (ADR-0027). Required on every POST: the service runs on Postgres in
+        every deployment (ADR-0038) and rejects a request without it with
+        400 idempotency-key-required. Reuse the SAME key for retries of one logical
         request (same body) — the first response, success or business
         error, is stored and replayed byte-for-byte for the key's TTL
         (24h by default) — and a NEW key for each new logical request.
@@ -1065,6 +1062,7 @@ components:
         type: string
         minLength: 1
         maxLength: 128
+        pattern: '^[ -~]+$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
 
   headers:
