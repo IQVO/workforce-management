@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -183,7 +184,7 @@ func TestShutdownSequence_ZeroDrainAndErrorStillStopsEverything(t *testing.T) {
 		stopRelay:     func(context.Context) { stopped = append(stopped, "relay") },
 	}
 	start := time.Now()
-	if err := seq.run(); err != wantErr {
+	if err := seq.run(); !errors.Is(err, wantErr) {
 		t.Fatalf("run = %v, want the HTTP shutdown error", err)
 	}
 	if time.Since(start) > 500*time.Millisecond {

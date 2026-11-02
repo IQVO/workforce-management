@@ -1,6 +1,7 @@
 package associate
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -47,7 +48,7 @@ func TestStartBreak_RejectsDoubleStart(t *testing.T) {
 	if err := a.StartBreak(now); err != nil {
 		t.Fatalf("unexpected error starting break: %v", err)
 	}
-	if err := a.StartBreak(now); err != ErrAlreadyOnBreak {
+	if err := a.StartBreak(now); !errors.Is(err, ErrAlreadyOnBreak) {
 		t.Fatalf("expected ErrAlreadyOnBreak, got %v", err)
 	}
 }
@@ -56,7 +57,7 @@ func TestEndBreak_RejectsWhenNotOnBreak(t *testing.T) {
 	now := time.Now()
 	a := NewAssociateShift("assoc-1", nil, now)
 
-	if err := a.EndBreak(now); err != ErrNotOnBreak {
+	if err := a.EndBreak(now); !errors.Is(err, ErrNotOnBreak) {
 		t.Fatalf("expected ErrNotOnBreak, got %v", err)
 	}
 }
@@ -70,7 +71,7 @@ func TestCanBeAssigned_RejectsWhileOnBreak(t *testing.T) {
 		t.Fatalf("unexpected error starting break: %v", err)
 	}
 
-	if err := a.CanBeAssigned(); err != ErrOnBreak {
+	if err := a.CanBeAssigned(); !errors.Is(err, ErrOnBreak) {
 		t.Fatalf("expected ErrOnBreak, got %v", err)
 	}
 }
@@ -94,7 +95,7 @@ func TestLogHours_RejectsExceedingMaxHoursPerShift(t *testing.T) {
 	if err := a.LogHours(6, maxHours); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if err := a.LogHours(3, maxHours); err != ErrMaxHoursExceeded {
+	if err := a.LogHours(3, maxHours); !errors.Is(err, ErrMaxHoursExceeded) {
 		t.Fatalf("expected ErrMaxHoursExceeded, got %v", err)
 	}
 	if a.HoursLogged() != 6 {
@@ -253,7 +254,7 @@ func TestEndBreak_RejectsAfterShiftEnded(t *testing.T) {
 	}
 	a.EndShift(now)
 
-	if err := a.EndBreak(now); err != ErrShiftEnded {
+	if err := a.EndBreak(now); !errors.Is(err, ErrShiftEnded) {
 		t.Fatalf("expected ErrShiftEnded, got %v", err)
 	}
 }
@@ -267,7 +268,7 @@ func TestLogHours_RejectsAfterShiftEnded(t *testing.T) {
 	}
 	a.EndShift(now)
 
-	if err := a.LogHours(1, maxHours); err != ErrShiftEnded {
+	if err := a.LogHours(1, maxHours); !errors.Is(err, ErrShiftEnded) {
 		t.Fatalf("expected ErrShiftEnded, got %v", err)
 	}
 	if a.HoursLogged() != 2 {
@@ -291,13 +292,13 @@ func TestEndShift_RaisesEventOnceAndBlocksFurtherOps(t *testing.T) {
 		t.Fatalf("expected no event on double end, got %+v", events)
 	}
 
-	if err := a.Certify("pack", now); err != ErrShiftEnded {
+	if err := a.Certify("pack", now); !errors.Is(err, ErrShiftEnded) {
 		t.Fatalf("expected ErrShiftEnded, got %v", err)
 	}
-	if err := a.StartBreak(now); err != ErrShiftEnded {
+	if err := a.StartBreak(now); !errors.Is(err, ErrShiftEnded) {
 		t.Fatalf("expected ErrShiftEnded, got %v", err)
 	}
-	if err := a.CanBeAssigned(); err != ErrShiftEnded {
+	if err := a.CanBeAssigned(); !errors.Is(err, ErrShiftEnded) {
 		t.Fatalf("expected ErrShiftEnded, got %v", err)
 	}
 }

@@ -1,6 +1,9 @@
 package shared
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // The deprecated BuildingId and the canonical SiteCode are one value on the
 // plan events (ADR 0035).
@@ -32,7 +35,7 @@ func TestResolveGapLookup(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			key, scope, err := ResolveGapLookup(tc.site, tc.bldg)
 			if tc.wantMissing {
-				if err != ErrMissingSiteKey {
+				if !errors.Is(err, ErrMissingSiteKey) {
 					t.Fatalf("err = %v, want ErrMissingSiteKey", err)
 				}
 				return

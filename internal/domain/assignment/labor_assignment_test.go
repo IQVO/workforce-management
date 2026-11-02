@@ -1,6 +1,7 @@
 package assignment
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -32,7 +33,7 @@ func TestAssign_RejectsMissingCertification(t *testing.T) {
 	la := NewLaborAssignment("assoc-1")
 
 	err := la.Assign("hazmat", false, now)
-	if err != ErrCertificationRequired {
+	if !errors.Is(err, ErrCertificationRequired) {
 		t.Fatalf("expected ErrCertificationRequired, got %v", err)
 	}
 	if la.IsActive() {
@@ -224,7 +225,7 @@ func TestAssignBy_AttributesTheRaisedEvent(t *testing.T) {
 func TestAssignBy_StillRejectsWithoutCertification(t *testing.T) {
 	in, _ := shared.NewInitiator(shared.ViaA2A, "", "", "")
 	la := NewLaborAssignment("assoc-1")
-	if err := la.AssignBy("pack", false, time.Now(), in); err != ErrCertificationRequired {
+	if err := la.AssignBy("pack", false, time.Now(), in); !errors.Is(err, ErrCertificationRequired) {
 		t.Fatalf("err = %v, want ErrCertificationRequired", err)
 	}
 	if len(la.PullEvents()) != 0 {
