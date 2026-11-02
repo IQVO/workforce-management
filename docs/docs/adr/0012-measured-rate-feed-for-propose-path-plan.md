@@ -99,7 +99,7 @@ whose provenance they can't see.
 
 ## Consequences
 
-- A shift manager can call `POST /paths/{pathId}/plan/propose` with just
+- A shift manager can call `POST /paths/{pathId}/plan-proposals` with just
   `buildingId` and `charge` for `pack`/`pick`/`slam` paths and get a
   headcount proposal grounded in what associates actually achieved, closing
   the exact competitor-research gap that motivated `labor-performance`'s

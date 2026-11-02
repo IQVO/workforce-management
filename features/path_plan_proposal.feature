@@ -1,5 +1,5 @@
 # Derived from:
-# - apis/openapi.yaml — POST /paths/{pathId}/plan/propose: "Computes
+# - apis/openapi.yaml — POST /paths/{pathId}/plan-proposals: "Computes
 #   heads = ceil(charge / plannedRate) for one path ... it persists
 #   nothing and commits nothing ... this is why the response is 200, not
 #   201: no resource is created"; ProposePathPlanResponse documents

@@ -81,14 +81,14 @@ func TestProposePathPlan_SiteCodeAndDeprecatedBuildingIdAlias(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			router := NewRouter(newTestHandler(), testLogger, "")
-			rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{
+			rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{
 				SiteCode: tc.siteCode, BuildingId: tc.buildingId, Charge: chargePtr(100), PlannedRate: 30,
 			})
 			if rec.Code != tc.wantStatus {
 				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
 			}
 			if tc.wantSlug != "" {
-				assertProblemDetails(t, rec, tc.wantStatus, tc.wantSlug, "/paths/pack/plan/propose")
+				assertProblemDetails(t, rec, tc.wantStatus, tc.wantSlug, "/paths/pack/plan-proposals")
 			}
 		})
 	}
@@ -199,10 +199,7 @@ func assertCanonicalSitesRoute(t *testing.T, router http.Handler) {
 	if h := canonical.Header().Get("Deprecation"); h != "" {
 		t.Fatalf("the canonical route must not be marked deprecated, got Deprecation: %q", h)
 	}
-	var sites []map[string]any
-	if err := json.Unmarshal(canonical.Body.Bytes(), &sites); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	sites := decodeItems(t, canonical.Body.Bytes())
 	if len(sites) != 1 || sites[0]["activeHeads"] != float64(2) || sites[0]["siteCode"] != "WH1" || sites[0]["pathId"] != "pack" {
 		t.Fatalf("canonical route: plan lookup AND scope by the one siteCode, got %v", sites)
 	}
@@ -219,10 +216,7 @@ func assertDeprecatedBuildingsRoute(t *testing.T, router http.Handler) {
 	if h := legacy.Header().Get("Deprecation"); h != "true" {
 		t.Fatalf("the deprecated route must answer Deprecation: true, got %q", h)
 	}
-	var buildings []map[string]any
-	if err := json.Unmarshal(legacy.Body.Bytes(), &buildings); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	buildings := decodeItems(t, legacy.Body.Bytes())
 	if len(buildings) != 1 || buildings[0]["activeHeads"] != float64(4) {
 		t.Fatalf("the legacy buildingId-only route is not auto-scoped (fleet-wide), got %v", buildings)
 	}

@@ -1,5 +1,5 @@
 # Derived from:
-# - apis/openapi.yaml — POST /associates/{id}/end-shift: "Any currently
+# - apis/openapi.yaml — POST /associates/{id}/shift-ends: "Any currently
 #   active LaborAssignment is closed first (its hours logged against the
 #   shift). Idempotent: ending an already-ended shift is a no-op — no
 #   error, no event, still 204."; POST /associates/{id}/assignments 409

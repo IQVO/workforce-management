@@ -1,7 +1,7 @@
 # Associate roster scenarios: starting, certifying and ending a shift.
 #
 # Derived from:
-#   - apis/openapi.yaml, POST /associates/{id}/start-shift: 201, naturally
+#   - apis/openapi.yaml, POST /associates/{id}/shift-starts: 201, naturally
 #     idempotent by the client-supplied id ("calling it twice for the same
 #     associate upserts the roster entry rather than erroring (each call
 #     still re-raises AssociateShiftStarted and returns 201)"); 400 for a
@@ -10,7 +10,7 @@
 #     the associate already holds is a no-op on state (set semantics) but
 #     still re-raises the event and returns 204"; 404 for an unknown
 #     associate; 409 associate-shift-ended
-#   - POST /associates/{id}/end-shift: 204, an idempotent no-op when already
+#   - POST /associates/{id}/shift-ends: 204, an idempotent no-op when already
 #     ended; 404 for an unknown associate
 #   - .claude/rules/domain-model.md: AssociateShift, Certification
 
@@ -21,7 +21,7 @@ Feature: Keeping the associate roster for a shift
 
   @bdd
   Scenario: Starting a shift puts the associate on the roster
-    When a POST request is sent to "/associates/assoc-1/start-shift" with the body {"certifications": ["pack"], "siteCode": "WH1"}
+    When a POST request is sent to "/associates/assoc-1/shift-starts" with the body {"certifications": ["pack"], "siteCode": "WH1"}
     Then the last request succeeds with status 201
     And the response field "associateId" is "assoc-1"
     And 1 "AssociateShiftStarted" event was published
@@ -29,13 +29,13 @@ Feature: Keeping the associate roster for a shift
   @bdd
   Scenario: Starting the same associate's shift twice is an upsert, not an error
     Given an AssociateShift is started for associate "assoc-1" with certifications "pack"
-    When a POST request is sent to "/associates/assoc-1/start-shift" with the body {"certifications": ["pack", "pick"]}
+    When a POST request is sent to "/associates/assoc-1/shift-starts" with the body {"certifications": ["pack", "pick"]}
     Then the last request succeeds with status 201
     And 2 "AssociateShiftStarted" events were published
 
   @bdd
   Scenario: A malformed start-shift body is rejected
-    When a POST request is sent to "/associates/assoc-1/start-shift" with the body {"certifications": [
+    When a POST request is sent to "/associates/assoc-1/shift-starts" with the body {"certifications": [
     Then the request is rejected with status 400 and problem type "malformed-request-body"
     And 0 "AssociateShiftStarted" events were published
 

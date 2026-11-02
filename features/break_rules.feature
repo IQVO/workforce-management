@@ -1,11 +1,11 @@
 # Break state-machine edges and events.
 #
 # Derived from:
-#   - apis/openapi.yaml, POST /associates/{id}/break/start: 204; "Not
+#   - apis/openapi.yaml, POST /associates/{id}/break-starts: 204; "Not
 #     idempotent: calling this while already on break is rejected as a
 #     conflict" (associate-already-on-break); 404 unknown associate; 409
 #     associate-shift-ended
-#   - POST /associates/{id}/break/end: 204; "calling this while not on break
+#   - POST /associates/{id}/break-ends: 204; "calling this while not on break
 #     is rejected as a conflict" (associate-not-on-break); 404; 409
 #     associate-shift-ended
 

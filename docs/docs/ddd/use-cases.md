@@ -27,13 +27,13 @@ All event types share the prefix `com.warehouse.wes.workforce-management.`
 
 | Use case | Trigger | Aggregate | Events raised |
 |---|---|---|---|
-| `StartAssociateShift` | `POST /associates/{id}/start-shift` | `AssociateShift` | `associate.AssociateShiftStarted` |
+| `StartAssociateShift` | `POST /associates/{id}/shift-starts` | `AssociateShift` | `associate.AssociateShiftStarted` |
 | `CertifyAssociate` | `POST /associates/{id}/certifications` | `AssociateShift` | `associate.AssociateCertified` |
-| `StartBreak` | `POST /associates/{id}/break/start` | `AssociateShift` | `associate.AssociateBreakStarted` |
-| `EndBreak` | `POST /associates/{id}/break/end` | `AssociateShift` | `associate.AssociateBreakEnded` |
+| `StartBreak` | `POST /associates/{id}/break-starts` | `AssociateShift` | `associate.AssociateBreakStarted` |
+| `EndBreak` | `POST /associates/{id}/break-ends` | `AssociateShift` | `associate.AssociateBreakEnded` |
 | `AssignLabor` | `POST /associates/{id}/assignments` (Idempotency-Key); MCP `assign_labor` | `LaborAssignment` (+ `AssociateShift` hours) | `assignment.LaborAssigned`, plus `assignment.LaborReassigned` when moving paths |
-| `EndAssociateShift` | `POST /associates/{id}/end-shift` | `AssociateShift` (+ `LaborAssignment`) | `associate.AssociateShiftEnded` |
-| `ProposePathPlan` | `POST /paths/{pathId}/plan/propose`; MCP `propose_path_heads` | none (pure computation) | `shiftplan.ShiftPlanProposed` |
+| `EndAssociateShift` | `POST /associates/{id}/shift-ends` | `AssociateShift` (+ `LaborAssignment`) | `associate.AssociateShiftEnded` |
+| `ProposePathPlan` | `POST /paths/{pathId}/plan-proposals`; MCP `propose_path_heads` | none (pure computation) | `shiftplan.ShiftPlanProposed` |
 | `CommitShiftPlan` | `POST /shift-plans` (Idempotency-Key) | `ShiftPlan` | `shiftplan.ShiftPlanCommitted` |
 | `GetStaffingGap` | `GET /paths/{pathId}/staffing-gap`, `GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap`, deprecated `GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap`; MCP `get_staffing_gap` | `ShiftPlan` (read) | `shiftplan.PathUnderstaffed`, once per understaffed path |
 

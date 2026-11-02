@@ -164,7 +164,7 @@ path into `AssignLabor` and the per-associate events' flow into
 | Sticky | Kind | Code evidence |
 | --- | --- | --- |
 | Shift lead | Actor | callers of the REST routes in `internal/adapters/inbound/http/router.go`; the console remote in `web/` |
-| `ProposePathPlan` | Command | `usecases.ProposePathPlan`, `POST /paths/{pathId}/plan/propose`, MCP `propose_path_heads` |
+| `ProposePathPlan` | Command | `usecases.ProposePathPlan`, `POST /paths/{pathId}/plan-proposals`, MCP `propose_path_heads` |
 | `CommitShiftPlan` | Command | `usecases.CommitShiftPlan`, `POST /shift-plans` |
 | `StartAssociateShift`, `CertifyAssociate`, `StartBreak`, `EndBreak`, `EndAssociateShift` | Command | matching structs in `internal/application/usecases/` |
 | `AssignLabor` | Command | `usecases.AssignLabor`, `POST /associates/{id}/assignments`, MCP `assign_labor` |

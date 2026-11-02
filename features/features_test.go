@@ -362,7 +362,7 @@ func (w *world) associateShiftStartedWithCertifications(ctx context.Context, ass
 			list = append(list, trimmed)
 		}
 	}
-	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/start-shift", map[string]any{"certifications": list}); err != nil {
+	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/shift-starts", map[string]any{"certifications": list}); err != nil {
 		return err
 	}
 	return w.expectStatus(http.StatusCreated)
@@ -381,7 +381,7 @@ func (w *world) associateShiftStartedAtSite(ctx context.Context, associateId, si
 			list = append(list, trimmed)
 		}
 	}
-	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/start-shift", map[string]any{"certifications": list, "siteCode": siteCode}); err != nil {
+	if err := w.do(ctx, http.MethodPost, "/associates/"+associateId+"/shift-starts", map[string]any{"certifications": list, "siteCode": siteCode}); err != nil {
 		return err
 	}
 	return w.expectStatus(http.StatusCreated)
@@ -421,11 +421,11 @@ func (w *world) associateHasStartedABreak(ctx context.Context, associateId strin
 }
 
 func (w *world) associateStartsABreak(ctx context.Context, associateId string) error {
-	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/break/start", nil)
+	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/break-starts", nil)
 }
 
 func (w *world) associateEndsTheBreak(ctx context.Context, associateId string) error {
-	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/break/end", nil)
+	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/break-ends", nil)
 }
 
 func (w *world) staffingGapIsRequested(ctx context.Context, pathId, buildingId, shiftId string) error {
@@ -437,7 +437,7 @@ func (w *world) staffingGapIsRequestedAtSite(ctx context.Context, pathId, buildi
 }
 
 func (w *world) associateEndsTheirShift(ctx context.Context, associateId string) error {
-	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/end-shift", nil)
+	return w.do(ctx, http.MethodPost, "/associates/"+associateId+"/shift-ends", nil)
 }
 
 func (w *world) associateHasEndedTheirShift(ctx context.Context, associateId string) error {
@@ -584,7 +584,7 @@ type proposePathPlanResult struct {
 }
 
 func (w *world) pathPlanIsProposed(ctx context.Context, pathId, buildingId string, charge, plannedRate float64) error {
-	return w.do(ctx, http.MethodPost, "/paths/"+pathId+"/plan/propose", proposePathPlanBody{
+	return w.do(ctx, http.MethodPost, "/paths/"+pathId+"/plan-proposals", proposePathPlanBody{
 		BuildingId:  buildingId,
 		Charge:      charge,
 		PlannedRate: plannedRate,
@@ -636,7 +636,7 @@ func (w *world) pathIsNotFlaggedUnderstaffed(pathId string, plannedHeads, active
 
 // proposalSuggestsHeads asserts the propose response's heads, resolved
 // rate and rate source — the pure-computation contract of
-// POST /paths/{pathId}/plan/propose.
+// POST /paths/{pathId}/plan-proposals.
 func (w *world) proposalSuggestsHeads(heads int, resolvedRate float64, rateSource string) error {
 	if err := w.expectStatus(http.StatusOK); err != nil {
 		return err
