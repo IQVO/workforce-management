@@ -1062,7 +1062,7 @@ components:
         type: string
         minLength: 1
         maxLength: 128
-        pattern: '^[!-~]([ -~]*[!-~])?$'
+        pattern: '^[ -~]{1,128}$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
 
   headers:
@@ -1081,8 +1081,14 @@ components:
         Malformed JSON body, or a required field was missing/empty
         (empty-associate-id, empty-path-id, empty-certification,
         missing-building-id -- neither siteCode nor its deprecated alias
-        buildingId was sent --, missing-shift-id, missing-charge, or
-        malformed-request-body). On every POST a missing Idempotency-Key
+        buildingId was sent --, missing-shift-id, missing-charge,
+        unknown-path-id -- a pathId the process-path catalogue does not
+        declare --, or malformed-request-body). The two staffing-gap list
+        routes also answer 400 for a bad paging query: invalid-limit
+        (not an integer 1-500, empty or repeated), invalid-cursor
+        (undecodable or repeated) and unknown-query-parameter (any query
+        parameter other than limit, cursor and, on the deprecated route,
+        siteCode). On every POST a missing Idempotency-Key
         header is also a 400 (idempotency-key-required) and a malformed one
         (not 1-128 printable ASCII) a 400 (idempotency-key-invalid).
       content:
