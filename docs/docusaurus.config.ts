@@ -175,7 +175,7 @@ const config: Config = {
         },
       ],
       copyright:
-        'Workforce Management — a bounded context of the warehouse-systems platform.',
+        `Workforce Management — a bounded context of the warehouse-systems platform. This project is a domain-driven design study. It is not associated with, endorsed by or affiliated with any company, and it uses no company's code, data, logos or trademarks. All names, figures and examples are illustrative or synthetic.`,
     },
     prism: {
       theme: prismThemes.github,
