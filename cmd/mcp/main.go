@@ -223,7 +223,7 @@ func serveMCP(logger *slog.Logger, srv *http.Server, httpAddr string) error {
 
 	select {
 	case err := <-serverErr:
-		if err != nil && err != http.ErrServerClosed {
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err
 		}
 	case <-stop:

@@ -10,6 +10,9 @@ import (
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
 
+// mimeTypeJSON is the MIME type of every resource this server serves.
+const mimeTypeJSON = "application/json"
+
 // registerResources adds the scoped read-model resources. Per the charter,
 // resources are bounded-context contracts tied to a decision, not bulk dumps:
 // the staffing-gap resource answers "how does one path stand against its
@@ -30,7 +33,7 @@ func (d Deps) registerResources(server *mcp.Server) {
 		URITemplate: siteTemplate,
 		Name:        "staffing gap",
 		Description: "Planned-vs-active heads and understaffed flag for one process path within a site's committed shift plan; siteCode is both the plan key and the associate scope.",
-		MIMEType:    "application/json",
+		MIMEType:    mimeTypeJSON,
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		siteCode, shiftId, pathId, err := parseStaffingSiteURI(req.Params.URI)
 		if err != nil {
@@ -48,7 +51,7 @@ func (d Deps) registerResources(server *mcp.Server) {
 		URITemplate: buildingTemplate,
 		Name:        "staffing gap (buildingId, deprecated)",
 		Description: "DEPRECATED, use staffing://sites/{siteCode}/{shiftId}/{pathId}/gap: buildingId is the legacy name of the plan key (same value) and this template is not scoped by site.",
-		MIMEType:    "application/json",
+		MIMEType:    mimeTypeJSON,
 	}, func(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
 		buildingId, shiftId, pathId, err := parseStaffingURI(req.Params.URI)
 		if err != nil {
@@ -70,7 +73,7 @@ func staffingResourceResult(uri string, gap staffingGap) (*mcp.ReadResourceResul
 	return &mcp.ReadResourceResult{
 		Contents: []*mcp.ResourceContents{{
 			URI:      uri,
-			MIMEType: "application/json",
+			MIMEType: mimeTypeJSON,
 			Text:     string(body),
 		}},
 	}, nil

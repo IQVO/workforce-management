@@ -1,6 +1,7 @@
 package shiftplan
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestCommitShiftPlan_RejectsPlannedHeadsExceedingInstalledStations(t *testin
 	installed := map[shared.PathId]int{"pack": 10}
 
 	_, err := CommitShiftPlan("building-1", "shift-1", lines, installed, installed, 8, now)
-	if err != ErrPlannedHeadsExceedInstalled {
+	if !errors.Is(err, ErrPlannedHeadsExceedInstalled) {
 		t.Fatalf("expected ErrPlannedHeadsExceedInstalled, got %v", err)
 	}
 }
@@ -83,7 +84,7 @@ func TestCommitShiftPlan_RejectsPlannedHoursExceedingCapacity(t *testing.T) {
 	installed := map[shared.PathId]int{"pack": 10}
 
 	_, err := CommitShiftPlan("building-1", "shift-1", lines, installed, installed, 8, now)
-	if err != ErrPlannedHoursExceedCapacity {
+	if !errors.Is(err, ErrPlannedHoursExceedCapacity) {
 		t.Fatalf("expected ErrPlannedHoursExceedCapacity, got %v", err)
 	}
 }
@@ -96,7 +97,7 @@ func TestCommitShiftPlan_RejectsMissingInstalledStations(t *testing.T) {
 	installed := map[shared.PathId]int{"pack": 10}
 
 	_, err := CommitShiftPlan("building-1", "shift-1", lines, installed, installed, 8, now)
-	if err != ErrMissingInstalledStations {
+	if !errors.Is(err, ErrMissingInstalledStations) {
 		t.Fatalf("expected ErrMissingInstalledStations, got %v", err)
 	}
 }
@@ -119,7 +120,7 @@ func TestCommitShiftPlan_RejectsPlanExceedingInstalledCapacity(t *testing.T) {
 	installedCapacity := map[shared.PathId]int{"pack": 10} // live check fails
 
 	_, err := CommitShiftPlan("building-1", "shift-1", lines, installedStations, installedCapacity, 8, now)
-	if err != ErrExceedsInstalledCapacity {
+	if !errors.Is(err, ErrExceedsInstalledCapacity) {
 		t.Fatalf("expected ErrExceedsInstalledCapacity, got %v", err)
 	}
 }
@@ -160,7 +161,7 @@ func TestCommitShiftPlan_MissingInstalledCapacityEntryDefaultsToZeroCeiling(t *t
 	installedCapacity := map[shared.PathId]int{} // no entry for "pack"
 
 	_, err := CommitShiftPlan("building-1", "shift-1", lines, installedStations, installedCapacity, 8, now)
-	if err != ErrExceedsInstalledCapacity {
+	if !errors.Is(err, ErrExceedsInstalledCapacity) {
 		t.Fatalf("expected ErrExceedsInstalledCapacity, got %v", err)
 	}
 }
@@ -168,7 +169,7 @@ func TestCommitShiftPlan_MissingInstalledCapacityEntryDefaultsToZeroCeiling(t *t
 func TestCommitShiftPlan_RejectsEmptyLines(t *testing.T) {
 	now := time.Now()
 	_, err := CommitShiftPlan("building-1", "shift-1", nil, map[shared.PathId]int{}, map[shared.PathId]int{}, 8, now)
-	if err != ErrNoPathPlans {
+	if !errors.Is(err, ErrNoPathPlans) {
 		t.Fatalf("expected ErrNoPathPlans, got %v", err)
 	}
 }

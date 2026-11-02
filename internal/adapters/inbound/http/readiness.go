@@ -124,12 +124,12 @@ var dependencyUnavailable = problemCategory{"dependency-unavailable", "A runtime
 // caller that has not wired one.
 func (h *Handler) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	if !h.Readiness.Ready() {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{statusKey: "not_ready"})
 		return
 	}
 	if failing := h.Readiness.Failing(r.Context()); len(failing) > 0 {
 		writeProblem(w, http.StatusServiceUnavailable, dependencyUnavailable, "not ready: "+strings.Join(failing, ", "), r.URL.Path)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
+	writeJSON(w, http.StatusOK, map[string]string{statusKey: "ready"})
 }

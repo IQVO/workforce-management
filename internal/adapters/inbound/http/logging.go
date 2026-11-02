@@ -11,6 +11,10 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+// statusKey labels the HTTP status code in structured request logs and
+// readiness/health JSON bodies.
+const statusKey = "status"
+
 // sanitizeForLog strips CR/LF from an attacker-controlled value (here,
 // the raw request path) before it is written to a log line. Without this,
 // a crafted path segment containing an encoded newline could forge a fake
@@ -44,7 +48,7 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 				"method", r.Method,
 				"path", sanitizeForLog(r.URL.Path),
 				"route", routePattern(ctx),
-				"status", ww.Status(),
+				statusKey, ww.Status(),
 				"duration_ms", duration.Milliseconds(),
 				"bytes", ww.BytesWritten(),
 				"request_id", middleware.GetReqID(ctx),
