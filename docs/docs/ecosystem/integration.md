@@ -155,6 +155,14 @@ integration topic; they reach only this service's own analytics topic. Since
 present when the gap was computed for one canonical site, absent when it was
 computed fleet-wide — consumers must treat absence as "unscoped".
 
+Since [ADR 0041](../adr/0041-agent-authority-levels-and-attributable-assignments.md)
+the analytics `LaborAssigned` and `LaborReassigned` carry an optional
+`initiated_by` object (additive, still `v1`, event data only, no CloudEvents
+attribute): `{via: "mcp" | "a2a", proposal_id?, approved_by?, agent_id?}`. It is
+present only when the call arrived through the MCP or A2A `assign_labor`
+surface, with `via` set by the adapter, and absent for REST. Consumers must
+treat absence as "not agent-initiated".
+
 Publishing individual assignment moves would let a downstream context
 reconstruct a per-associate location feed — exactly the picture the
 [path boundary](../business-context/path-boundary.md) exists to withhold. If a

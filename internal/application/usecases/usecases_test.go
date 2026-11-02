@@ -2119,3 +2119,106 @@ func TestProposePathPlan_IdleShareTrimBoundaries(t *testing.T) {
 		})
 	}
 }
+
+// recordingPublisher captures the events a use case publishes.
+type recordingPublisher struct{ got []shared.DomainEvent }
+
+func (p *recordingPublisher) Publish(_ context.Context, evts ...shared.DomainEvent) error {
+	p.got = append(p.got, evts...)
+	return nil
+}
+
+// TestAssignLabor_Attribution: the initiator the adapter passes ends up on the
+// LaborAssigned (first assignment) or LaborReassigned (move) event, and the
+// plain Execute (REST) leaves it zero. Attribution never changes the outcome.
+func TestAssignLabor_Attribution(t *testing.T) {
+	agent, err := shared.NewInitiator(shared.ViaA2A, "prop-9", "sup-1", "ops-agent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name      string
+		initiator *shared.Initiator // nil = call plain Execute (REST)
+		prior     bool              // associate already active on another path
+		want      shared.Initiator
+	}{
+		{name: "REST first assignment", prior: false},
+		{name: "REST move", prior: true},
+		{name: "agent first assignment", initiator: &agent, prior: false, want: agent},
+		{name: "agent move", initiator: &agent, prior: true, want: agent},
+		{name: "zero initiator through the agent entry point", initiator: &shared.Initiator{}, prior: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixtures()
+			setupCertifiedAssociate(t, f, "assoc-1", "pack", "pick")
+			rec := &recordingPublisher{}
+			uc := &AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: rec, Clock: f.clock, MaxHoursPerShift: 8}
+			if tc.prior {
+				if _, err := uc.Execute(context.Background(), "assoc-1", "pick"); err != nil {
+					t.Fatal(err)
+				}
+				rec.got = nil
+			}
+
+			if err := executeAssign(uc, tc.initiator); err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(rec.got) != 1 {
+				t.Fatalf("published %d events, want 1: %+v", len(rec.got), rec.got)
+			}
+			got := assertAssignmentEventKind(t, rec.got[0], tc.prior)
+			if got != tc.want {
+				t.Fatalf("event initiator = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// executeAssign assigns assoc-1 to pack through Execute (REST, nil initiator)
+// or the agent entry point ExecuteInitiatedBy.
+func executeAssign(uc *AssignLabor, initiator *shared.Initiator) error {
+	if initiator == nil {
+		_, err := uc.Execute(context.Background(), "assoc-1", "pack")
+		return err
+	}
+	_, err := uc.ExecuteInitiatedBy(context.Background(), "assoc-1", "pack", *initiator)
+	return err
+}
+
+// assertAssignmentEventKind checks that ev is LaborReassigned for a move and
+// LaborAssigned for a first assignment, and returns its initiator.
+func assertAssignmentEventKind(t *testing.T, ev shared.DomainEvent, move bool) shared.Initiator {
+	t.Helper()
+	switch e := ev.(type) {
+	case shared.LaborAssigned:
+		if move {
+			t.Fatalf("a move raised LaborAssigned")
+		}
+		return e.InitiatedBy
+	case shared.LaborReassigned:
+		if !move {
+			t.Fatalf("a first assignment raised LaborReassigned")
+		}
+		return e.InitiatedBy
+	default:
+		t.Fatalf("unexpected event %T", ev)
+		return shared.Initiator{}
+	}
+}
+
+// An attributed call is rejected for exactly the same reasons as a plain one.
+func TestAssignLabor_AttributionDoesNotBypassInvariants(t *testing.T) {
+	f := newFixtures()
+	setupCertifiedAssociate(t, f, "assoc-1")
+	rec := &recordingPublisher{}
+	agent, _ := shared.NewInitiator(shared.ViaMCP, "p", "s", "a")
+	uc := &AssignLabor{Associates: f.associates, Assignments: f.assignments, Events: rec, Clock: f.clock, MaxHoursPerShift: 8}
+	_, err := uc.ExecuteInitiatedBy(context.Background(), "assoc-1", "hazmat", agent)
+	if !errors.Is(err, assignment.ErrCertificationRequired) {
+		t.Fatalf("err = %v, want ErrCertificationRequired", err)
+	}
+	if len(rec.got) != 0 {
+		t.Fatalf("a rejected call published %+v", rec.got)
+	}
+}

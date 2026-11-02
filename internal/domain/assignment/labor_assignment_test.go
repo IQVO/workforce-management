@@ -183,3 +183,51 @@ func TestRehydrate_PreservesState(t *testing.T) {
 		t.Fatalf("expected 1 history entry, got %d", len(la.History()))
 	}
 }
+
+// Attribution is metadata on the raised event only: the first assignment
+// raises LaborAssigned, a move raises LaborReassigned, and both carry the
+// initiator; Assign (no initiator) leaves them not agent-initiated.
+func TestAssignBy_AttributesTheRaisedEvent(t *testing.T) {
+	now := time.Now()
+	in, err := shared.NewInitiator(shared.ViaMCP, "p-1", "sup", "ag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	la := NewLaborAssignment("assoc-1")
+
+	if err := la.AssignBy("pack", true, now, in); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := la.PullEvents()[0].(shared.LaborAssigned)
+	if !ok || first.InitiatedBy != in {
+		t.Fatalf("first event = %+v, want LaborAssigned attributed to %+v", first, in)
+	}
+
+	if err := la.AssignBy("pick", true, now.Add(time.Hour), in); err != nil {
+		t.Fatal(err)
+	}
+	move, ok := la.PullEvents()[0].(shared.LaborReassigned)
+	if !ok || move.InitiatedBy != in {
+		t.Fatalf("second event = %+v, want LaborReassigned attributed to %+v", move, in)
+	}
+
+	plain := NewLaborAssignment("assoc-2")
+	if err := plain.Assign("pack", true, now); err != nil {
+		t.Fatal(err)
+	}
+	if ev := plain.PullEvents()[0].(shared.LaborAssigned); !ev.InitiatedBy.IsZero() {
+		t.Fatalf("Assign without an initiator produced %+v", ev.InitiatedBy)
+	}
+}
+
+// A rejected assignment raises nothing, attributed or not.
+func TestAssignBy_StillRejectsWithoutCertification(t *testing.T) {
+	in, _ := shared.NewInitiator(shared.ViaA2A, "", "", "")
+	la := NewLaborAssignment("assoc-1")
+	if err := la.AssignBy("pack", false, time.Now(), in); err != ErrCertificationRequired {
+		t.Fatalf("err = %v, want ErrCertificationRequired", err)
+	}
+	if len(la.PullEvents()) != 0 {
+		t.Fatal("a rejected attributed assignment must raise no event")
+	}
+}
