@@ -1062,7 +1062,7 @@ components:
         type: string
         minLength: 1
         maxLength: 128
-        pattern: '^[ -~]+$'
+        pattern: '^[!-~]([ -~]*[!-~])?$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
 
   headers:
