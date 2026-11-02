@@ -72,7 +72,7 @@ Design decisions worth calling out:
   concept: a path's required certification is the `Certification` with the
   same name as its `PathId` (path `"pack"` requires certification `"pack"`).
 - **`GetStaffingGap` takes `siteCode`/`shiftId` as query parameters**
-  (`GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=`; `buildingId` is the
+  (`GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=`, `{items,nextCursor}` when list-shaped; `buildingId` is the
   deprecated alias, ADR-0035) because `ShiftPlan` is keyed by site + shift, and
   a path's planned heads only make sense within one committed plan.
 - **`PathPlan.plannedHours <= plannedHeads * maxHoursPerShift`** is how "sum
@@ -121,17 +121,17 @@ raised and consumed in-process.
 
 | Method | Path | Use case |
 |---|---|---|
-| POST | `/associates/{id}/start-shift` | StartAssociateShift (optional `siteCode`, ADR-0034) |
+| POST | `/associates/{id}/shift-starts` | StartAssociateShift (optional `siteCode`, ADR-0034) |
 | POST | `/associates/{id}/certifications` | CertifyAssociate |
-| POST | `/paths/{pathId}/plan/propose` | ProposePathPlan |
-| POST | `/shift-plans` | CommitShiftPlan (requires `Idempotency-Key`, ADR-0027) |
-| POST | `/associates/{id}/assignments` | AssignLabor (requires `Idempotency-Key`, ADR-0027) |
-| POST | `/associates/{id}/break/start` | StartBreak |
-| POST | `/associates/{id}/break/end` | EndBreak |
+| POST | `/paths/{pathId}/plan-proposals` | ProposePathPlan |
+| POST | `/shift-plans` | CommitShiftPlan (keyed; fleet REST guideline, ADR-0040) |
+| POST | `/associates/{id}/assignments` | AssignLabor (keyed; fleet REST guideline, ADR-0040) |
+| POST | `/associates/{id}/break-starts` | StartBreak |
+| POST | `/associates/{id}/break-ends` | EndBreak |
 | GET | `/paths/{pathId}/staffing-gap` | GetStaffingGap (optional `siteCode`) |
 | GET | `/sites/{siteCode}/shifts/{shiftId}/staffing-gap` | GetStaffingGap.ExecuteAll (ADR-0029; canonical, ADR-0035) |
 | GET | `/buildings/{buildingId}/shifts/{shiftId}/staffing-gap` | DEPRECATED alias of the route above (answers `Deprecation: true`; removed only by a later ADR) |
-| POST | `/associates/{id}/end-shift` | EndAssociateShift |
+| POST | `/associates/{id}/shift-ends` | EndAssociateShift |
 | GET | `/healthz` | liveness |
 | GET | `/readyz` | readiness — 503 once graceful shutdown starts (ADR-0022); declared in `apis/openapi.yaml` |
 
@@ -145,3 +145,7 @@ Whenever the REST surface (paths, request/response shapes, status codes)
 changes, update `apis/openapi.yaml` AND regenerate
 `docs/docs/api-reference/rest/*` via `cd docs && npm run gen-api-docs -- all`
 — see the top-level CLAUDE.md's Definition of Done.
+
+Fleet REST guideline (ADR-0040): every POST is idempotent with a fresh
+`Idempotency-Key`; replays carry `Idempotency-Replayed: true`; key reuse
+with a different request is 409 `idempotency-key-reused` (never 422).
