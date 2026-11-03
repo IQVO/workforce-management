@@ -64,7 +64,16 @@ func requiredCertification(catalogue ports.PathCatalogue, pathId shared.PathId) 
 // Every attempt — accepted or rejected — is counted on the
 // workforce.labor_assignments metric. That is observation only: it does not
 // change what this use case decides or returns.
-func (uc *AssignLabor) Execute(ctx context.Context, associateId shared.AssociateId, pathId shared.PathId) (result *assignment.LaborAssignment, err error) {
+func (uc *AssignLabor) Execute(ctx context.Context, associateId shared.AssociateId, pathId shared.PathId) (*assignment.LaborAssignment, error) {
+	return uc.ExecuteInitiatedBy(ctx, associateId, pathId, shared.Initiator{})
+}
+
+// ExecuteInitiatedBy is Execute for a call an agent made (MCP or A2A): the
+// resulting LaborAssigned / LaborReassigned event carries initiator so the
+// assignment is attributable. The zero Initiator (REST, internal callers)
+// behaves exactly as Execute. Attribution never changes what is accepted or
+// rejected.
+func (uc *AssignLabor) ExecuteInitiatedBy(ctx context.Context, associateId shared.AssociateId, pathId shared.PathId, initiator shared.Initiator) (result *assignment.LaborAssignment, err error) {
 	defer func() { recordLaborAssignment(ctx, uc.Metrics, pathId, err) }()
 
 	shift, err := uc.Associates.FindByID(ctx, associateId)
@@ -88,7 +97,7 @@ func (uc *AssignLabor) Execute(ctx context.Context, associateId shared.Associate
 
 	now := uc.Clock.Now()
 	priorHistoryLen := len(la.History())
-	if err := la.Assign(pathId, hasCert, now); err != nil {
+	if err := la.AssignBy(pathId, hasCert, now, initiator); err != nil {
 		return nil, err
 	}
 

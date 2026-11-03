@@ -171,6 +171,8 @@ const sidebars: SidebarsConfig = {
         'adr/0037-reports-api-openapi-contract',
         'adr/0038-postgres-and-kafka-are-the-only-runtime',
         'adr/0039-a2a-inbound-adapter',
+        'adr/0040-adopt-the-fleet-rest-api-guideline',
+        'adr/0041-agent-authority-levels-and-attributable-assignments',
       ],
     },
   ],

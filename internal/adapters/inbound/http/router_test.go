@@ -113,7 +113,7 @@ func TestHealthz(t *testing.T) {
 
 func TestStartShift(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}})
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pack"}})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -128,11 +128,11 @@ func TestStartShift(t *testing.T) {
 // rather than reaching the domain/use-case layer.
 func TestStartShift_RejectsEmptyCertification(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{""}})
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{""}})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "empty-certification", "/associates/assoc-1/start-shift")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "empty-certification", "/associates/assoc-1/shift-starts")
 }
 
 // TestStartShift_RejectsNullBody pins the wire contract for a literal
@@ -142,16 +142,16 @@ func TestStartShift_RejectsEmptyCertification(t *testing.T) {
 // a 400 malformed-request-body problem instead.
 func TestStartShift_RejectsNullBody(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", json.RawMessage("null"))
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", json.RawMessage("null"))
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "malformed-request-body", "/associates/assoc-1/start-shift")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "malformed-request-body", "/associates/assoc-1/shift-starts")
 }
 
 func TestCertify(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{})
 
 	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/certifications", certifyRequest{Certification: "hazmat"})
 	if rec.Code != http.StatusNoContent {
@@ -170,7 +170,7 @@ func TestCertify_NotFound(t *testing.T) {
 
 func TestProposePathPlan(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -197,11 +197,11 @@ func TestProposePathPlan(t *testing.T) {
 // this service's own ADR-0013.
 func TestProposePathPlan_RejectsUnknownPathId(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/not-a-real-path/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/not-a-real-path/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "unknown-path-id", "/paths/not-a-real-path/plan/propose")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "unknown-path-id", "/paths/not-a-real-path/plan-proposals")
 }
 
 // TestProposePathPlan_ResolvesRealFleetPathIdVariant proves the catalogue's
@@ -209,7 +209,7 @@ func TestProposePathPlan_RejectsUnknownPathId(t *testing.T) {
 // regression class fulfillment-execution's ADR-0017 addendum documents.
 func TestProposePathPlan_ResolvesRealFleetPathIdVariant(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pick-zone-a/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pick-zone-a/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 30})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -221,7 +221,7 @@ func TestProposePathPlan_ResolvesRealFleetPathIdVariant(t *testing.T) {
 // must still succeed with 0 proposed heads, never a 4xx/5xx.
 func TestProposePathPlan_OmittedRateFallsBackToZeroHeadsWithoutMeasuredRate(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100)})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100)})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -247,11 +247,11 @@ func chargePtr(v float64) *float64 { return &v }
 // legitimate "nothing to do" proposal).
 func TestProposePathPlan_MissingChargeReturns400(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", PlannedRate: 30})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan/propose")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan-proposals")
 }
 
 // TestProposePathPlan_NullChargeReturns400 proves the nil-check also
@@ -259,11 +259,11 @@ func TestProposePathPlan_MissingChargeReturns400(t *testing.T) {
 // field), not just an omitted key.
 func TestProposePathPlan_NullChargeReturns400(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", map[string]any{"buildingId": "bldg-1", "charge": nil, "plannedRate": 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", map[string]any{"buildingId": "bldg-1", "charge": nil, "plannedRate": 30})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan/propose")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "missing-charge", "/paths/pack/plan-proposals")
 }
 
 // TestProposePathPlan_ExplicitZeroChargeIsAccepted proves the nil-check
@@ -271,7 +271,7 @@ func TestProposePathPlan_NullChargeReturns400(t *testing.T) {
 // (0 heads) and must stay a 200.
 func TestProposePathPlan_ExplicitZeroChargeIsAccepted(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(0), PlannedRate: 30})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(0), PlannedRate: 30})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -299,7 +299,7 @@ func TestProposePathPlan_HighIdleShareTrimsProposalOverHTTP(t *testing.T) {
 		IdleShare: &fakeIdleShareClient{share: 0.5},
 	}
 	router := NewRouter(handler, testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan/propose", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 10})
+	rec := doRequest(t, router, http.MethodPost, "/paths/pack/plan-proposals", proposePathPlanRequest{BuildingId: "bldg-1", Charge: chargePtr(100), PlannedRate: 10})
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -467,7 +467,7 @@ func TestCommitShiftPlan_RejectsUnknownPathId(t *testing.T) {
 
 func TestAssignLabor(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pack"}})
 
 	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "pack"})
 	if rec.Code != http.StatusCreated {
@@ -482,7 +482,7 @@ func TestAssignLabor(t *testing.T) {
 // failing-path test at the HTTP layer.
 func TestAssignLabor_RejectsMissingCertification(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{})
 
 	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "pick"})
 	if rec.Code != http.StatusConflict {
@@ -495,8 +495,8 @@ func TestAssignLabor_RejectsMissingCertification(t *testing.T) {
 // failing-path test at the HTTP layer.
 func TestAssignLabor_RejectsWhileOnBreak(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}})
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/break/start", nil)
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pack"}})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/break-starts", nil)
 
 	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "pack"})
 	if rec.Code != http.StatusConflict {
@@ -510,7 +510,7 @@ func TestAssignLabor_RejectsWhileOnBreak(t *testing.T) {
 // certification/break/shift-state gates.
 func TestAssignLabor_RejectsUnknownPathId(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pack"}})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pack"}})
 
 	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "not-a-real-path"})
 	if rec.Code != http.StatusBadRequest {
@@ -547,13 +547,13 @@ func TestAssignLabor_HazmatPath_ThroughHTTP(t *testing.T) {
 	router := NewRouter(h, testLogger, "")
 
 	t.Run("catalogue-valid hazmat family id rejects an uncertified associate", func(t *testing.T) {
-		doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{Certifications: []string{"pick"}})
+		doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{Certifications: []string{"pick"}})
 		rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/assignments", assignLaborRequest{PathId: "hazmat-pick"})
 		assertProblemDetails(t, rec, http.StatusConflict, "certification-required", "/associates/assoc-1/assignments")
 	})
 
 	t.Run("canonical and suffixed family ids accept the canonical-prefix certification", func(t *testing.T) {
-		doRequest(t, router, http.MethodPost, "/associates/assoc-2/start-shift", startShiftRequest{Certifications: []string{"hazmat-pick"}})
+		doRequest(t, router, http.MethodPost, "/associates/assoc-2/shift-starts", startShiftRequest{Certifications: []string{"hazmat-pick"}})
 		for _, pathId := range []string{"HAZMAT-PICK", "hazmat-pick", "hazmat-pick-zone-a"} {
 			rec := doRequest(t, router, http.MethodPost, "/associates/assoc-2/assignments", assignLaborRequest{PathId: pathId})
 			if rec.Code != http.StatusCreated {
@@ -563,7 +563,7 @@ func TestAssignLabor_HazmatPath_ThroughHTTP(t *testing.T) {
 	})
 
 	t.Run("a bare hazmat id is not a declared path and is rejected as unknown-path-id", func(t *testing.T) {
-		doRequest(t, router, http.MethodPost, "/associates/assoc-3/start-shift", startShiftRequest{Certifications: []string{"hazmat"}})
+		doRequest(t, router, http.MethodPost, "/associates/assoc-3/shift-starts", startShiftRequest{Certifications: []string{"hazmat"}})
 		rec := doRequest(t, router, http.MethodPost, "/associates/assoc-3/assignments", assignLaborRequest{PathId: "hazmat"})
 		assertProblemDetails(t, rec, http.StatusBadRequest, "unknown-path-id", "/associates/assoc-3/assignments")
 	})
@@ -571,14 +571,14 @@ func TestAssignLabor_HazmatPath_ThroughHTTP(t *testing.T) {
 
 func TestStartAndEndBreak(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{})
 
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/break/start", nil)
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/break-starts", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
 	}
 
-	rec = doRequest(t, router, http.MethodPost, "/associates/assoc-1/break/end", nil)
+	rec = doRequest(t, router, http.MethodPost, "/associates/assoc-1/break-ends", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -708,13 +708,12 @@ func TestStaffingGap_ObservedIdleShareIsTheCorrectlyNamedField(t *testing.T) {
 		if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 			t.Fatalf("%s: unmarshal: %v", url, err)
 		}
-		obj, ok := raw.(map[string]any)
-		if !ok {
-			list, _ := raw.([]any)
-			if len(list) != 1 {
+		obj, _ := raw.(map[string]any)
+		if items, isPage := obj["items"].([]any); isPage {
+			if len(items) != 1 {
 				t.Fatalf("%s: unexpected body %s", url, rec.Body.String())
 			}
-			obj = list[0].(map[string]any)
+			obj = items[0].(map[string]any)
 		}
 		if obj["observedIdleShare"] != 0.42 {
 			t.Fatalf("%s: observedIdleShare = %v, want 0.42 (body %s)", url, obj["observedIdleShare"], rec.Body.String())
@@ -746,10 +745,13 @@ func TestStaffingGapForShift_ListsEveryPlannedPath(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var resp []staffingGapResponse
-	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+	var env struct {
+		Items []staffingGapResponse `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	resp := env.Items
 	if len(resp) != 2 {
 		t.Fatalf("expected 2 entries (one per planned path), got %d: %+v", len(resp), resp)
 	}
@@ -778,9 +780,9 @@ func TestStaffingGapForShift_UnknownPlan_Returns404(t *testing.T) {
 
 func TestEndShift(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", startShiftRequest{})
+	doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", startShiftRequest{})
 
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/end-shift", nil)
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-ends", nil)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -791,7 +793,7 @@ func TestEndShift(t *testing.T) {
 // back to the status-keyed "malformed-request-body" category.
 func TestMalformedRequestBody(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	req := httptest.NewRequest(http.MethodPost, "/associates/assoc-1/start-shift", bytes.NewReader([]byte("{not json")))
+	req := httptest.NewRequest(http.MethodPost, "/associates/assoc-1/shift-starts", bytes.NewReader([]byte("{not json")))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
@@ -799,7 +801,7 @@ func TestMalformedRequestBody(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d: %s", rec.Code, rec.Body.String())
 	}
-	assertProblemDetails(t, rec, http.StatusBadRequest, "malformed-request-body", "/associates/assoc-1/start-shift")
+	assertProblemDetails(t, rec, http.StatusBadRequest, "malformed-request-body", "/associates/assoc-1/shift-starts")
 }
 
 // assertProblemDetails asserts rec's body is a well-formed RFC 7807 problem

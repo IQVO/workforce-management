@@ -1,5 +1,7 @@
 # Workforce Management
 
+[![CI](https://github.com/IQVO/workforce-management/actions/workflows/ci.yml/badge.svg?branch=develop)](https://github.com/IQVO/workforce-management/actions/workflows/ci.yml?query=branch%3Adevelop) [![coverage gate](https://img.shields.io/badge/coverage%20gate-90%25-brightgreen)](https://github.com/IQVO/workforce-management/blob/develop/Makefile) [![Go](https://img.shields.io/badge/go-1.26.10-00ADD8?logo=go&logoColor=white)](https://github.com/IQVO/workforce-management/blob/develop/go.mod) [![release](https://img.shields.io/github/v/release/IQVO/workforce-management?sort=semver)](https://github.com/IQVO/workforce-management/releases) [![docs](https://img.shields.io/badge/docs-iqvo.github.io-blue)](https://iqvo.github.io/workforce-management/) [![license](https://img.shields.io/badge/license-MIT-blue)](https://github.com/IQVO/workforce-management/blob/develop/LICENSE)
+
 A Supporting bounded context that owns "who is on shift, on which process
 path, at what rate; direct vs indirect hours." It covers the shift-start
 planning horizon (a human commits a split of headcount across paths) and
@@ -36,7 +38,7 @@ on every push to `main`.
 | DDD | [Use cases](docs/docs/ddd/use-cases.md), [Subdomain classification](docs/docs/ddd/subdomain-classification.md), [DDD artifact pack](docs/docs/ddd/ddd-artifacts.md) |
 | Ecosystem | [Integration](docs/docs/ecosystem/integration.md), [Context map](docs/docs/ecosystem/context-map.md) |
 | MCP | [Tools, resources and prompts](docs/docs/mcp/tools.md), [Governance charter](docs/docs/mcp/governance-charter.md) |
-| A2A | [A2A inbound adapter (ADR-0039)](docs/docs/adr/0039-a2a-inbound-adapter.md) |
+| A2A | [A2A inbound adapter (ADR-0039)](docs/docs/adr/0039-a2a-inbound-adapter.md), [Agent authority and attribution (ADR-0041)](docs/docs/adr/0041-agent-authority-levels-and-attributable-assignments.md) |
 | Analytics | [Labor report](docs/docs/analytics/labor-report.md) |
 | Decisions | [ADR index](docs/docs/adr/index.md) |
 
@@ -287,6 +289,25 @@ Domain rejections come back as an in-band RFC 7807 `problem` with the same
 status classification as REST. A2A carries delegation only; the facts still
 leave as CloudEvents on Kafka.
 
+### Agent authority and attribution
+
+Every MCP tool and A2A skill declares one authority level
+([ADR-0041](docs/docs/adr/0041-agent-authority-levels-and-attributable-assignments.md)):
+`get_staffing_gap` / `staffing_status` / `get_workforce_labor_report` are `L1`,
+`propose_path_heads` (a pure recommendation) is `L2`, `assign_labor` is `L3`.
+MCP carries it in the tool `Meta` key `com.warehouse/authority`, A2A as the skill
+tag `authority:L<n>`. The MCP server is stateless, so it also answers the
+`2026-07-28` `server/discover` handshake. `assign_labor` (MCP and A2A) takes
+three optional attribution labels, and the adapter stamps the surface:
+
+```bash
+# A2A: {"skill":"assign_labor","arguments":{"associateId":"assoc-1","pathId":"PICK",
+#        "proposalId":"prop-42","approvedBy":"supervisor-7","agentId":"warehouse-ops-agent"}}
+# publishes LaborAssigned (or LaborReassigned) with, in its data:
+#   "initiated_by": {"via":"a2a","proposal_id":"prop-42","approved_by":"supervisor-7","agent_id":"warehouse-ops-agent"}
+# REST produces no initiated_by.
+```
+
 ## API
 
 All bodies are JSON. `{id}` and `{pathId}` are path parameters.
@@ -294,7 +315,7 @@ All bodies are JSON. `{id}` and `{pathId}` are path parameters.
 ```bash
 # Start an associate's shift with initial certifications. siteCode is OPTIONAL
 # (ADR-0034): the canonical facility-layout Site code the associate works at.
-curl -X POST localhost:8080/associates/assoc-1/start-shift \
+curl -X POST localhost:8080/associates/assoc-1/shift-starts \
   -d '{"certifications":["pack"],"siteCode":"WH1"}'
 
 # Add a certification
@@ -311,14 +332,14 @@ curl -X POST localhost:8080/associates/assoc-1/certifications \
 # IDLE_SHARE_TRIM_THRESHOLD (default 0.30), proposedHeads is further
 # trimmed (floored at 1 head) and trimReason explains why
 # (idleness-as-staffing-signal, ADR-0020).
-curl -X POST localhost:8080/paths/pack/plan/propose \
+curl -X POST localhost:8080/paths/pack/plan-proposals \
   -d '{"siteCode":"WH1","charge":100,"plannedRate":30}'
 # -> {"pathId":"pack","proposedHeads":4,"resolvedRate":30,"rateSource":"caller"}
 # (siteCode is canonical; "buildingId" is a deprecated alias with the same
 #  value, and sending both with different values is 422
 #  conflicting-site-and-building -- ADR-0035)
 
-curl -X POST localhost:8080/paths/pack/plan/propose \
+curl -X POST localhost:8080/paths/pack/plan-proposals \
   -d '{"siteCode":"WH1","charge":100}'
 # -> falls back to labor-performance's measured rate for PACK when
 #    LABOR_PERFORMANCE_MODE=http and data exists; otherwise 0 proposed heads.
@@ -327,11 +348,12 @@ curl -X POST localhost:8080/paths/pack/plan/propose \
 # Requires INSTALLED_CAPACITY_MODE=http: in the default permissive mode every
 # commit is rejected with 503 installed-capacity-unavailable (ADR-0014), and a
 # line whose plannedHeads exceeds fulfillment-execution's live capacity is 409.
-# POST /shift-plans and POST /associates/{id}/assignments require an
-# Idempotency-Key header (ADR-0027): a missing key is 400
-# idempotency-key-required, the same key with a different body is 422
-# idempotency-key-reused, and a retry with the same key + body replays the
-# stored response.
+# EVERY POST requires an Idempotency-Key header (ADR-0027, ADR-0040): a
+# missing key is 400 idempotency-key-required, a key that is not 1-128
+# printable ASCII is 400 idempotency-key-invalid, the same key with a
+# different method/path/body is 409 idempotency-key-reused, and a retry with
+# the same key + request replays the stored response with
+# "Idempotency-Replayed: true". The key is global (not per route).
 curl -X POST localhost:8080/shift-plans \
   -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
   -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
@@ -344,8 +366,8 @@ curl -X POST localhost:8080/associates/assoc-1/assignments \
   -d '{"pathId":"pack"}'
 
 # Break start/end
-curl -X POST localhost:8080/associates/assoc-1/break/start
-curl -X POST localhost:8080/associates/assoc-1/break/end
+curl -X POST localhost:8080/associates/assoc-1/break-starts
+curl -X POST localhost:8080/associates/assoc-1/break-ends
 
 # Staffing gap read model for a path within a committed plan
 # -> {"pathId":"pack","plannedHeads":3,"activeHeads":1,"understaffed":true}
@@ -363,11 +385,13 @@ curl "localhost:8080/paths/pack/staffing-gap?buildingId=WH1&shiftId=shift-1"
 
 # Staffing gap for EVERY path planned in one committed shift plan (ADR-0029)
 # -> a JSON array of the same per-path objects (canonical route, ADR-0035)
-curl localhost:8080/sites/WH1/shifts/shift-1/staffing-gap
+# Paged: {"items":[...],"nextCursor":"..."}; pass ?limit=1-500 and ?cursor=
+# (the previous nextCursor) until nextCursor is absent.
+curl "localhost:8080/sites/WH1/shifts/shift-1/staffing-gap?limit=100"
 # Deprecated alias (answers "Deprecation: true"): /buildings/WH1/shifts/shift-1/staffing-gap
 
 # End an associate's shift (closes any active assignment first)
-curl -X POST localhost:8080/associates/assoc-1/end-shift
+curl -X POST localhost:8080/associates/assoc-1/shift-ends
 
 curl localhost:8080/healthz   # liveness
 curl localhost:8080/readyz    # readiness: 503 {"status":"not_ready"} once shutdown begins (ADR-0022)
@@ -710,7 +734,7 @@ must never select the frontend, analytics or MCP pods.
 
 ## Architecture Decision Records
 
-The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 38 decisions, from the
+The ADR index lives at [docs/docs/adr/index.md](docs/docs/adr/index.md) — 41 decisions, from the
 hexagonal layout to the CloudEvents-only envelope and the transactional
 outbox.
 

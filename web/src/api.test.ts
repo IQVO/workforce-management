@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WORKFORCE_API_BASE } from "./config";
-import { apiPost, ApiError, newIdempotencyKey } from "./api";
+import { apiPost, ApiError, fetchAllPages, newIdempotencyKey } from "./api";
 
 /** One request apiPost made through global fetch. */
 interface MockCall {
@@ -137,5 +137,18 @@ describe("newIdempotencyKey", () => {
       /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
     expect(b).not.toBe(a);
+  });
+});
+
+describe("fetchAllPages", () => {
+  it("follows nextCursor until absent and reads items", async () => {
+    const calls = stubFetch((call) => {
+      const first = !call.url.includes("cursor=");
+      const body = first ? { items: [{ n: 1 }], nextCursor: "c1" } : { items: [{ n: 2 }] };
+      return new Response(JSON.stringify(body), { status: 200 });
+    });
+    const all = await fetchAllPages<{ n: number }>("http://x/sites/WH1/shifts/s/staffing-gap");
+    expect(all).toEqual([{ n: 1 }, { n: 2 }]);
+    expect(calls[1].url).toBe("http://x/sites/WH1/shifts/s/staffing-gap?cursor=c1");
   });
 });

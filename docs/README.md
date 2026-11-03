@@ -38,3 +38,7 @@ npm run build
 Pushes to `main` that touch `docs/**` trigger `.github/workflows/docs.yml`,
 which builds this site and deploys it to GitHub Pages. There is no manual
 deploy step.
+
+## Disclaimer
+
+This project is a domain-driven design study. It is not associated with, endorsed by or affiliated with any company, and it uses no company's code, data, logos or trademarks. All names, figures and examples are illustrative or synthetic.

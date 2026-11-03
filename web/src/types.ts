@@ -42,3 +42,10 @@ export interface AssignmentResponse {
   activePathId?: string;
   active: boolean;
 }
+
+/** The fleet collection envelope: { items, nextCursor } (REST guideline 3.3).
+ *  nextCursor is absent on the last page. */
+export interface Page<T> {
+  items: T[];
+  nextCursor?: string;
+}

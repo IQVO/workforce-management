@@ -1,6 +1,9 @@
 package shared
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestNewAssociateId(t *testing.T) {
 	tests := []struct {
@@ -19,7 +22,7 @@ func TestNewAssociateId(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("expected error %v, got %v", tt.wantErr, err)
 			}
 		})
@@ -43,7 +46,7 @@ func TestNewPathId(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("expected error %v, got %v", tt.wantErr, err)
 			}
 		})
@@ -67,7 +70,7 @@ func TestNewCertification(t *testing.T) {
 			if got != tt.want {
 				t.Fatalf("expected %q, got %q", tt.want, got)
 			}
-			if err != tt.wantErr {
+			if !errors.Is(err, tt.wantErr) {
 				t.Fatalf("expected error %v, got %v", tt.wantErr, err)
 			}
 		})

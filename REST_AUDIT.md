@@ -11,22 +11,22 @@ codes) — HATEOAS is explicitly out of scope.
 
 ```
 GET  /healthz
-POST /associates/{id}/start-shift
+POST /associates/{id}/shift-starts
 POST /associates/{id}/certifications
-POST /paths/{pathId}/plan/propose
+POST /paths/{pathId}/plan-proposals
 POST /shift-plans
 POST /associates/{id}/assignments
-POST /associates/{id}/break/start
-POST /associates/{id}/break/end
+POST /associates/{id}/break-starts
+POST /associates/{id}/break-ends
 GET  /paths/{pathId}/staffing-gap
-POST /associates/{id}/end-shift
+POST /associates/{id}/shift-ends
 ```
 
 This service has no bare RPC-style endpoint analogous to the
 `POST /admin/expire-leases` pattern called out in REST_API_TASK.md as a
 known issue elsewhere in the codebase — that pattern does not exist here.
-Every action endpoint (`start-shift`, `certifications`, `break/start`,
-`break/end`, `end-shift`, `assignments`) is a verb-suffixed command scoped to
+Every action endpoint (`shift-starts`, `certifications`, `break-starts`,
+`break-ends`, `shift-ends`, `assignments`) is a verb-suffixed command scoped to
 a specific resource collection or instance (`/associates/{id}/...`), which is
 correct DDD/REST practice for non-CRUD domain commands — no change made.
 
@@ -55,7 +55,7 @@ correct DDD/REST practice for non-CRUD domain commands — no change made.
 1. **Missing `Location` headers on 201 responses.** `startShift`,
    `commitShiftPlan`, and `assignLabor` all returned `201 Created` with no
    `Location` header pointing at the created resource. Fixed:
-   - `POST /associates/{id}/start-shift` → `Location: /associates/{id}`
+   - `POST /associates/{id}/shift-starts` → `Location: /associates/{id}`
    - `POST /shift-plans` → `Location: /shift-plans/{buildingId}/{shiftId}`
    - `POST /associates/{id}/assignments` → `Location: /associates/{id}/assignments`
 
@@ -113,7 +113,7 @@ correct DDD/REST practice for non-CRUD domain commands — no change made.
 
 ## 4. Idempotency semantics (documented, not changed — no bug found)
 
-- **`POST /associates/{id}/start-shift`** — naturally idempotent by
+- **`POST /associates/{id}/shift-starts`** — naturally idempotent by
   client-supplied ID: the memory/postgres repos both `Save` as an upsert
   keyed by `associateId`, so calling twice with the same ID overwrites
   rather than erroring. (It does re-publish `AssociateShiftStarted` and
@@ -126,11 +126,11 @@ correct DDD/REST practice for non-CRUD domain commands — no change made.
   `Certify` adds to a `map[Certification]struct{}` set, so re-certifying the
   same certification is a no-op on state (still re-raises
   `AssociateCertified` and returns `204` each call).
-- **`POST /associates/{id}/end-shift`** — idempotent: `EndShift` is
+- **`POST /associates/{id}/shift-ends`** — idempotent: `EndShift` is
   explicitly a no-op (no event raised) when the shift has already ended.
-- **`POST /associates/{id}/break/start`**, **`.../break/end`** — NOT
-  idempotent by design: a second `break/start` while already on break
-  returns `409 ErrAlreadyOnBreak`; a second `break/end` while not on break
+- **`POST /associates/{id}/break-starts`**, **`.../break-ends`** — NOT
+  idempotent by design: a second `break-starts` while already on break
+  returns `409 ErrAlreadyOnBreak`; a second `break-ends` while not on break
   returns `409 ErrNotOnBreak`. This is correct for an action command
   representing a state transition, not a resource creation.
 - **`POST /associates/{id}/assignments`** — NOT strictly idempotent: per the
@@ -261,7 +261,7 @@ Content-Length: 258
 **Bonus — 201 with the new `Location` header, live:**
 
 ```
-$ curl -s -i -X POST localhost:8123/associates/assoc-live-1/start-shift -d '{"certifications":["pack"]}'
+$ curl -s -i -X POST localhost:8123/associates/assoc-live-1/shift-starts -d '{"certifications":["pack"]}'
 HTTP/1.1 201 Created
 Content-Type: application/json
 Location: /associates/assoc-live-1

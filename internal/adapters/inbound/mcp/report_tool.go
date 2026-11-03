@@ -174,5 +174,6 @@ func (d Deps) registerReportTool(server *mcp.Server) {
 		Name:        "get_workforce_labor_report",
 		Description: "Return the workforce Labor Utilization & Staffing report (shifts started/ended, break count and avg break seconds, certifications, labor assigned/reassigned, understaffing events) for a time window, optionally filtered by process path. Reads via the workforce-reports REST service.",
 		Annotations: &mcp.ToolAnnotations{ReadOnlyHint: readOnly},
+		Meta:        authorityMeta(authorityL1),
 	}, d.getLaborReport)
 }

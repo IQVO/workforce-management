@@ -44,7 +44,7 @@ additively and backward compatibly.
    surrounding whitespace is trimmed, a blank value means "no site", and there
    is **no live lookup or validation** against facility-layout (this context
    keeps its data local and declarative).
-2. **Write side.** `POST /associates/{id}/start-shift` accepts an optional
+2. **Write side.** `POST /associates/{id}/shift-starts` accepts an optional
    `siteCode`, persisted on the `AssociateShift` aggregate as
    `associate_shift.site_code` — a **nullable** column added by the additive
    migration `000005` (plus a partial index on the non-NULL values). A restart

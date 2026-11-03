@@ -205,7 +205,7 @@ next tick. Several replicas sweeping at once is safe: deletes are idempotent.
 | projector | `autoscaling.projector`: 1 to 2 | Shared group `workforce-analytics`. Partitions rebalance across replicas. |
 | reports | `autoscaling.reports`: 1 to 3 | Read-only and stateless. |
 | frontend | `autoscaling.frontend`: 1 to 3 | Static assets. |
-| mcp | **none** | MCP Streamable HTTP keeps per-process session state keyed by `Mcp-Session-Id`, and the Service has no session affinity. Keep `mcp.replicaCount: 1`. |
+| mcp | **none** | The MCP server has been stateless since [ADR 0041](../adr/0041-agent-authority-levels-and-attributable-assignments.md) (no `Mcp-Session-Id` state), so sessions no longer bar scaling out. The chart defaults to `mcp.replicaCount: 1` and ships no HPA; changing that is a separate decision. |
 
 When an HPA is enabled, the Deployment's own `replicas:` is omitted.
 Connection budgets per process

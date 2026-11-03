@@ -365,7 +365,7 @@ components:
             id: "3d4a1f60-2b8e-4c17-8a55-0c6f9d2b41aa"
             source: "/warehouse/workforce-management"
             type: "com.warehouse.wes.workforce-management.shiftplan.ShiftPlanProposed"
-            subject: "BLD1/pack"
+            subject: "pack"
             time: "2026-08-21T21:30:00Z"
             datacontenttype: "application/json"
             dataschema: "urn:warehouse:workforce-management:analytics:ShiftPlanProposed:v1"
@@ -620,6 +620,14 @@ components:
         on a specific task. Dispatching individual tasks belongs to
         Fulfillment Execution.
 
+        **Attribution (additive).** When the assignment was requested through
+        the MCP `assign_labor` tool or the A2A `assign_labor` skill, `data`
+        also carries `initiated_by` (`via` = `mcp` or `a2a`, set by the
+        adapter, plus the caller's optional `proposal_id`, `approved_by` and
+        `agent_id`). It is absent for REST and every other caller: absence
+        means "not agent-initiated". It is event data only; no CloudEvents
+        extension attribute is added, and the `v1` dataschema is unchanged.
+
         **Not on the integration topic.** Published only to the internal
         analytics topic `warehouse.workforce.analytics` (dataschema
         `urn:warehouse:workforce-management:analytics:<EventName>:v1`).
@@ -644,6 +652,27 @@ components:
             data:
               associate_id: "A-1001"
               path_id: "pack"
+        - name: assignedByAgent
+          summary: >-
+            Associate A-1001 is assigned to the pack path by the
+            warehouse-ops-agent over A2A, executing an approved proposal.
+          payload:
+            specversion: "1.0"
+            id: "5e1d9c34-7a2b-4c58-b0f6-3a8e2d1c9b47"
+            source: "/warehouse/workforce-management"
+            type: "com.warehouse.wes.workforce-management.assignment.LaborAssigned"
+            subject: "A-1001"
+            time: "2026-08-21T22:15:00Z"
+            datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:LaborAssigned:v1"
+            data:
+              associate_id: "A-1001"
+              path_id: "pack"
+              initiated_by:
+                via: "a2a"
+                proposal_id: "prop-7f3a"
+                approved_by: "supervisor-12"
+                agent_id: "warehouse-ops-agent"
 
     LaborReassigned:
       name: LaborReassigned
@@ -655,6 +684,12 @@ components:
         — the intra-shift move that keeps the one-ACTIVE-assignment invariant
         intact. The move is always a human call recorded here; this context
         never decides a rebalance on its own.
+
+        **Attribution (additive).** Like `LaborAssigned`, `data` carries
+        `initiated_by` when the move was requested through the MCP or A2A
+        `assign_labor` surface, and omits it otherwise (REST). An agent
+        reallocating an associate who is already on a path raises this event,
+        not `LaborAssigned`, so the attribution must be here too.
 
         **Not on the integration topic.** Published only to the internal
         analytics topic `warehouse.workforce.analytics` (dataschema
@@ -681,6 +716,28 @@ components:
               associate_id: "A-1001"
               from_path_id: "pack"
               to_path_id: "pick"
+        - name: movedByAgent
+          summary: >-
+            Associate A-1001 is moved from pack to pick by the
+            warehouse-ops-agent over A2A, executing an approved proposal.
+          payload:
+            specversion: "1.0"
+            id: "c3a4f7d2-91be-4e60-8d15-6b2f0a9e7c13"
+            source: "/warehouse/workforce-management"
+            type: "com.warehouse.wes.workforce-management.assignment.LaborReassigned"
+            subject: "A-1001"
+            time: "2026-08-22T02:25:00Z"
+            datacontenttype: "application/json"
+            dataschema: "urn:warehouse:workforce-management:analytics:LaborReassigned:v1"
+            data:
+              associate_id: "A-1001"
+              from_path_id: "pack"
+              to_path_id: "pick"
+              initiated_by:
+                via: "a2a"
+                proposal_id: "prop-7f3a"
+                approved_by: "supervisor-12"
+                agent_id: "warehouse-ops-agent"
 
     TaskPerformanceRecorded:
       name: TaskPerformanceRecorded
@@ -1209,6 +1266,38 @@ components:
                   type: string
                   description: Identifier of the associate whose shift ended.
 
+    InitiatedBy:
+      type: object
+      description: |
+        Attribution of an agent-initiated assignment (additive, event data
+        only). Present on `LaborAssigned` / `LaborReassigned` only when the
+        call arrived through the MCP `assign_labor` tool or the A2A
+        `assign_labor` skill; absent for REST. `via` is stamped by the
+        adapter, never supplied by the caller. The other members are the
+        caller's optional free-form labels (trimmed, at most 128
+        characters); they carry no authority and are omitted when not given.
+      required:
+        - via
+      properties:
+        via:
+          type: string
+          enum:
+            - mcp
+            - a2a
+          description: The agent surface the call arrived through; set by the adapter.
+        proposal_id:
+          type: string
+          maxLength: 128
+          description: Identifier of the proposal the agent executed, when given.
+        approved_by:
+          type: string
+          maxLength: 128
+          description: Identifier of the human who approved the proposal, when given.
+        agent_id:
+          type: string
+          maxLength: 128
+          description: Identifier of the calling agent, when given.
+
     LaborAssignedEvent:
       title: LaborAssigned CloudEvent
       description: CloudEvent for placing an associate on a process path.
@@ -1241,6 +1330,8 @@ components:
                 path_id:
                   type: string
                   description: Process path the associate now works, e.g. "pack". Never a task id.
+                initiated_by:
+                  $ref: "#/components/schemas/InitiatedBy"
 
     LaborReassignedEvent:
       title: LaborReassigned CloudEvent
@@ -1278,6 +1369,8 @@ components:
                 to_path_id:
                   type: string
                   description: Process path the associate was moved onto.
+                initiated_by:
+                  $ref: "#/components/schemas/InitiatedBy"
 
     TaskPerformanceRecordedEvent:
       type: object

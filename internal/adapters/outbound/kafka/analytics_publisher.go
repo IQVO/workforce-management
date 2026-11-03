@@ -17,6 +17,12 @@ import (
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
 
+// CloudEvents extension / payload keys published on the analytics topic.
+const (
+	keyAssociateID = "associate_id"
+	keyPathID      = "path_id"
+)
+
 // AnalyticsTopic is the dedicated topic the analytics data product consumes.
 // It is separate from the integration topic (Topic) so the OLTP integration
 // contract and the analytical read-model stream evolve independently
@@ -137,43 +143,47 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 	switch ev := e.(type) {
 	case shared.AssociateShiftStarted:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateShiftEnded:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateBreakStarted:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateBreakEnded:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id": string(ev.AssociateId),
+			keyAssociateID: string(ev.AssociateId),
 		}), true
 	case shared.AssociateCertified:
 		return associateEvent(ev.EventName(), ev.AssociateId, map[string]any{
-			"associate_id":  string(ev.AssociateId),
+			keyAssociateID:  string(ev.AssociateId),
 			"certification": string(ev.Certification),
 		}), true
 	case shared.LaborAssigned:
+		data := map[string]any{
+			keyAssociateID: string(ev.AssociateId),
+			keyPathID:      string(ev.PathId),
+		}
+		addInitiatedBy(data, ev.InitiatedBy)
 		return analyticsEvent{entity: cloudevents.EntityAssignment, eventName: ev.EventName(),
 			key: string(ev.AssociateId), subject: string(ev.AssociateId),
-			data: mustMarshal(map[string]any{
-				"associate_id": string(ev.AssociateId),
-				"path_id":      string(ev.PathId),
-			})}, true
+			data: mustMarshal(data)}, true
 	case shared.LaborReassigned:
+		data := map[string]any{
+			keyAssociateID: string(ev.AssociateId),
+			"from_path_id": string(ev.FromPathId),
+			"to_path_id":   string(ev.ToPathId),
+		}
+		addInitiatedBy(data, ev.InitiatedBy)
 		return analyticsEvent{entity: cloudevents.EntityAssignment, eventName: ev.EventName(),
 			key: string(ev.AssociateId), subject: string(ev.AssociateId),
-			data: mustMarshal(map[string]any{
-				"associate_id": string(ev.AssociateId),
-				"from_path_id": string(ev.FromPathId),
-				"to_path_id":   string(ev.ToPathId),
-			})}, true
+			data: mustMarshal(data)}, true
 	case shared.PathUnderstaffed:
 		data := map[string]any{
-			"path_id":       string(ev.PathId),
+			keyPathID:       string(ev.PathId),
 			"planned_heads": ev.PlannedHeads,
 			"active_heads":  ev.ActiveHeads,
 		}
@@ -192,7 +202,7 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 			data: mustMarshal(map[string]any{
 				"building_id":   ev.BuildingId,
 				"site_code":     ev.SiteCode(),
-				"path_id":       string(ev.PathId),
+				keyPathID:       string(ev.PathId),
 				"planned_heads": ev.PlannedHeads,
 				"planned_rate":  ev.PlannedRate,
 			})}, true
@@ -207,6 +217,29 @@ func marshalAnalyticsData(e shared.DomainEvent) (analyticsEvent, bool) {
 	default:
 		return analyticsEvent{}, false
 	}
+}
+
+// addInitiatedBy adds the ADDITIVE `initiated_by` object (Agentic Standard v2)
+// to an assignment payload: present only when an agent adapter (MCP or A2A)
+// made the call, omitted otherwise, and with proposal_id / approved_by /
+// agent_id each omitted when the caller gave none. Consumers must treat
+// absence as "not agent-initiated". No CloudEvents extension attribute is
+// involved: this is event DATA only.
+func addInitiatedBy(data map[string]any, in shared.Initiator) {
+	if in.IsZero() {
+		return
+	}
+	by := map[string]any{"via": string(in.Via())}
+	if v := in.ProposalID(); v != "" {
+		by["proposal_id"] = v
+	}
+	if v := in.ApprovedBy(); v != "" {
+		by["approved_by"] = v
+	}
+	if v := in.AgentID(); v != "" {
+		by["agent_id"] = v
+	}
+	data["initiated_by"] = by
 }
 
 // mustMarshal marshals a map whose shape is fully controlled by

@@ -36,20 +36,20 @@ Feature: Reading the staffing gap
     When a GET request is sent to "/sites/WH1/shifts/shift-1/staffing-gap"
     Then the last request succeeds with status 200
     And the response is a list of 2 entries
-    And the response field "0.pathId" is "pack"
-    And the response field "0.plannedHeads" is the number 3
-    And the response field "0.activeHeads" is the number 1
-    And the response field "0.understaffed" is true
-    And the response field "1.pathId" is "pick"
-    And the response field "1.activeHeads" is the number 0
-    And the response field "1.understaffed" is true
+    And the response field "items.0.pathId" is "pack"
+    And the response field "items.0.plannedHeads" is the number 3
+    And the response field "items.0.activeHeads" is the number 1
+    And the response field "items.0.understaffed" is true
+    And the response field "items.1.pathId" is "pick"
+    And the response field "items.1.activeHeads" is the number 0
+    And the response field "items.1.understaffed" is true
 
   @bdd
   Scenario: A site's list counts only associates active at that site
     Given associate "assoc-1" is assigned to path "pack"
     And associate "assoc-2" is assigned to path "pack"
     When a GET request is sent to "/sites/WH1/shifts/shift-1/staffing-gap"
-    Then the response field "0.activeHeads" is the number 1
+    Then the response field "items.0.activeHeads" is the number 1
 
   @bdd
   Scenario: Every understaffed path in the plan is announced
@@ -82,7 +82,7 @@ Feature: Reading the staffing gap
     Given associate "assoc-1" is assigned to path "pack"
     And associate "assoc-2" is assigned to path "pack"
     When a GET request is sent to "/buildings/WH1/shifts/shift-1/staffing-gap"
-    Then the response field "0.activeHeads" is the number 2
+    Then the response field "items.0.activeHeads" is the number 2
 
   @bdd
   Scenario Outline: The lists are not found without a committed plan

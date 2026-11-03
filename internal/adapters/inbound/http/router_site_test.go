@@ -11,7 +11,7 @@ import (
 
 func startShiftAt(t *testing.T, router http.Handler, id, site string) {
 	t.Helper()
-	rec := doRequest(t, router, http.MethodPost, "/associates/"+id+"/start-shift", startShiftRequest{Certifications: []string{"pack"}, SiteCode: site})
+	rec := doRequest(t, router, http.MethodPost, "/associates/"+id+"/shift-starts", startShiftRequest{Certifications: []string{"pack"}, SiteCode: site})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("start-shift %s: expected 201, got %d: %s", id, rec.Code, rec.Body.String())
 	}
@@ -60,7 +60,7 @@ func decodeGap(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 
 func TestStartShift_AcceptsOptionalSiteCode(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", map[string]any{"certifications": []string{"pack"}, "siteCode": "WH1"})
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", map[string]any{"certifications": []string{"pack"}, "siteCode": "WH1"})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -70,7 +70,7 @@ func TestStartShift_AcceptsOptionalSiteCode(t *testing.T) {
 // null is the same as omitting it, so the site stays unknown (contract job).
 func TestStartShift_NullSiteCodeIsOmitted(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")
-	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/start-shift", map[string]any{"certifications": []string{"pack"}, "siteCode": nil})
+	rec := doRequest(t, router, http.MethodPost, "/associates/assoc-1/shift-starts", map[string]any{"certifications": []string{"pack"}, "siteCode": nil})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body.String())
 	}
@@ -133,19 +133,19 @@ func TestStaffingGapForShift_ScopedList(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
 	}
-	var scoped []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &scoped); err != nil {
+	var scopedPage struct {
+		Items []map[string]any `json:"items"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &scopedPage); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
+	scoped := scopedPage.Items
 	if len(scoped) != 1 || scoped[0]["activeHeads"] != float64(2) || scoped[0]["siteCode"] != "WH1" {
 		t.Fatalf("scoped list expected one pack line with 2 heads at WH1, got %v", scoped)
 	}
 
 	rec = doRequest(t, router, http.MethodGet, "/buildings/bldg-1/shifts/shift-1/staffing-gap", nil)
-	var all []map[string]any
-	if err := json.Unmarshal(rec.Body.Bytes(), &all); err != nil {
-		t.Fatalf("decode: %v", err)
-	}
+	all := decodeItems(t, rec.Body.Bytes())
 	if len(all) != 1 || all[0]["activeHeads"] != float64(4) {
 		t.Fatalf("unscoped list must stay fleet-wide, got %v", all)
 	}

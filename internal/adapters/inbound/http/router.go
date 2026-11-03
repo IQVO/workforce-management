@@ -2,7 +2,6 @@ package http
 
 import (
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -18,7 +17,6 @@ import (
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/application/usecases"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
-	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
 
 // DefaultServiceName is the OTel service name this adapter reports when the
@@ -121,25 +119,22 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	r.Get("/healthz", h.healthz)
 	r.Get("/readyz", h.handleReadyz)
 
-	r.Post("/associates/{id}/start-shift", h.startShift)
-	r.Post("/associates/{id}/certifications", h.certify)
-	r.Post("/paths/{pathId}/plan/propose", h.proposePathPlan)
-	// POST /shift-plans and POST /associates/{id}/assignments are the two
-	// mutating endpoints whose blind retry after a lost response would
-	// re-apply real state and re-publish events (ADR-0027). They are
-	// route-scoped (r.With, not r.Use) behind RequireIdempotencyKey when an
-	// IdempotencyPool is wired; a nil pool (in-memory dev/test) leaves them
+	// EVERY POST sits behind RequireIdempotencyKey when an IdempotencyPool is
+	// wired (fleet REST guideline 2.1, ADR-0027 as amended); route-scoped via
+	// r.With, not r.Use. A nil pool (in-memory dev/test) leaves them
 	// unprotected, matching every other optional Postgres-backed capability.
-	// start-shift is idempotent by associate id, certify/break/end-shift act
-	// on a caller-supplied id, and propose is a pure computation.
 	idempotent := r.With()
 	if h.IdempotencyPool != nil {
 		idempotent = r.With(RequireIdempotencyKey(h.IdempotencyPool))
 	}
+	idempotent.Post("/associates/{id}/shift-starts", h.startShift)
+	idempotent.Post("/associates/{id}/certifications", h.certify)
+	idempotent.Post("/paths/{pathId}/plan-proposals", h.proposePathPlan)
 	idempotent.Post("/shift-plans", h.commitShiftPlan)
 	idempotent.Post("/associates/{id}/assignments", h.assignLabor)
-	r.Post("/associates/{id}/break/start", h.startBreak)
-	r.Post("/associates/{id}/break/end", h.endBreak)
+	idempotent.Post("/associates/{id}/break-starts", h.startBreak)
+	idempotent.Post("/associates/{id}/break-ends", h.endBreak)
+	idempotent.Post("/associates/{id}/shift-ends", h.endShift)
 	r.Get("/paths/{pathId}/staffing-gap", h.staffingGap)
 	// Canonical route (ADR 0035): the path segment is the Site code, both the
 	// plan lookup key and the associate scope.
@@ -148,358 +143,12 @@ func NewRouter(h *Handler, logger *slog.Logger, serviceName string, opts ...Rout
 	// shape): buildingId is the legacy name of the plan key. Kept working,
 	// announced with `Deprecation: true`, removed only by a later ADR.
 	r.With(deprecatedRoute).Get("/buildings/{buildingId}/shifts/{shiftId}/staffing-gap", h.staffingGapForShift)
-	r.Post("/associates/{id}/end-shift", h.endShift)
 
 	return r
 }
 
 func (h *Handler) healthz(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (h *Handler) startShift(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	// Decode into a POINTER so a literal JSON null body (a no-op for a
-	// value struct — every field here is optional, so null silently
-	// created a shift) is distinguishable and rejected. The spec's
-	// requestBody is a required object; null is malformed-request-body.
-	var req *startShiftRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if req == nil {
-		writeError(w, r, http.StatusBadRequest, errNullBody)
-		return
-	}
-
-	certs := make([]shared.Certification, len(req.Certifications))
-	for i, c := range req.Certifications {
-		cert, err := shared.NewCertification(c)
-		if err != nil {
-			writeError(w, r, http.StatusBadRequest, err)
-			return
-		}
-		certs[i] = cert
-	}
-
-	shift, err := h.StartAssociateShift.ExecuteAtSite(r.Context(), associateId, certs, shared.NewSiteCode(req.SiteCode))
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	w.Header().Set("Location", "/associates/"+string(shift.AssociateId()))
-	writeJSON(w, http.StatusCreated, map[string]any{
-		"associateId": string(shift.AssociateId()),
-	})
-}
-
-func (h *Handler) certify(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	var req certifyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	certification, err := shared.NewCertification(req.Certification)
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	if err := h.CertifyAssociate.Execute(r.Context(), associateId, certification); err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) proposePathPlan(w http.ResponseWriter, r *http.Request) {
-	pathId, err := shared.NewPathId(chi.URLParam(r, "pathId"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.validatePathId(pathId); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	var req proposePathPlanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	siteKey, err := shared.ResolveSiteKey(req.SiteCode, req.BuildingId)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	// An omitted charge is a client mistake (explicit 0 is legitimate) —
-	// without this nil-check the omitted field was silently coerced to a
-	// 0 charge and the proposal accepted.
-	if req.Charge == nil {
-		writeError(w, r, http.StatusBadRequest, errMissingCharge)
-		return
-	}
-
-	heads, resolvedRate, rateSource, trimReason, err := h.ProposePathPlan.Execute(r.Context(), siteKey, pathId, *req.Charge, req.PlannedRate)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	writeJSON(w, http.StatusOK, proposePathPlanResponse{
-		PathId:        string(pathId),
-		ProposedHeads: heads,
-		ResolvedRate:  resolvedRate,
-		RateSource:    rateSource,
-		TrimReason:    trimReason,
-	})
-}
-
-func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
-	var req commitShiftPlanRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	siteKey, err := shared.ResolveSiteKey(req.SiteCode, req.BuildingId)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	if req.ShiftId == "" {
-		writeError(w, r, http.StatusBadRequest, errMissingShiftId)
-		return
-	}
-
-	lines := make([]shiftplan.PathPlan, len(req.Lines))
-	installed := make(map[shared.PathId]int, len(req.Lines))
-	for i, l := range req.Lines {
-		pathId, err := shared.NewPathId(l.PathId)
-		if err != nil {
-			writeError(w, r, http.StatusBadRequest, err)
-			return
-		}
-		if err := h.validatePathId(pathId); err != nil {
-			writeError(w, r, http.StatusBadRequest, err)
-			return
-		}
-		lines[i] = shiftplan.PathPlan{
-			PathId:       pathId,
-			PlannedHeads: l.PlannedHeads,
-			PlannedRate:  l.PlannedRate,
-			PlannedHours: l.PlannedHours,
-		}
-		installed[pathId] = l.InstalledStations
-	}
-
-	sp, err := h.CommitShiftPlan.Execute(r.Context(), siteKey, req.ShiftId, lines, installed)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-
-	respLines := make([]pathPlanLineResp, 0, len(sp.Lines()))
-	for _, l := range sp.Lines() {
-		respLines = append(respLines, pathPlanLineResp{
-			PathId:       string(l.PathId),
-			PlannedHeads: l.PlannedHeads,
-			PlannedRate:  l.PlannedRate,
-			PlannedHours: l.PlannedHours,
-		})
-	}
-	w.Header().Set("Location", fmt.Sprintf("/shift-plans/%s/%s", sp.SiteCode(), sp.ShiftId()))
-	writeJSON(w, http.StatusCreated, shiftPlanResponse{
-		SiteCode:   sp.SiteCode(),
-		BuildingId: sp.BuildingId(),
-		ShiftId:    sp.ShiftId(),
-		Lines:      respLines,
-	})
-}
-
-func (h *Handler) assignLabor(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	var req assignLaborRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	pathId, err := shared.NewPathId(req.PathId)
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.validatePathId(pathId); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-
-	la, err := h.AssignLabor.Execute(r.Context(), associateId, pathId)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-
-	activePathId, active := la.ActivePathId()
-	w.Header().Set("Location", "/associates/"+string(associateId)+"/assignments")
-	writeJSON(w, http.StatusCreated, assignmentResponse{
-		AssociateId:  string(la.AssociateId()),
-		ActivePathId: string(activePathId),
-		Active:       active,
-	})
-}
-
-func (h *Handler) startBreak(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.StartBreak.Execute(r.Context(), associateId); err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) endBreak(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.EndBreak.Execute(r.Context(), associateId); err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// staffingGap answers GET /paths/{pathId}/staffing-gap?siteCode=&shiftId=[&buildingId=].
-// ShiftPlan is keyed by site+shift, so this context requires those as query
-// parameters alongside the path in the URL. siteCode is the canonical name:
-// plan lookup key AND associate scope (ADR 0034/0035). buildingId is the
-// deprecated alias of the plan lookup ONLY: a call that gives just buildingId
-// is not scoped (fleet-wide count, behaviour identical to before). One of the
-// two is required.
-func (h *Handler) staffingGap(w http.ResponseWriter, r *http.Request) {
-	pathId, err := shared.NewPathId(chi.URLParam(r, "pathId"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.validatePathId(pathId); err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	planKey, scope, err := shared.ResolveGapLookup(r.URL.Query().Get("siteCode"), r.URL.Query().Get("buildingId"))
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	shiftId := r.URL.Query().Get("shiftId")
-	if shiftId == "" {
-		writeError(w, r, http.StatusBadRequest, errMissingShiftId)
-		return
-	}
-
-	gap, err := h.GetStaffingGap.ExecuteForSite(r.Context(), planKey, shiftId, pathId, scope)
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	writeJSON(w, http.StatusOK, toStaffingGapResponse(gap))
-}
-
-// deprecatedRoute marks a route's every response `Deprecation: true` (the
-// IETF Deprecation header, RFC 9745) -- including its error responses -- so a
-// client of the legacy buildings route learns about the canonical sites route.
-func deprecatedRoute(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Deprecation", "true")
-		next.ServeHTTP(w, r)
-	})
-}
-
-// staffingGapForSiteShift answers the canonical
-// GET /sites/{siteCode}/shifts/{shiftId}/staffing-gap (ADR 0035): the same
-// fleet-wide "all paths, one site/shift" list as staffingGapForShift, with
-// the path siteCode as both the plan lookup key and the associate scope.
-// There is no second name on this route, so nothing can conflict; the path
-// siteCode is the resource identity, used exactly as given (ParsePathSiteKey).
-func (h *Handler) staffingGapForSiteShift(w http.ResponseWriter, r *http.Request) {
-	siteCode, err := shared.ParsePathSiteKey(chi.URLParam(r, "siteCode"))
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	shiftId := chi.URLParam(r, "shiftId")
-
-	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), siteCode, shiftId, shared.NewSiteCode(siteCode))
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	writeJSON(w, http.StatusOK, toStaffingGapResponses(gaps))
-}
-
-// staffingGapForShift answers the DEPRECATED
-// GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap (the canonical
-// route is /sites/{siteCode}/shifts/{shiftId}/staffing-gap, ADR 0035) --
-// the fleet-wide "all paths, one building/shift" list ADR-0011 flagged
-// as a deferred fast-follow ("the shipped screen exposes a real gap in
-// this context's own read-model surface (no list-by-building/shift
-// endpoint)"). It answers the staffing gap for EVERY path planned in the
-// committed shift plan, reusing the exact same per-path computation as
-// the single-path lookup above (GetStaffingGap.ExecuteAll). buildingId is the
-// plan key only: the list is unscoped unless the optional siteCode query
-// parameter is given (ADR 0034).
-//
-// buildingId/shiftId are chi PATH parameters here (unlike the single-path
-// lookup's query parameters above): chi never matches a {param} route
-// segment against an empty string, so there is no empty-value case to
-// validate for either -- a malformed request simply 404s before reaching
-// this handler at all.
-func (h *Handler) staffingGapForShift(w http.ResponseWriter, r *http.Request) {
-	buildingId := chi.URLParam(r, "buildingId")
-	shiftId := chi.URLParam(r, "shiftId")
-
-	gaps, err := h.GetStaffingGap.ExecuteAllForSite(r.Context(), buildingId, shiftId, shared.NewSiteCode(r.URL.Query().Get("siteCode")))
-	if err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	writeJSON(w, http.StatusOK, toStaffingGapResponses(gaps))
-}
-
-func (h *Handler) endShift(w http.ResponseWriter, r *http.Request) {
-	associateId, err := shared.NewAssociateId(chi.URLParam(r, "id"))
-	if err != nil {
-		writeError(w, r, http.StatusBadRequest, err)
-		return
-	}
-	if err := h.EndAssociateShift.Execute(r.Context(), associateId); err != nil {
-		writeError(w, r, statusFor(err), err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]string{statusKey: "ok"})
 }
 
 // corsMiddleware allows the warehouse-console browser SPA (and this
