@@ -1055,18 +1055,21 @@ components:
         (24h by default) — and a NEW key for each new logical request.
         Reusing a key with a different request (method, path or body) is
         rejected with 409 idempotency-key-reused. A key that is not 1-128
-        printable ASCII characters is a 400 idempotency-key-invalid. (The HTTP
-        stack strips leading/trailing spaces and tabs from the wire value
-        before the service sees it — and no HTTP client can transmit edge
-        whitespace in a header value at all — so the pattern states the
-        post-strip value: it starts and ends with a visible character.) Every
+        printable ASCII characters that start and end with a visible
+        character is a 400 idempotency-key-invalid. The pattern describes the
+        header as sent on the wire (ADR-0042): the key itself (1-128
+        characters, visible first and last character), optionally followed
+        by spaces or tabs. That trailing whitespace is HTTP optional
+        whitespace (RFC 9112 field-line grammar): the HTTP stack drops it
+        before the service reads the value (RFC 9110 section 5.5), so it is
+        never part of the key. Leading whitespace is not in the pattern
+        because HTTP clients do not send it. Every
         POST of this service takes the key; the key is global (looked up by
         key alone), so one key must never be reused across routes.
       schema:
         type: string
         minLength: 1
-        maxLength: 128
-        pattern: '^[!-~]([ -~]*[!-~])?$'
+        pattern: '^[!-~]([ -~]{0,126}[!-~])?[ \t]*$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
 
   headers:
@@ -1094,7 +1097,8 @@ components:
         parameter other than limit, cursor and, on the deprecated route,
         siteCode). On every POST a missing Idempotency-Key
         header is also a 400 (idempotency-key-required) and a malformed one
-        (not 1-128 printable ASCII) a 400 (idempotency-key-invalid).
+        (not 1-128 printable ASCII starting and ending with a visible
+        character) a 400 (idempotency-key-invalid).
       content:
         application/problem+json:
           schema:
