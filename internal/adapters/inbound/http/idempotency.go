@@ -24,18 +24,34 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 // never on a first execution (fleet REST guideline 2.3/2.4).
 const IdempotencyReplayedHeader = "Idempotency-Replayed"
 
-// validIdempotencyKey reports whether key is 1-128 printable ASCII characters.
+// maxIdempotencyKeyLength is the IdempotencyKey field value's upper bound in
+// apis/openapi.yaml.
+const maxIdempotencyKeyLength = 128
+
+// validIdempotencyKey reports whether key matches the IdempotencyKey field
+// value in apis/openapi.yaml (ADR 0042): 1-128 printable ASCII characters
+// (0x20-0x7E) whose first and last character are visible (0x21-0x7E), the
+// schema's `^[!-~]([ -~]*[!-~])?$`. Over HTTP/1.1 the edge rule is already
+// guaranteed by the stack, which strips OWS before this runs; checking it
+// here keeps the middleware exact for any caller that hands it an unstripped
+// value.
 func validIdempotencyKey(key string) bool {
-	if len(key) < 1 || len(key) > 128 {
+	if key == "" || len(key) > maxIdempotencyKeyLength {
+		return false
+	}
+	if !visibleASCII(key[0]) || !visibleASCII(key[len(key)-1]) {
 		return false
 	}
 	for i := 0; i < len(key); i++ {
-		if key[i] < 0x20 || key[i] > 0x7e {
+		if key[i] < ' ' || key[i] > '~' {
 			return false
 		}
 	}
 	return true
 }
+
+// visibleASCII reports whether b is a visible (non-space) printable ASCII byte.
+func visibleASCII(b byte) bool { return b > ' ' && b <= '~' }
 
 // RequireIdempotencyKey is route-scoped (chi's r.With(...)) transactional
 // idempotency-key middleware wrapping EVERY POST route (see router.go;
@@ -93,7 +109,7 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			if !validIdempotencyKey(key) {
 				writeProblem(w, http.StatusBadRequest,
 					problemCategory{"idempotency-key-invalid", "Idempotency-Key header is invalid"},
-					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters.",
+					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters that start and end with a visible character.",
 					r.URL.Path)
 				return
 			}
