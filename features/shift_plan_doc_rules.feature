@@ -92,6 +92,18 @@ Feature: A shift plan is committed as one atomic, verified decision
     And fulfillment-execution was asked about capability "pick" 1 time
 
   @bdd
+  Scenario Outline: A path needing two capabilities is held to the smaller station count
+    Given fulfillment-execution has 6 stations registered with capability "pack"
+    And fulfillment-execution has 3 stations registered with capability "slam"
+    When a POST request is sent to "/shift-plans" with the body {"siteCode": "WH1", "shiftId": "shift-1", "lines": [{"pathId": "COMBO", "plannedHeads": <heads>, "plannedRate": 30, "plannedHours": 8, "installedStations": 10}]}
+    Then the response status is <status>
+
+    Examples:
+      | heads | status |
+      | 3     | 201    |
+      | 4     | 409    |
+
+  @bdd
   Scenario: A capability with no registered station is a live ceiling of zero
     Given fulfillment-execution has 3 stations registered with capability "pick"
     When a POST request is sent to "/shift-plans" with the body {"siteCode": "WH1", "shiftId": "shift-1", "lines": [{"pathId": "REBIN", "plannedHeads": 1, "plannedRate": 30, "plannedHours": 8, "installedStations": 5}]}

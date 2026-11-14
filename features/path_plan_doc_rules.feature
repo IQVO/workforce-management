@@ -33,6 +33,7 @@ Feature: Proposed heads come from the documented rate and trim policies
     And the response field "rateSource" is "measured"
     And the response field "resolvedRate" is the number <rate>
     And the response field "proposedHeads" is the number <heads>
+    And the last ShiftPlanProposed event is for site "WH1" path "pack" with <heads> heads at rate <rate>
 
     Examples:
       | seconds | rate | heads |
@@ -61,6 +62,13 @@ Feature: Proposed heads come from the documented rate and trim policies
     And the response field "resolvedRate" is the number 20
     And the response field "proposedHeads" is the number 5
     And labor-performance was consulted 0 times
+
+  @bdd
+  Scenario: The measured rate is the one measured for the path being proposed
+    Given labor-performance reports a mean of 120 seconds per task for path "pack"
+    When a POST request is sent to "/paths/pick/plan-proposals" with the body {"siteCode": "WH1", "charge": 100}
+    Then the response field "rateSource" is "caller"
+    And the response field "proposedHeads" is the number 0
 
   @bdd
   Scenario: When no measured rate is available the proposal fails open to zero heads
@@ -106,6 +114,7 @@ Feature: Proposed heads come from the documented rate and trim policies
       | 0.5   | 5     |
       | 0.75  | 3     |
       | 0.95  | 1     |
+      | 1     | 1     |
 
   @bdd
   Scenario: With no idle observation yet the proposal is not trimmed

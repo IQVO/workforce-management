@@ -71,6 +71,10 @@ func fleetCatalogue() *pathcatalog.Catalogue {
 		{Id: "PACK", MatchPrefix: "pack", RequiredCapabilities: []string{"pack"}},
 		{Id: "REBIN", MatchPrefix: "rebin", RequiredCapabilities: []string{"rebin"}},
 		{Id: "SLAM", MatchPrefix: "slam", RequiredCapabilities: []string{"slam"}},
+		// COMBO is a BDD-only path that needs two capabilities, so the
+		// "smallest station count among the required capabilities" rule of
+		// ADR 0014 can be exercised (every real fleet path declares one).
+		{Id: "COMBO", MatchPrefix: "combo", RequiredCapabilities: []string{"pack", "slam"}},
 	})
 }
 

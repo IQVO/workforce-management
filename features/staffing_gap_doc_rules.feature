@@ -233,14 +233,16 @@ Feature: The staffing gap is a flag raised from the plan and the live assignment
       | 1&limit=2 |
 
   @bdd
-  Scenario Outline: A cursor that is undecodable or repeated is rejected
+  Scenario Outline: A cursor that is undecodable, names no row or is repeated is rejected
     When a GET request is sent to "/sites/WH1/shifts/shift-1/staffing-gap?<query>"
     Then the request is rejected with status 400 and problem type "invalid-cursor"
 
     Examples:
-      | query                |
-      | cursor=not-a-cursor  |
-      | cursor=a&cursor=b    |
+      | query                                                                           |
+      | cursor=not-a-cursor                                                             |
+      | cursor=a&cursor=b                                                               |
+      | cursor=eyJzIjoicGFjayJ9                                                         |
+      | cursor=eyJzIjoicGFjayIsImkiOiJwYWNrIn0&cursor=eyJzIjoicGFjayIsImkiOiJwYWNrIn0 |
 
   @bdd
   Scenario Outline: A query parameter the collection does not declare is rejected

@@ -50,9 +50,11 @@ func (p *capacityProbe) asked(capability shared.Capability) int {
 	return p.calls[capability]
 }
 
-// measuredRateFake is labor-performance's mean-seconds-per-task feed: either a
-// fixed answer or ErrMeasuredRateUnavailable, counting how often it was asked.
+// measuredRateFake is labor-performance's mean-seconds-per-task feed for ONE
+// path (every other path has no measurement yet): either a fixed answer or
+// ErrMeasuredRateUnavailable, counting how often it was asked.
 type measuredRateFake struct {
+	path        shared.PathId
 	seconds     float64
 	unavailable bool
 
@@ -60,11 +62,11 @@ type measuredRateFake struct {
 	calls int
 }
 
-func (m *measuredRateFake) MeanActualSeconds(_ context.Context, _ shared.PathId) (float64, error) {
+func (m *measuredRateFake) MeanActualSeconds(_ context.Context, pathId shared.PathId) (float64, error) {
 	m.mu.Lock()
 	m.calls++
 	m.mu.Unlock()
-	if m.unavailable {
+	if m.unavailable || pathId != m.path {
 		return 0, ports.ErrMeasuredRateUnavailable
 	}
 	return m.seconds, nil
@@ -90,8 +92,8 @@ func (w *world) clockAdvancesByHours(hours float64) error {
 	return nil
 }
 
-func (w *world) laborPerformanceReportsMean(seconds float64, _ string) error {
-	w.measured = &measuredRateFake{seconds: seconds}
+func (w *world) laborPerformanceReportsMean(seconds float64, path string) error {
+	w.measured = &measuredRateFake{path: shared.PathId(path), seconds: seconds}
 	w.rebuild()
 	return nil
 }
