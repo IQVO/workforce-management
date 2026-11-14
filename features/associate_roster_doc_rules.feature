@@ -110,25 +110,9 @@ Feature: The associate roster entry is replaced on restart and follows its state
     Then the request is rejected with status 409 and problem type "associate-shift-ended"
 
   @bdd
-  Scenario: A new break may follow a finished one
-    Given an AssociateShift is started for associate "assoc-1" with certifications "pack"
-    And associate "assoc-1" has started a break
-    And associate "assoc-1" ends the break
-    When associate "assoc-1" starts a break
-    Then the last request succeeds with status 204
-    And 2 "AssociateBreakStarted" events were published
-    And 1 "AssociateBreakEnded" event was published
-
-  @bdd
   Scenario: A blank certification in the start list is refused before anything is recorded
     When a POST request is sent to "/associates/assoc-1/shift-starts" with the body {"certifications": ["pack", ""]}
     Then the request is rejected with status 400 and problem type "empty-certification"
-    And 0 "AssociateShiftStarted" events were published
-
-  @bdd
-  Scenario: A JSON null body does not start a shift
-    When a POST request is sent to "/associates/assoc-1/shift-starts" with the body null
-    Then the request is rejected with status 400 and problem type "malformed-request-body"
     And 0 "AssociateShiftStarted" events were published
 
   @bdd

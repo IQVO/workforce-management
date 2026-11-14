@@ -168,16 +168,11 @@ Feature: Assigning labor follows the documented invariants in order
     And 0 "LaborReassigned" events were published
 
   @bdd
-  Scenario: A first assignment names the associate and the path as asked
-    Given an AssociateShift is started for associate "assoc-1" with certifications "pick"
-    When associate "assoc-1" is assigned to path "PICK"
-    Then the last LaborAssigned event placed associate "assoc-1" on path "PICK"
-
-  @bdd
-  Scenario: Each move names the path it leaves and the path it joins
+  Scenario: Assignment events name the associate and the paths they concern
     Given an AssociateShift is started for associate "assoc-1" with certifications "pick,pack,rebin"
-    And associate "assoc-1" is assigned to path "pick"
-    And associate "assoc-1" is assigned to path "pack"
+    And associate "assoc-1" is assigned to path "PICK"
+    Then the last LaborAssigned event placed associate "assoc-1" on path "PICK"
+    When associate "assoc-1" is assigned to path "pack"
     And associate "assoc-1" is assigned to path "rebin"
     Then 1 "LaborAssigned" event was published
     And 2 "LaborReassigned" events were published
