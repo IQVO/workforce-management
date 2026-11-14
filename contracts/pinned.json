@@ -1,0 +1,23 @@
+{
+  "_doc": "Every contract copy this repo pins from a producer, and the producer branch it must equal. scripts/harness/pinned_contract_gate.py fails when a copy differs from the producer's develop. Refresh = copy the file, never edit it. The third entry pins THIS repo's own reports spec for the cmd/mcp -> cmd/workforce-reports edge (self-pin: producer and consumer live in the same module, so the pin guards against editing apis/openapi-reports.yaml without updating the MCP reports client).",
+  "pins": [
+    {
+      "local": "internal/adapters/outbound/fulfillmentexecution/testdata/fulfillment-execution.openapi.yaml",
+      "repo": "IQVO/fulfillment-execution",
+      "path": "apis/openapi.yaml",
+      "ref": "develop"
+    },
+    {
+      "local": "internal/adapters/outbound/laborperformance/testdata/labor-performance.openapi.yaml",
+      "repo": "IQVO/labor-performance",
+      "path": "apis/openapi.yaml",
+      "ref": "develop"
+    },
+    {
+      "local": "internal/adapters/inbound/mcp/testdata/workforce-management.openapi-reports.yaml",
+      "repo": "IQVO/workforce-management",
+      "path": "apis/openapi-reports.yaml",
+      "ref": "develop"
+    }
+  ]
+}
