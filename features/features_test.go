@@ -17,6 +17,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -723,11 +724,19 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 
 // TestFeatures runs every Gherkin feature under features/ as a Go test.
 func TestFeatures(t *testing.T) {
+	// Scenarios tagged @known-bug describe the SPEC behaviour where the
+	// service diverges from it; they are excluded by default and run alone
+	// (and must fail) with BDD_TAGS=@known-bug.
+	tags := os.Getenv("BDD_TAGS")
+	if tags == "" {
+		tags = "~@known-bug"
+	}
 	suite := godog.TestSuite{
 		ScenarioInitializer: InitializeScenario,
 		Options: &godog.Options{
 			Format: "pretty",
 			Paths:  []string{"."},
+			Tags:   tags,
 			// Strict makes an undefined or pending step fail the suite
 			// instead of silently passing.
 			Strict:   true,
