@@ -54,7 +54,7 @@ make check-all    # check + coverage gate (90%) + arch-test + bdd — before pus
 make vuln         # govulncheck — run after touching go.mod/go.sum
 
 docker compose up -d && go run ./cmd/workforce   # :8080, applies migrations on boot
-# needs DATABASE_URL and PATH_CATALOGUE_FILE=./process-paths.yaml (see README.md env table)
+# needs DATABASE_URL and KAFKA_BROKERS (the process-path catalogue is replayed from Kafka; PATH_CATALOGUE_FILE is gone, see README.md env table)
 ```
 
 `make help` lists every target; each mirrors a `.github/workflows/ci.yml` job.
