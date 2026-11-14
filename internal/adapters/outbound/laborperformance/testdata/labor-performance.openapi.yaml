@@ -1,0 +1,685 @@
+openapi: 3.0.3
+info:
+  title: Labor Performance API
+  description: >
+    Engineered labor standards (expected time per TaskType) and
+    actual-vs-standard performance scoring for completed fulfillment-execution
+    tasks. This service defines standards and reads performance/scorecards; it
+    NEVER accepts a TaskPerformance write over REST — that is exclusively
+    driven by the inbound Kafka consumer of fulfillment-execution's
+    TaskCompleted event (see apis/asyncapi.yaml).
+  version: "1.0.0"
+  license:
+    name: MIT
+  contact:
+    name: Labor Performance Team
+    url: https://github.com/IQVO/labor-performance
+servers:
+  - url: http://localhost:8080
+    description: Local development
+tags:
+  - name: standards
+    description: Engineered labor standards (TaskType -> expected duration)
+  - name: performance
+    description: Actual-vs-standard performance read models
+  - name: utilization
+    description: Idle-gap / utilization read models (idleness ADR)
+  - name: health
+    description: Liveness probe
+paths:
+  /healthz:
+    get:
+      tags: [health]
+      operationId: getHealthz
+      summary: Liveness probe
+      description: Reports whether the service process is up and able to serve requests.
+      responses:
+        "200":
+          description: Service is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ok
+  /readyz:
+    get:
+      tags: [health]
+      operationId: getReadyz
+      summary: Readiness probe
+      description: >-
+        Distinct from liveness (GET /healthz). Ready means: the service is
+        not draining AND Postgres answers a ping AND a Kafka broker
+        answers a metadata request (reachability only; topics are never
+        required). The dependency verdict is cached for a few seconds.
+        Readiness flips to not-ready as the FIRST step of a graceful
+        shutdown drain (503 with a status body), so a Kubernetes
+        readinessProbe stops routing new traffic while in-flight requests
+        finish. Liveness never flips.
+      responses:
+        "200":
+          description: The service is ready to receive traffic
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: ready
+        "503":
+          description: >-
+            Not ready, in one of two shapes. While the service is draining
+            (shutdown in progress) the body is `{"status":"not_ready"}` with
+            `Content-Type: application/json`. When Postgres or Kafka is not
+            reachable the body is an RFC 7807 problem
+            (`application/problem+json`, type `dependency-unavailable`, the
+            detail names the failing dependencies).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    enum: [not_ready]
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+
+  /standards:
+    post:
+      tags: [standards]
+      operationId: defineStandard
+      summary: Define (or revise) the engineered labor standard for a TaskType
+      description: >
+        If a standard is already active for this TaskType, it is closed
+        (its effective range ends now) and a new one starts — append-only
+        history, never an in-place overwrite.
+
+
+        A standard may optionally be declared for one handling unit
+        (`handlingUnit`: EACH, CASE or PALLET), so a case handle has its own
+        expected time distinct from an each pick. At most one standard is
+        open per (taskType, handlingUnit): defining a CASE standard never
+        closes the task-type-only one, and revising it closes only the prior
+        CASE standard. A CASE standard may also declare a heavy-case
+        `teamLift` (ADR 0035).
+
+
+        Idempotent retries: clients MUST always send an `Idempotency-Key`
+        header (1-128 printable ASCII characters, a client-generated UUID
+        per logical submit); a retried request with the same key, method,
+        path and body replays the original response byte-for-byte, with the
+        response header `Idempotency-Replayed: true`, instead of defining
+        the standard a second time. The same key with a different method,
+        path or body is 409 `idempotency-key-reused`.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DefineStandardRequest"
+            examples:
+              taskTypeOnly:
+                summary: The task-type-only standard (unchanged behaviour)
+                value:
+                  taskType: PICK
+                  expectedSeconds: 45
+              casePick:
+                summary: A CASE pick standard, distinct from an each pick
+                value:
+                  taskType: PICK
+                  handlingUnit: CASE
+                  expectedSeconds: 30
+              heavyCaseTeamLift:
+                summary: A CASE standard with a declared heavy-case team lift
+                value:
+                  taskType: PICK
+                  handlingUnit: CASE
+                  expectedSeconds: 30
+                  teamLift:
+                    thresholdG: 18000
+                    expectedSeconds: 75
+      responses:
+        "201":
+          description: Standard defined (or the revision recorded)
+          headers:
+            Idempotency-Replayed:
+              $ref: "#/components/headers/IdempotencyReplayed"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Standard"
+        "400":
+          description: >
+            Unknown task type (including an absent or empty `taskType`),
+            unknown handling unit (not EACH, CASE or PALLET), a body that is
+            not valid JSON or contains a NUL character
+            (malformed-request-body), a missing Idempotency-Key header
+            (idempotency-key-required), or an Idempotency-Key that is not
+            1-128 printable ASCII characters (idempotency-key-invalid).
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "409":
+          description: >
+            The Idempotency-Key was already used with a different method,
+            path or body (idempotency-key-reused), the write lost a
+            concurrency race: another writer modified the same labor
+            standard after this request's snapshot
+            (concurrent-modification), or another standard is already open
+            for this task type and handling unit (standard-conflict).
+            Re-fetch and retry; never retry an idempotency-key-reused with
+            the same key.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "422":
+          description: >-
+            Expected seconds must be greater than zero, travelComponentSeconds
+            is negative or exceeds expectedSeconds, or a teamLift is declared
+            on a standard whose handlingUnit is not CASE
+            (team-lift-requires-case-unit) or with a non-positive thresholdG
+            or expectedSeconds.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /standards/{taskType}:
+    get:
+      tags: [standards]
+      operationId: getStandard
+      summary: Get the currently-active labor standard for a TaskType
+      description: >
+        Returns the LaborStandard whose effective range currently covers
+        "now" for this TaskType (EffectiveTo is null), or a 404 if none
+        does.
+
+
+        Without `handlingUnit` the answer is the task-type-only standard,
+        exactly as before. With `handlingUnit` the answer is the standard
+        that APPLIES to that handle: the standard declared for exactly
+        (taskType, handlingUnit) when one is active, otherwise the
+        task-type-only standard (most specific wins, ADR 0035). The
+        returned body's own `handlingUnit` says which of the two answered
+        (absent = the task-type-only one).
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+        - $ref: "#/components/parameters/HandlingUnitQueryParam"
+      responses:
+        "200":
+          description: The currently-active (resolved) standard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Standard"
+              examples:
+                caseStandard:
+                  summary: ?handlingUnit=CASE with a CASE standard and a team lift
+                  value:
+                    taskType: PICK
+                    handlingUnit: CASE
+                    expectedSeconds: 30
+                    teamLift:
+                      thresholdG: 18000
+                      expectedSeconds: 75
+                      operators: 2
+                    effectiveFrom: "2026-10-24T08:00:00Z"
+                fallsBack:
+                  summary: ?handlingUnit=EACH with no EACH standard falls back
+                  value:
+                    taskType: PICK
+                    expectedSeconds: 45
+                    effectiveFrom: "2026-10-24T08:00:00Z"
+        "400":
+          description: Unknown task type or unknown handling unit
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "404":
+          description: No active standard for this task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /associates/{associateId}/scorecard:
+    get:
+      tags: [performance]
+      operationId: getAssociateScorecard
+      summary: Get one associate's performance scorecard
+      description: >
+        404 only when this service has never recorded a single
+        TaskPerformance row for this associate. An associate with 1+ rows
+        but an all-nil efficiency still returns 200 with
+        meanEfficiencyPct: null.
+      parameters:
+        - name: associateId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The associate's scorecard
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Scorecard"
+        "404":
+          description: No task performance recorded for this associate
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /task-types/{taskType}/performance:
+    get:
+      tags: [performance]
+      operationId: getTaskTypePerformance
+      summary: Get fleet-wide (all-associates) performance for a TaskType
+      description: >
+        Always returns 200, including a zero-count result for a TaskType
+        this service has never recorded — there is no "not found" case for
+        a closed, known enum.
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+      responses:
+        "200":
+          description: The fleet-wide task-type performance read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TaskTypePerformance"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /task-types/{taskType}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getTaskTypeUtilization
+      summary: Get fleet-wide idle-gap / utilization for a TaskType over a trailing window
+      description: >
+        Measured task time vs. measured idle time (between-task waits
+        that already ended) for one TaskType. The still-running open gap
+        of someone idle right now is NOT included at this scope:
+        openGapSeconds is always 0 here, and the open gap is computed
+        per associate only (see /associates/{associateId}/utilization).
+        Always returns 200, including a zero-count result for a TaskType
+        this service has never observed.
+      parameters:
+        - $ref: "#/components/parameters/TaskTypePathParam"
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The task-type utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
+        "400":
+          description: Unknown task type
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/ProblemDetails"
+        "500":
+          $ref: "#/components/responses/InternalError"
+  /associates/{associateId}/utilization:
+    get:
+      tags: [utilization]
+      operationId: getAssociateUtilization
+      summary: Get one associate's idle-gap / utilization over a trailing window
+      description: >
+        Measured task time vs. measured idle time for one associate,
+        plus the still-running open-gap contribution when that associate
+        is idle right now. Always returns 200, including a zero-count
+        result for an associate this service has never observed.
+      parameters:
+        - name: associateId
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/WindowQueryParam"
+      responses:
+        "200":
+          description: The associate utilization read model
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Utilization"
+        "500":
+          $ref: "#/components/responses/InternalError"
+components:
+  responses:
+    InternalError:
+      description: >-
+        Unexpected server error (problem type `internal-error`). Also the
+        answer when an infrastructure failure aborts the request; a 5xx on
+        POST /standards is never stored against its Idempotency-Key, so the
+        same key can be retried.
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/ProblemDetails"
+  parameters:
+    TaskTypePathParam:
+      name: taskType
+      in: path
+      required: true
+      schema:
+        $ref: "#/components/schemas/TaskType"
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: >
+        A client-generated unique key per logical submit (a UUID; 1-128
+        printable ASCII characters). Clients must always send it on POST
+        /standards: a retry carrying the same key, method, path and an
+        identical body replays the original stored response (with the
+        response header `Idempotency-Replayed: true`) instead of
+        re-executing the create; the same key with a different method, path
+        or body is rejected with 409 idempotency-key-reused, a missing key
+        is a 400 idempotency-key-required and a malformed one a 400
+        idempotency-key-invalid. Postgres is the only runtime, so the check
+        is on in every deployment.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+        pattern: "^[ -~]+$"
+        example: 3f9c1e52-7d1a-4b0e-9a55-2c6f4e8a1b07
+    HandlingUnitQueryParam:
+      name: handlingUnit
+      in: query
+      required: false
+      description: >
+        EACH, CASE or PALLET. Resolves the standard that applies to this
+        handling unit (the unit's own standard, else the task-type-only
+        one). Absent or empty means the task-type-only standard.
+      schema:
+        $ref: "#/components/schemas/HandlingUnit"
+    WindowQueryParam:
+      name: window
+      in: query
+      required: false
+      description: >
+        A Go duration string (e.g. "1h", "30m") for the trailing window
+        to measure over. Defaults to 1 hour when omitted, malformed or
+        not positive (never a 400).
+      schema:
+        type: string
+        example: "1h"
+  headers:
+    IdempotencyReplayed:
+      description: >-
+        Set to `true` on a replay of a stored answer (a retry carrying the
+        same Idempotency-Key, method, path and body), and only on a replay:
+        the first execution of a key never carries it.
+      schema:
+        type: string
+        enum: ["true"]
+  schemas:
+    TaskType:
+      type: string
+      enum: [PICK, PACK, SLAM]
+      description: Mirrors fulfillment-execution's task.Type enum exactly.
+    HandlingUnit:
+      type: string
+      enum: [EACH, CASE, PALLET]
+      description: >-
+        The packaging level a standard is declared for, and that a completed
+        task handled (ADR 0035). INNER is deliberately absent: no flow
+        implements it in v1.
+    TeamLiftRequest:
+      type: object
+      required: [thresholdG, expectedSeconds]
+      description: >-
+        The declared heavy-case rule of a CASE standard: a case heavier than
+        thresholdG grams needs two operators and is scored against
+        expectedSeconds instead of the standard's own. Declarative input;
+        this service never looks a case weight up from a sibling context.
+      properties:
+        thresholdG:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Weight in grams ABOVE which a case needs a team lift
+            (a case weighing exactly thresholdG is still a one-operator lift).
+          example: 18000
+        expectedSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Engineered elapsed seconds of a team lift.
+          example: 75
+    TeamLift:
+      allOf:
+        - $ref: "#/components/schemas/TeamLiftRequest"
+        - type: object
+          required: [operators]
+          properties:
+            operators:
+              type: integer
+              enum: [2]
+              description: Operators a team lift needs (constant).
+    DefineStandardRequest:
+      type: object
+      required: [taskType, expectedSeconds]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        handlingUnit:
+          $ref: "#/components/schemas/HandlingUnit"
+        expectedSeconds:
+          type: integer
+          format: int64
+          minimum: 1
+          example: 45
+        travelComponentSeconds:
+          type: integer
+          format: int64
+          minimum: 0
+          nullable: true
+          description: >-
+            Optional; omitted or null means not broken out. When present,
+            must be between 0 and expectedSeconds inclusive (otherwise 422).
+          example: 15
+        teamLift:
+          $ref: "#/components/schemas/TeamLiftRequest"
+    Standard:
+      type: object
+      required: [taskType, expectedSeconds, effectiveFrom]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        handlingUnit:
+          $ref: "#/components/schemas/HandlingUnit"
+        expectedSeconds:
+          type: integer
+          format: int64
+          example: 45
+        travelComponentSeconds:
+          $ref: "#/components/schemas/TravelComponentSeconds"
+        teamLift:
+          $ref: "#/components/schemas/TeamLift"
+        effectiveFrom:
+          type: string
+          format: date-time
+        effectiveTo:
+          type: string
+          format: date-time
+          description: >-
+            Present only on a superseded (closed) standard; omitted
+            entirely (never null) on the open one.
+    TravelComponentSeconds:
+      type: integer
+      format: int64
+      minimum: 0
+      description: >-
+        Optional declaration of how much of expectedSeconds is
+        attributable to travel between locations for this TaskType. This
+        service never computes it: it is supplied by the caller, grounded
+        in a real distance estimate performed elsewhere (e.g.
+        facility-layout's estimate_travel_distance) since this service
+        has no REST dependency in either direction with any sibling
+        context (ADR 0015). In a response it is omitted entirely (never null
+        or 0) when the standard did not declare one. When present, it is
+        between 0 and expectedSeconds inclusive.
+      example: 15
+    TaskTypeBreakdown:
+      type: object
+      required: [taskCount, meanEfficiencyPct]
+      properties:
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+    Scorecard:
+      type: object
+      required: [associateId, taskCount, meanEfficiencyPct, byTaskType, trend, coachingFlag]
+      properties:
+        associateId:
+          type: string
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+        byTaskType:
+          type: object
+          additionalProperties:
+            $ref: "#/components/schemas/TaskTypeBreakdown"
+        trend:
+          type: string
+          enum: [IMPROVING, DECLINING, STABLE, INSUFFICIENT_DATA]
+          description: >
+            How this associate's most recent scored tasks (up to the
+            last 10) compare to their all-time mean EfficiencyPct.
+            INSUFFICIENT_DATA when fewer than 3 recent tasks were
+            scored -- always present, never omitted, since
+            "not enough data yet" is itself a meaningful signal.
+        coachingFlag:
+          type: boolean
+          description: >
+            True iff this associate's 3 most recent SCORED tasks were
+            all below the coaching floor (85% efficiency). Visibility
+            only -- this service never automates coaching, pay, or
+            task-claim decisions from this signal.
+    TaskTypePerformance:
+      type: object
+      required: [taskType, taskCount, meanEfficiencyPct, meanActualSeconds]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        taskCount:
+          type: integer
+        meanEfficiencyPct:
+          type: number
+          format: double
+          nullable: true
+        meanActualSeconds:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            The real measured mean duration (seconds) for this TaskType,
+            across every recorded row with a positive ActualSeconds --
+            independent of whether an engineered labor standard exists to
+            compare it against. Null iff no measurable row has ever been
+            recorded for this TaskType. Distinct from meanEfficiencyPct,
+            which additionally requires an active standard.
+    ProblemDetails:
+      type: object
+      description: RFC 7807 Problem Details for HTTP APIs.
+      properties:
+        type:
+          type: string
+          format: uri
+          description: >-
+            `https://errors.labor-performance.warehouse-systems.dev/<slug>`.
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        instance:
+          type: string
+          description: The request path (omitted when empty).
+      required: [type, title, status, detail]
+    Utilization:
+      type: object
+      description: >
+        Idle-gap / utilization read model for either one TaskType
+        (fleet-wide) or one associate, over a trailing window. taskType
+        and associateId are mutually exclusive -- whichever endpoint
+        served the request populates its own identifying field and omits
+        the other.
+      required: [associates, windowSeconds, taskSeconds, idleSeconds, openGapSeconds, utilizationPct]
+      properties:
+        taskType:
+          $ref: "#/components/schemas/TaskType"
+        associateId:
+          type: string
+        associates:
+          type: integer
+          description: >
+            The distinct associate count contributing to this result.
+            Always 1 for a per-associate result; for a task-type result,
+            the distinct-associate count over the window (0 for a
+            never-observed task type).
+        windowSeconds:
+          type: integer
+          format: int64
+        taskSeconds:
+          type: integer
+          format: int64
+          description: Summed measured task duration over the window.
+        idleSeconds:
+          type: integer
+          format: int64
+          description: >
+            Summed recorded (closed) idle-gap seconds over the window --
+            never includes openGapSeconds.
+        openGapSeconds:
+          type: integer
+          format: int64
+          description: >
+            The still-running idle time for a subject idle right now:
+            now minus their last known activity, clamped to the window.
+            Computed at READ time, never persisted (see the idleness
+            ADR's "Trailing idleness" limitation). Zero when the subject
+            is not currently idle, and always zero on the task-type
+            endpoint: an open gap belongs to one associate, so it is only
+            reported by the per-associate endpoint.
+        utilizationPct:
+          type: number
+          format: double
+          nullable: true
+          description: >
+            100 * taskSeconds / (taskSeconds + idleSeconds +
+            openGapSeconds). Null when nothing was observed in the
+            window -- never a fabricated number.
