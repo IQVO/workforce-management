@@ -92,7 +92,7 @@ func (r stationRegistry) InstalledCapacity(_ context.Context, capability shared.
 // installedCapacity is the live fulfillment-execution ceiling (nil means
 // unlimitedInstalledCapacity). The process-path catalogue is always the
 // fleet's real one, exactly as cmd/workforce wires it.
-func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient) (*httptest.Server, *harness) {
+func newServer(idleShare ports.IdleShareClient, installedCapacity ports.InstalledCapacityClient, measuredRate ports.MeasuredRateClient) (*httptest.Server, *harness) {
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
 	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
@@ -107,9 +107,9 @@ func newServer(idleShare ports.IdleShareClient, installedCapacity ports.Installe
 	handler := &inboundhttp.Handler{
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: pub, Clock: clock},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: associates, Events: pub, Clock: clock},
-		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock, IdleShare: idleShare},
+		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock, IdleShare: idleShare, MeasuredRate: measuredRate},
 		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: installedCapacity, Catalogue: catalogue, MaxHoursPerShift: maxHoursPerShift},
-		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
+		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift, Catalogue: catalogue},
 		StartBreak:          &usecases.StartBreak{Associates: associates, Events: pub, Clock: clock},
 		EndBreak:            &usecases.EndBreak{Associates: associates, Events: pub, Clock: clock},
 		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: pub, Clock: clock, IdleShare: idleShare},
@@ -118,7 +118,7 @@ func newServer(idleShare ports.IdleShareClient, installedCapacity ports.Installe
 		Readiness:           readiness,
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), "")), &harness{published: pub, readiness: readiness}
+	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), "")), &harness{published: pub, readiness: readiness, clock: clock}
 }
 
 // fixedIdleShareClient is a BDD-suite test double for
@@ -141,10 +141,16 @@ type world struct {
 	// unreachable fulfillment-execution does; reset per scenario.
 	capacityDown bool
 
-	// idleShare and stations configure the next server rebuild; both
-	// are reset per scenario.
+	// idleShare, stations and measured configure the next server rebuild;
+	// all are reset per scenario.
 	idleShare ports.IdleShareClient
 	stations  stationRegistry
+	measured  ports.MeasuredRateClient
+
+	// capabilityDown lists capabilities fulfillment-execution cannot answer
+	// for; probe counts every capacity lookup the service makes.
+	capabilityDown map[shared.Capability]bool
+	probe          *capacityProbe
 
 	lastStatus      int
 	lastContentType string
@@ -155,6 +161,8 @@ type world struct {
 func (w *world) reset() {
 	w.idleShare = nil
 	w.stations = nil
+	w.measured = nil
+	w.capabilityDown = nil
 	w.capacityDown = false
 	w.rebuild()
 	w.lastStatus = 0
@@ -163,17 +171,19 @@ func (w *world) reset() {
 }
 
 // rebuild replaces the server under test with one wired to the world's
-// current idleShare/stations configuration.
+// current idleShare/stations/measured configuration. The capacity client is
+// always wrapped in a probe so scenarios can count the lookups made.
 func (w *world) rebuild() {
 	w.stop()
-	var capacity ports.InstalledCapacityClient
+	var capacity ports.InstalledCapacityClient = unlimitedInstalledCapacity{}
 	if w.stations != nil {
 		capacity = w.stations
 	}
 	if w.capacityDown {
 		capacity = unreachableCapacity{}
 	}
-	w.server, w.h = newServer(w.idleShare, capacity)
+	w.probe = &capacityProbe{inner: capacity, down: w.capabilityDown, calls: map[shared.Capability]int{}}
+	w.server, w.h = newServer(w.idleShare, w.probe, w.measured)
 	w.client = w.server.Client()
 }
 
@@ -708,6 +718,7 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the proposed heads are trimmed to (\d+) with a non-empty trim reason$`, w.proposedHeadsAreTrimmedWithNonEmptyTrimReason)
 
 	registerWave2(sc, w) // features_wave2_test.go
+	registerRules(sc, w) // steps_rules_test.go
 }
 
 // TestFeatures runs every Gherkin feature under features/ as a Go test.

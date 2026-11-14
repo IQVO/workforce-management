@@ -29,6 +29,7 @@ import (
 type harness struct {
 	published *recordingPublisher
 	readiness *inboundhttp.Readiness
+	clock     *fixedClock
 }
 
 // recordingPublisher forwards to the production-shaped log publisher and
