@@ -54,8 +54,8 @@ domain layer knows nothing about HTTP.
 | --- | --- |
 | `400 Bad Request` | Malformed JSON, or a value object that refuses to construct (empty id, empty certification), or a missing required query/body field |
 | `404 Not Found` | `ports.ErrNotFound` — the associate or the committed plan does not exist |
-| `409 Conflict` | A domain invariant refused the operation. The request was well-formed; the domain said no |
-| `422 Unprocessable Entity` | `shared.ErrConflictingSiteAndBuilding` — the request named the ShiftPlan key twice (`siteCode` and the deprecated `buildingId`) with different values — and an Idempotency-Key reused with a different body |
+| `409 Conflict` | A domain invariant refused the operation (the request was well-formed; the domain said no), or an Idempotency-Key reused with a different request (`idempotency-key-reused`) |
+| `422 Unprocessable Entity` | `shared.ErrConflictingSiteAndBuilding` — the request named the ShiftPlan key twice (`siteCode` and the deprecated `buildingId`) with different values. Not raised by the three staffing-gap reads (see below) |
 | `500 Internal Server Error` | Anything unmapped — a repository or publisher failure |
 | `503 Service Unavailable` | `CommitShiftPlan` could not verify installed capacity against `fulfillment-execution` ([ADR 0014](../adr/0014-installed-capacity-ceiling.md)) — retry later |
 
@@ -109,8 +109,18 @@ Base URI: `https://errors.workforce-management.warehouse-systems.dev`
 | --- | --- | --- |
 | `/conflicting-site-and-building` | siteCode and its deprecated alias buildingId have different values | `shared.ErrConflictingSiteAndBuilding` — a request carried both names of the ShiftPlan key with different values ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)) |
 
-The `422 Unprocessable Entity` status is also used by the idempotency middleware
-(`/idempotency-key-reused`, [ADR 0027](../adr/0027-idempotency-key-middleware.md)).
+The `422` rule is applied by the shift-plan commit and the plan-proposal
+surfaces (`ResolveSiteKey`). It is deliberately **not** applied to the three
+staffing-gap reads (`GET /paths/{pathId}/staffing-gap`,
+`GET /buildings/{buildingId}/shifts/{shiftId}/staffing-gap?siteCode=`, MCP
+`get_staffing_gap`): a differing pair is accepted there, `buildingId` being the
+plan key and `siteCode` the scope, for the whole deprecation window
+([ADR 0035](../adr/0035-sitecode-converges-building-id.md), "Decided
+(2026-10-08)"; `shared.ResolveGapLookup`).
+
+The idempotency middleware's `idempotency-key-reused` is a `409`, not a `422`
+([ADR 0027](../adr/0027-idempotency-key-middleware.md),
+[ADR 0040](../adr/0040-adopt-the-fleet-rest-api-guideline.md)).
 
 ### `500` — unmapped
 

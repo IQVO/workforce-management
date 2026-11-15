@@ -71,7 +71,7 @@ The two creation POSTs are wrapped in the transactional `Idempotency-Key`
 middleware ([ADR 0027](../adr/0027-idempotency-key-middleware.md)) whenever
 the service runs on Postgres (every deployment): a missing key is
 `400 idempotency-key-required`, the same key with a different body is
-`422 idempotency-key-reused`, and a retry with the same key and body replays
+`409 idempotency-key-reused`, and a retry with the same key and body replays
 the stored response.
 
 ## Conventions

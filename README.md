@@ -665,6 +665,19 @@ go test ./... -run TestFeatures -v
 | `features/associate_shift_lifecycle.feature` | `EndAssociateShift` — closes the active assignment, ending an ended shift is a no-op, an ended shift cannot be assigned |
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |
 | `features/staffing_gap_read_model.feature` | `GetStaffingGap` — a fully staffed path is not flagged; no committed `ShiftPlan` is rejected |
+| `features/associate_roster.feature`, `features/associate_roster_doc_rules.feature` | the associate roster: starting a shift, certifying, and what a restart replaces (certifications, site, break, hours, an ended shift) |
+| `features/break_rules.feature` | logging breaks |
+| `features/labor_assignment_rules.feature`, `features/assignment_doc_rules.feature` | `AssignLabor` / `EndAssociateShift` — catalogue-family certification gate, invariant order, the `MAX_HOURS_PER_SHIFT` boundary, `LaborAssigned` / `LaborReassigned` payloads |
+| `features/path_plan_proposal_rules.feature`, `features/path_plan_doc_rules.feature` | `ProposePathPlan` — measured rate, idle trim, fail-open, `ShiftPlanProposed` payload |
+| `features/shift_plan_commit_rules.feature`, `features/shift_plan_doc_rules.feature` | `CommitShiftPlan` — all-or-nothing lines, re-commit, live capacity per capability, hours bound, `ShiftPlanCommitted` payload |
+| `features/staffing_gap_views.feature`, `features/staffing_gap_doc_rules.feature` | `GetStaffingGap` — site scope, keyset paging (ADR 0040), idle share, deprecated route |
+| `features/probes.feature` | liveness and readiness |
+
+`features/*.feature` holds 21 files with 154 `Scenario` / `Scenario Outline`
+headings; one is tagged `@known-bug` and excluded by default (`BDD_TAGS`
+defaults to `~@known-bug`), so the default run executes 217 scenarios (Examples
+rows expanded). Per-file counts are in
+[Testing](docs/docs/development/testing.md).
 
 Step definitions and the suite entry point (`TestFeatures`) are in
 [`features/features_test.go`](features/features_test.go) (and
