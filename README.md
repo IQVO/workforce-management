@@ -674,9 +674,9 @@ go test ./... -run TestFeatures -v
 | `features/probes.feature` | liveness and readiness |
 
 `features/*.feature` holds 21 files with 154 `Scenario` / `Scenario Outline`
-headings; one is tagged `@known-bug` and excluded by default (`BDD_TAGS`
-defaults to `~@known-bug`), so the default run executes 217 scenarios (Examples
-rows expanded). Per-file counts are in
+headings; none is tagged `@known-bug` (the runner still excludes that tag by
+default: `BDD_TAGS` defaults to `~@known-bug`), so the default run executes 218
+scenarios (Examples rows expanded). Per-file counts are in
 [Testing](docs/docs/development/testing.md).
 
 Step definitions and the suite entry point (`TestFeatures`) are in

@@ -38,7 +38,7 @@ func siteFixture(t *testing.T) http.Handler {
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", commitShiftPlanRequest{
 		BuildingId: "bldg-1", ShiftId: "shift-1",
-		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 8, InstalledStations: 10}},
+		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 8, InstalledStations: intp(10)}},
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("commit plan: expected 201, got %d: %s", rec.Code, rec.Body.String())
@@ -77,7 +77,7 @@ func TestStartShift_NullSiteCodeIsOmitted(t *testing.T) {
 	assignPack(t, router, "assoc-1")
 	rec = doRequest(t, router, http.MethodPost, "/shift-plans", commitShiftPlanRequest{
 		BuildingId: "bldg-1", ShiftId: "shift-1",
-		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8, InstalledStations: 10}},
+		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 1, PlannedRate: 30, PlannedHours: 8, InstalledStations: intp(10)}},
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("commit plan: expected 201, got %d: %s", rec.Code, rec.Body.String())

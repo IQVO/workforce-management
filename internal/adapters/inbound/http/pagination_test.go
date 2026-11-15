@@ -20,11 +20,11 @@ func TestStaffingGapPages_WalkEveryPageNoDuplicateNoSkip(t *testing.T) {
 	doRequest(t, router, http.MethodPost, "/shift-plans", commitShiftPlanRequest{
 		BuildingId: "WH1", ShiftId: "S1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
-			{PathId: "pack", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
-			{PathId: "rebin", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
-			{PathId: "slam", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
-			{PathId: "pack-zone-a", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
+			{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
+			{PathId: "pack", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
+			{PathId: "rebin", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
+			{PathId: "slam", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
+			{PathId: "pack-zone-a", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
 		},
 	})
 	for _, base := range []string{"/sites/WH1/shifts/S1/staffing-gap", "/buildings/WH1/shifts/S1/staffing-gap"} {

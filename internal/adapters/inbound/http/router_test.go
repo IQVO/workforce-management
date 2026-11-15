@@ -323,7 +323,7 @@ func TestCommitShiftPlan(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -343,7 +343,7 @@ func TestCommitShiftPlan_RejectsPlannedHeadsExceedingInstalledStations(t *testin
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 11, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 11, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -367,7 +367,7 @@ func TestCommitShiftPlan_RejectsPlanExceedingLiveInstalledCapacity(t *testing.T)
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -393,7 +393,7 @@ func TestCommitShiftPlan_CanonicalPathIdIsCheckedAgainstItsCapability(t *testing
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "PICK", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 32, InstalledStations: 10},
+			{PathId: "PICK", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 32, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -415,7 +415,7 @@ func TestCommitShiftPlan_ServiceUnavailableWhenInstalledCapacityUnreachable(t *t
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -434,7 +434,7 @@ func TestCommitShiftPlan_RejectsMissingBuildingId(t *testing.T) {
 	req := commitShiftPlanRequest{
 		ShiftId: "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -455,7 +455,7 @@ func TestCommitShiftPlan_RejectsUnknownPathId(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "not-a-real-path", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10},
+			{PathId: "not-a-real-path", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)},
 		},
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -590,7 +590,7 @@ func TestStaffingGap(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: intp(10)},
 		},
 	}
 	doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -632,7 +632,7 @@ func TestStaffingGap_ObservedIdlePctOmittedWhenUnwired(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: intp(10)},
 		},
 	}
 	doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -658,7 +658,7 @@ func TestStaffingGap_ObservedIdlePctSurfacedOverHTTP(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: intp(10)},
 		},
 	}
 	doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -691,7 +691,7 @@ func TestStaffingGap_ObservedIdleShareIsTheCorrectlyNamedField(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: intp(10)},
 		},
 	}
 	doRequest(t, router, http.MethodPost, "/shift-plans", req)
@@ -735,8 +735,8 @@ func TestStaffingGapForShift_ListsEveryPlannedPath(t *testing.T) {
 		BuildingId: "bldg-1",
 		ShiftId:    "shift-1",
 		Lines: []pathPlanLineRequest{
-			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: 10},
-			{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: 10},
+			{PathId: "pack", PlannedHeads: 3, PlannedRate: 30, PlannedHours: 24, InstalledStations: intp(10)},
+			{PathId: "pick", PlannedHeads: 1, PlannedRate: 25, PlannedHours: 8, InstalledStations: intp(10)},
 		},
 	}
 	doRequest(t, router, http.MethodPost, "/shift-plans", req)
