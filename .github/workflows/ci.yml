@@ -230,6 +230,93 @@ jobs:
           KAFKA_BROKERS: "localhost:9092"
         run: ./scripts/contract-test.sh
 
+  # ============================================================
+  # CLASSIFICATION: CONTRACT TESTING (breaking-change gate)
+  # ============================================================
+  # Producer-parity gate: on a pull_request touching apis/**, the PR's
+  # specs are diffed against the PR base. `oasdiff breaking` (installed
+  # pinned, like every Go tool in this workflow) guards apis/openapi.yaml;
+  # scripts/harness/asyncapi_breaking.py guards apis/asyncapi.yaml
+  # (removed message, removed/renamed required data field, type
+  # narrowing — additions are fine). The contract for changing either
+  # spec is ADDITIVE: a breaking payload change ships as a new .v2 type
+  # and dataschema version, never a mutation (ADR-0026). Consumers per
+  # warehouse-docs network/model/contract-edges.json (origin/main):
+  # REST — warehouse-ops-agent (WORKFORCE_MANAGEMENT_A2A_URL); events —
+  # warehouse-planning and wes-work-planning, which pin byte-copies of
+  # apis/asyncapi.yaml at ref develop in their contracts/pinned.json.
+  spec-breaking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0    # the base...HEAD diff needs the base sha's history
+      - name: Did this PR touch apis/**?
+        id: apis
+        run: |
+          set -euo pipefail
+          if git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" -- apis/ | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "apis/** unchanged — the breaking gate has nothing to diff"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        if: steps.apis.outputs.changed == 'true'
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install oasdiff (pinned)
+        if: steps.apis.outputs.changed == 'true'
+        run: go install github.com/oasdiff/oasdiff@v1.38.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        if: steps.apis.outputs.changed == 'true'
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML (pinned)
+        if: steps.apis.outputs.changed == 'true'
+        run: python3 -m pip install --require-hashes -r .github/requirements/asyncapi-breaking.txt
+      # The base specs land under base/ via `git show` from the full
+      # checkout above — byte-identical to what a second checkout of the
+      # base sha would put there (and R7-clean: the gate script runs from
+      # the workspace root, where the repo actually is).
+      - name: Materialize the PR base specs
+        if: steps.apis.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          base="${{ github.event.pull_request.base.sha }}"
+          mkdir -p base/apis
+          git show "$base:apis/openapi.yaml"  > base/apis/openapi.yaml
+          git show "$base:apis/asyncapi.yaml" > base/apis/asyncapi.yaml
+      - name: oasdiff breaking — apis/openapi.yaml
+        if: steps.apis.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          # --fail-on ERR: without it oasdiff prints breaking changes and
+          # still exits 0 (v1.38.0 semantics) — the gate would be vacuous.
+          if ! oasdiff breaking --fail-on ERR base/apis/openapi.yaml apis/openapi.yaml; then
+            echo "::error::Breaking REST change in apis/openapi.yaml vs ${{ github.event.pull_request.base.ref }}." \
+                 "Consumers (warehouse-docs network/model/contract-edges.json): warehouse-ops-agent (REST," \
+                 "WORKFORCE_MANAGEMENT_A2A_URL). Make the change additive, or migrate the consumer first."
+            exit 1
+          fi
+      - name: asyncapi_breaking self-check
+        if: steps.apis.outputs.changed == 'true'
+        run: python3 scripts/harness/asyncapi_breaking.py --self-check
+      - name: Breaking gate — apis/asyncapi.yaml
+        if: steps.apis.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          if ! python3 scripts/harness/asyncapi_breaking.py base/apis/asyncapi.yaml apis/asyncapi.yaml; then
+            echo "::error::Breaking event change in apis/asyncapi.yaml vs ${{ github.event.pull_request.base.ref }}." \
+                 "Pinned byte-copies of this exact file (contracts/pinned.json, ref develop): warehouse-planning and" \
+                 "wes-work-planning (internal/adapters/inbound/kafka/testdata/workforce-management.asyncapi.yaml)." \
+                 "Ship breaking payload changes as a new .v2 message type + dataschema version (ADR-0026), never a mutation."
+            exit 1
+          fi
+
   # The MCP eval gate as its own named check: the eval suites from
   # internal/adapters/inbound/mcp run inside the `test` job too; this job makes the gate
   # visible — and individually gating — on every push and PR.
