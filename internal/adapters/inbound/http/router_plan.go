@@ -82,13 +82,21 @@ func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, err)
 			return
 		}
+		// installedStations is REQUIRED (openapi PathPlanLineRequest): an
+		// omitted or null count is refused here, before the live capacity
+		// lookups, rather than decoded as 0 and answered as a 409
+		// planned-heads-exceed-installed. An explicit 0 is a stated count.
+		if l.InstalledStations == nil {
+			writeError(w, r, statusFor(shiftplan.ErrMissingInstalledStations), shiftplan.ErrMissingInstalledStations)
+			return
+		}
 		lines[i] = shiftplan.PathPlan{
 			PathId:       pathId,
 			PlannedHeads: l.PlannedHeads,
 			PlannedRate:  l.PlannedRate,
 			PlannedHours: l.PlannedHours,
 		}
-		installed[pathId] = l.InstalledStations
+		installed[pathId] = *l.InstalledStations
 	}
 
 	sp, err := h.CommitShiftPlan.Execute(r.Context(), siteKey, req.ShiftId, lines, installed)

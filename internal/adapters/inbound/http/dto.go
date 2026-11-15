@@ -53,12 +53,17 @@ type proposePathPlanResponse struct {
 	TrimReason    string  `json:"trimReason,omitempty"`
 }
 
+// pathPlanLineRequest.InstalledStations is a pointer so an OMITTED (or null)
+// count is distinguishable from an explicit 0: the openapi makes the field
+// required and answers 400 shift-plan-missing-installed-stations when it is
+// absent, while an explicit 0 is a stated count that plannedHeads is checked
+// against (409 planned-heads-exceed-installed).
 type pathPlanLineRequest struct {
 	PathId            string  `json:"pathId"`
 	PlannedHeads      int     `json:"plannedHeads"`
 	PlannedRate       float64 `json:"plannedRate"`
 	PlannedHours      float64 `json:"plannedHours"`
-	InstalledStations int     `json:"installedStations"`
+	InstalledStations *int    `json:"installedStations"`
 }
 
 // commitShiftPlanRequest names the ShiftPlan key by the canonical SiteCode or

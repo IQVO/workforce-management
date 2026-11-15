@@ -152,12 +152,11 @@ Feature: A shift plan is committed as one atomic, verified decision
     Then the last request succeeds with status 201
     And the last ShiftPlanCommitted event is for site "WH1" shift "shift-7"
 
-  # Spec: openapi POST /shift-plans 400 lists "a line references a path with no
+  # openapi POST /shift-plans 400 lists "a line references a path with no
   # installedStations entry (shift-plan-missing-installed-stations)" and the
-  # schema makes installedStations required. The handler decodes a missing
-  # number as 0, so the line is answered 409 planned-heads-exceed-installed and
-  # the 400 slug is unreachable from REST.
-  @bdd @known-bug
+  # schema makes installedStations required: the handler tells an omitted (or
+  # null) count from an explicit 0 and refuses it before anything else runs.
+  @bdd
   Scenario: A line that omits installedStations is refused as a missing count
     When a POST request is sent to "/shift-plans" with the body {"siteCode": "WH1", "shiftId": "shift-1", "lines": [{"pathId": "pack", "plannedHeads": 2, "plannedRate": 30, "plannedHours": 16}]}
     Then the request is rejected with status 400 and problem type "shift-plan-missing-installed-stations"
