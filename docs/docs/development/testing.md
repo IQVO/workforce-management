@@ -32,27 +32,48 @@ packages changed against HEAD) is the agent stop-hook gate.
 
 ## BDD features
 
-16 feature files hold **85** `Scenario`/`Scenario Outline` blocks (8 of them
-outlines, which expand to more runs):
+21 feature files hold **154** `Scenario`/`Scenario Outline` blocks (27 of them
+outlines, which expand to more runs). One block is tagged `@known-bug` and is
+excluded by default (`BDD_TAGS` defaults to `~@known-bug`, see below), so
+`make bdd` runs 153 blocks as **217** executed scenarios and 998 steps
+(`217 scenarios (217 passed)`, `998 steps (998 passed)`, godog's own summary
+from `go test ./features -run TestFeatures -count=1 -v`).
 
-| Feature file | Scenarios |
-|---|---|
-| `associate_roster.feature` | 11 |
-| `associate_shift_lifecycle.feature` | 3 |
-| `break_rules.feature` | 8 |
-| `break_state_transitions.feature` | 2 |
-| `breaks.feature` | 1 |
-| `labor_assignment.feature` | 4 |
-| `labor_assignment_rules.feature` | 6 |
-| `path_plan_proposal.feature` | 1 |
-| `path_plan_proposal_rules.feature` | 11 |
-| `probes.feature` | 2 |
-| `shift_plan.feature` | 5 |
-| `shift_plan_commit_rules.feature` | 14 |
-| `shift_plan_hours_capacity.feature` | 1 |
-| `staffing_gap.feature` | 3 |
-| `staffing_gap_read_model.feature` | 2 |
-| `staffing_gap_views.feature` | 11 |
+| Feature file | Scenarios | Executed |
+|---|---|---|
+| `assignment_doc_rules.feature` | 14 | 30 |
+| `associate_roster.feature` | 11 | 13 |
+| `associate_roster_doc_rules.feature` | 10 | 10 |
+| `associate_shift_lifecycle.feature` | 3 | 3 |
+| `break_rules.feature` | 8 | 8 |
+| `break_state_transitions.feature` | 2 | 2 |
+| `breaks.feature` | 1 | 1 |
+| `labor_assignment.feature` | 4 | 4 |
+| `labor_assignment_rules.feature` | 6 | 8 |
+| `path_plan_doc_rules.feature` | 12 | 21 |
+| `path_plan_proposal.feature` | 1 | 1 |
+| `path_plan_proposal_rules.feature` | 11 | 19 |
+| `probes.feature` | 2 | 2 |
+| `shift_plan.feature` | 5 | 5 |
+| `shift_plan_commit_rules.feature` | 14 | 18 |
+| `shift_plan_doc_rules.feature` | 13 (1 `@known-bug`) | 19 |
+| `shift_plan_hours_capacity.feature` | 1 | 1 |
+| `staffing_gap.feature` | 3 | 3 |
+| `staffing_gap_doc_rules.feature` | 20 | 34 |
+| `staffing_gap_read_model.feature` | 2 | 2 |
+| `staffing_gap_views.feature` | 11 | 13 |
+| **21 files** | **154** | **217** |
+
+The `*_doc_rules.feature` files (`assignment`, `associate_roster`,
+`path_plan`, `shift_plan`, `staffing_gap`) pin the rules written in the
+documentation; their steps are in `features/steps_rules_test.go`.
+
+The `@known-bug` scenario (`shift_plan_doc_rules.feature`, a line that omits
+`installedStations`) describes the specification's `400
+shift-plan-missing-installed-stations`; the handler decodes the omitted number as
+0 and answers `409 planned-heads-exceed-installed`. It fails by design:
+`BDD_TAGS=@known-bug go test ./features -run TestFeatures -count=1` runs only
+the known-bug scenarios.
 
 A separate godog suite, `internal/adapters/inbound/mcp/testdata/features/mcp_tools.feature`
 (17 scenarios), drives the MCP tools. It runs as part of the MCP evals

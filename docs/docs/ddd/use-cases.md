@@ -83,7 +83,7 @@ and [Troubleshooting](../operations/troubleshooting.md#requests).
   4. **Single active assignment:** an existing active assignment is closed and moved into history. The associate is never double-booked, and a second call is never rejected for it.
   5. The closed interval's hours must fit under `MAX_HOURS_PER_SHIFT` (`ErrMaxHoursExceeded`).
 - **Persists:** the `LaborAssignment`, plus the `AssociateShift` when hours were logged. Both are saved in one unit of work.
-- **Raises:** `LaborAssigned`, or `LaborReassigned` (from path → to path) when an active assignment on another path was closed.
+- **Raises:** `LaborAssigned`, or `LaborReassigned` (from path → to path) whenever an active assignment was closed to open the new one. That includes assigning the path the associate is already on: the interval is closed and reopened and the event carries `fromPathId == toPathId` (`LaborAssignment.AssignBy` has no same-path check).
 - **Metrics:** every attempt adds one to `workforce.labor_assignments` with `outcome` and, on rejection, `reason` ([Observability](../operations/observability.md)).
 - **REST only:** `RequireIdempotencyKey` guards the route ([ADR 0027](../adr/0027-idempotency-key-middleware.md)).
 
@@ -116,7 +116,7 @@ and [Troubleshooting](../operations/troubleshooting.md#requests).
 
 - **Inputs:** building/site id, shift id, and either one path (`Execute` / `ExecuteForSite`) or every line of the plan (`ExecuteAll` / `ExecuteAllForSite`, [ADR 0029](../adr/0029-all-paths-staffing-gap-endpoint.md)). An optional `siteCode` scopes the active-head count to associates whose active shift is at that site ([ADR 0034](../adr/0034-site-scoped-staffing-gap.md), [ADR 0035](../adr/0035-sitecode-converges-building-id.md)). Without it, the count covers every site.
 - **Computation per line:** `plannedHeads` comes from the committed `ShiftPlan`, `activeHeads` from `CountActiveByPath` or `CountActiveByPathAtSite`, and `understaffed = activeHeads < plannedHeads`. `observedIdlePct` is filled only when an idle-share client is wired. Otherwise it is null, never 0.
-- **Invariants:** a committed plan exists for building + shift (`resource-not-found`). `siteCode` and the deprecated `buildingId` must agree (`conflicting-site-and-building`).
+- **Invariants:** a committed plan exists for building + shift (`resource-not-found`). With neither `siteCode` nor `buildingId` the read is `400 missing-building-id`. When both are sent, `buildingId` is the plan key and `siteCode` the scope; a differing pair is accepted, **not** a `422 conflicting-site-and-building` ([ADR 0035](../adr/0035-sitecode-converges-building-id.md), "Decided (2026-10-08)"; `shared.ResolveGapLookup`). The `422` rule applies to `CommitShiftPlan` and `ProposePathPlan`.
 - **Raises:** `PathUnderstaffed` (path, planned, active, site) for each understaffed line. The list variants publish every event in **one** unit of work. Note that this read raises events: every query of an understaffed path publishes again.
 
 ## Ports used
