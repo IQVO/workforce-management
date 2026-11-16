@@ -230,93 +230,6 @@ jobs:
           KAFKA_BROKERS: "localhost:9092"
         run: ./scripts/contract-test.sh
 
-  # ============================================================
-  # CLASSIFICATION: CONTRACT TESTING (breaking-change gate)
-  # ============================================================
-  # Producer-parity gate: on a pull_request touching apis/**, the PR's
-  # specs are diffed against the PR base. `oasdiff breaking` (installed
-  # pinned, like every Go tool in this workflow) guards apis/openapi.yaml;
-  # scripts/harness/asyncapi_breaking.py guards apis/asyncapi.yaml
-  # (removed message, removed/renamed required data field, type
-  # narrowing — additions are fine). The contract for changing either
-  # spec is ADDITIVE: a breaking payload change ships as a new .v2 type
-  # and dataschema version, never a mutation (ADR-0026). Consumers per
-  # warehouse-docs network/model/contract-edges.json (origin/main):
-  # REST — warehouse-ops-agent (WORKFORCE_MANAGEMENT_A2A_URL); events —
-  # warehouse-planning and wes-work-planning, which pin byte-copies of
-  # apis/asyncapi.yaml at ref develop in their contracts/pinned.json.
-  spec-breaking:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          fetch-depth: 0    # the base...HEAD diff needs the base sha's history
-      - name: Did this PR touch apis/**?
-        id: apis
-        run: |
-          set -euo pipefail
-          if git diff --name-only "${{ github.event.pull_request.base.sha }}...HEAD" -- apis/ | grep -q .; then
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "apis/** unchanged — the breaking gate has nothing to diff"
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          fi
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
-        if: steps.apis.outputs.changed == 'true'
-        with:
-          go-version-file: go.mod
-          cache: false
-      - name: Install oasdiff (pinned)
-        if: steps.apis.outputs.changed == 'true'
-        run: go install github.com/oasdiff/oasdiff@v1.38.0
-      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
-        if: steps.apis.outputs.changed == 'true'
-        with:
-          python-version: "3.13"
-      - name: Install PyYAML (pinned)
-        if: steps.apis.outputs.changed == 'true'
-        run: python3 -m pip install --require-hashes -r .github/requirements/asyncapi-breaking.txt
-      # The base specs land under base/ via `git show` from the full
-      # checkout above — byte-identical to what a second checkout of the
-      # base sha would put there (and R7-clean: the gate script runs from
-      # the workspace root, where the repo actually is).
-      - name: Materialize the PR base specs
-        if: steps.apis.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          base="${{ github.event.pull_request.base.sha }}"
-          mkdir -p base/apis
-          git show "$base:apis/openapi.yaml"  > base/apis/openapi.yaml
-          git show "$base:apis/asyncapi.yaml" > base/apis/asyncapi.yaml
-      - name: oasdiff breaking — apis/openapi.yaml
-        if: steps.apis.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          # --fail-on ERR: without it oasdiff prints breaking changes and
-          # still exits 0 (v1.38.0 semantics) — the gate would be vacuous.
-          if ! oasdiff breaking --fail-on ERR base/apis/openapi.yaml apis/openapi.yaml; then
-            echo "::error::Breaking REST change in apis/openapi.yaml vs ${{ github.event.pull_request.base.ref }}." \
-                 "Consumers (warehouse-docs network/model/contract-edges.json): warehouse-ops-agent (REST," \
-                 "WORKFORCE_MANAGEMENT_A2A_URL). Make the change additive, or migrate the consumer first."
-            exit 1
-          fi
-      - name: asyncapi_breaking self-check
-        if: steps.apis.outputs.changed == 'true'
-        run: python3 scripts/harness/asyncapi_breaking.py --self-check
-      - name: Breaking gate — apis/asyncapi.yaml
-        if: steps.apis.outputs.changed == 'true'
-        run: |
-          set -euo pipefail
-          if ! python3 scripts/harness/asyncapi_breaking.py base/apis/asyncapi.yaml apis/asyncapi.yaml; then
-            echo "::error::Breaking event change in apis/asyncapi.yaml vs ${{ github.event.pull_request.base.ref }}." \
-                 "Pinned byte-copies of this exact file (contracts/pinned.json, ref develop): warehouse-planning and" \
-                 "wes-work-planning (internal/adapters/inbound/kafka/testdata/workforce-management.asyncapi.yaml)." \
-                 "Ship breaking payload changes as a new .v2 message type + dataschema version (ADR-0026), never a mutation."
-            exit 1
-          fi
-
   # The MCP eval gate as its own named check: the eval suites from
   # internal/adapters/inbound/mcp run inside the `test` job too; this job makes the gate
   # visible — and individually gating — on every push and PR.
@@ -648,6 +561,154 @@ jobs:
       - run: npx tsc -b
       - run: npm test
       - run: npm run build
+
+  # ============================================================
+  # CLASSIFICATION: CONTRACT TESTING (producer breaking-change gate)
+  # ============================================================
+  # A PR that edits this repo's API specs must not break the consumers that pin
+  # them (contracts/pinned.json in the consumer repos). REST: oasdiff v1.38.0, the
+  # sha256-pinned release tarball, `breaking --fail-on ERR` (without --fail-on
+  # oasdiff prints breaking changes and still exits 0: the gate would be vacuous).
+  # Events: scripts/harness/asyncapi_breaking.py (oasdiff cannot read AsyncAPI).
+  # Skips itself when the PR touches no apis/openapi*.yaml or apis/asyncapi.yaml.
+  # Kit: docs/spec-breaking-kit.md. The two ACTIONS_* placeholder tokens are substituted by
+  # the rollout with the `uses:` values this repo already pins elsewhere in this file.
+  spec-breaking:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: github.event_name == 'pull_request'
+    permissions:
+      contents: read
+    env:
+      # Through env, never interpolated into a run: script.
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      BASE_REF: ${{ github.event.pull_request.base.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0    # the PR base sha must be in the history to diff against
+      - name: Did this PR touch an API spec?
+        id: apis
+        run: |
+          set -euo pipefail
+          git diff --name-only "$BASE_SHA" HEAD -- 'apis/openapi*.yaml' > "$RUNNER_TEMP/openapi-changed.txt"
+          if [ -s "$RUNNER_TEMP/openapi-changed.txt" ]; then echo "openapi=true" >> "$GITHUB_OUTPUT"; else echo "openapi=false" >> "$GITHUB_OUTPUT"; fi
+          if git diff --name-only "$BASE_SHA" HEAD -- apis/asyncapi.yaml | grep -q .; then echo "asyncapi=true" >> "$GITHUB_OUTPUT"; else echo "asyncapi=false" >> "$GITHUB_OUTPUT"; fi
+          if [ ! -s "$RUNNER_TEMP/openapi-changed.txt" ] && ! git diff --name-only "$BASE_SHA" HEAD -- apis/asyncapi.yaml | grep -q .; then
+            echo "No apis/openapi*.yaml or apis/asyncapi.yaml change: nothing for the breaking gate to diff"
+          fi
+      # Best effort and never failing: the consumers named in the failure text come
+      # from the fleet's own registries (contracts/pinned.json at each repo's develop).
+      - name: Name the consumers that pin this repo's specs
+        id: consumers
+        if: steps.apis.outputs.openapi == 'true' || steps.apis.outputs.asyncapi == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRODUCER: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import concurrent.futures, json, os, re, subprocess
+          producer = os.environ["PRODUCER"]
+          org = producer.split("/")[0]
+          def gh(*args):
+              return subprocess.run(["gh", "api", *args], capture_output=True, text=True, timeout=60)
+          def pins(repo):
+              out = gh("-H", "Accept: application/vnd.github.raw", f"repos/{org}/{repo}/contents/contracts/pinned.json?ref=develop")
+              if out.returncode != 0:
+                  return repo, []
+              try:
+                  return repo, [p for p in json.loads(out.stdout).get("pins", []) if p.get("repo") == producer]
+              except (ValueError, AttributeError):
+                  return repo, []
+          rest, events = set(), set()
+          try:
+              listing = gh("--paginate", f"orgs/{org}/repos?per_page=100", "--jq", ".[] | select(.archived | not) | .name")
+              if listing.returncode != 0:
+                  raise RuntimeError(listing.stderr.strip() or "repo listing failed")
+              with concurrent.futures.ThreadPoolExecutor(8) as pool:
+                  for repo, found in pool.map(pins, listing.stdout.split()):
+                      for pin in found:
+                          base = os.path.basename(str(pin.get("path", "")))
+                          if re.fullmatch(r"[A-Za-z0-9._-]+", repo) and base.startswith("openapi"):
+                              rest.add(repo)
+                          elif re.fullmatch(r"[A-Za-z0-9._-]+", repo) and base.startswith("asyncapi"):
+                              events.add(repo)
+          except Exception as exc:  # the lookup is advice, never a gate
+              print(f"::notice::consumer lookup unavailable ({exc}); the gate still runs with a generic message")
+              rest, events = set(), set()
+          with open(os.environ["GITHUB_OUTPUT"], "a") as out:
+              out.write(f"rest={','.join(sorted(rest))}\nevents={','.join(sorted(events))}\n")
+          print("REST pinners:", sorted(rest), "| event pinners:", sorted(events))
+          PY
+      - name: Install oasdiff v1.38.0 (sha256-pinned release tarball)
+        if: steps.apis.outputs.openapi == 'true'
+        env:
+          # Official checksums.txt of https://github.com/oasdiff/oasdiff/releases/tag/v1.38.0
+          OASDIFF_SHA256: 613037fd6a1d3362a1b742d6d86c338c0eb5ab3511f4942ce3948e78720ea2da
+        run: |
+          set -euo pipefail
+          tarball="$RUNNER_TEMP/oasdiff_1.38.0_linux_amd64.tar.gz"
+          curl --fail --silent --show-error --location --retry 3 --output "$tarball" \
+            "https://github.com/oasdiff/oasdiff/releases/download/v1.38.0/oasdiff_1.38.0_linux_amd64.tar.gz"
+          echo "$OASDIFF_SHA256  $tarball" | sha256sum --check --strict -
+          mkdir -p "$RUNNER_TEMP/oasdiff-bin"
+          tar -xzf "$tarball" -C "$RUNNER_TEMP/oasdiff-bin" oasdiff
+          echo "$RUNNER_TEMP/oasdiff-bin" >> "$GITHUB_PATH"
+      - name: oasdiff breaking - apis/openapi*.yaml, PR base vs head
+        if: steps.apis.outputs.openapi == 'true'
+        env:
+          CONSUMERS: ${{ steps.consumers.outputs.rest }}
+        run: |
+          set -euo pipefail
+          status=0
+          while IFS= read -r spec; do
+            [ -n "$spec" ] || continue
+            if ! git cat-file -e "$BASE_SHA:$spec" 2>/dev/null; then
+              echo "$spec is new in this PR: nothing to compare"
+              continue
+            fi
+            if [ ! -f "$spec" ]; then
+              echo "::error::$spec was deleted: every consumer pinning it breaks. Keep it, or migrate the consumers first."
+              status=1
+              continue
+            fi
+            git show "$BASE_SHA:$spec" > "$RUNNER_TEMP/base-openapi.yaml"
+            # --fail-on ERR is load-bearing: oasdiff v1.38.0 exits 0 on breaking changes without it.
+            if ! oasdiff breaking --fail-on ERR "$RUNNER_TEMP/base-openapi.yaml" "$spec"; then
+              echo "::error::Breaking REST change in $spec vs $BASE_REF. Pinning consumers: ${CONSUMERS:-see contracts/pinned.json@develop in the consumer repos}. Make the change additive, or refresh the consumers' pins first."
+              status=1
+            fi
+          done < "$RUNNER_TEMP/openapi-changed.txt"
+          exit "$status"
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7
+        if: steps.apis.outputs.asyncapi == 'true'
+        with:
+          python-version: "3.13"
+      - name: Install PyYAML (hash-pinned)
+        if: steps.apis.outputs.asyncapi == 'true'
+        run: python3 -m pip install --require-hashes -r .github/requirements/asyncapi-breaking.txt
+      - name: The gate's own tests
+        if: steps.apis.outputs.asyncapi == 'true'
+        run: |
+          python3 scripts/harness/asyncapi_breaking.py --self-check
+          python3 scripts/harness/test_asyncapi_breaking.py
+      - name: Breaking gate - apis/asyncapi.yaml, PR base vs head
+        if: steps.apis.outputs.asyncapi == 'true'
+        env:
+          CONSUMERS: ${{ steps.consumers.outputs.events }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "$BASE_SHA:apis/asyncapi.yaml" 2>/dev/null; then
+            echo "apis/asyncapi.yaml is new in this PR: nothing to compare"
+            exit 0
+          fi
+          if [ ! -f apis/asyncapi.yaml ]; then
+            echo "::error::apis/asyncapi.yaml was deleted: every consumer pinning it breaks. Keep it, or migrate the consumers first."
+            exit 1
+          fi
+          git show "$BASE_SHA:apis/asyncapi.yaml" > "$RUNNER_TEMP/base-asyncapi.yaml"
+          python3 scripts/harness/asyncapi_breaking.py "$RUNNER_TEMP/base-asyncapi.yaml" apis/asyncapi.yaml
 
   trivy-scan:
     runs-on: ubuntu-latest
