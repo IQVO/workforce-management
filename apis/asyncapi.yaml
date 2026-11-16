@@ -252,7 +252,7 @@ channels:
 
 components:
   messages:
-    ShiftPlanCommitted:
+    ShiftPlanCommittedCanary:
       name: ShiftPlanCommitted
       title: Shift plan committed
       summary: A human committed a headcount split across process paths for a site's shift.
