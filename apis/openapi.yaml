@@ -64,7 +64,7 @@ tags:
     description: Operational endpoints not scoped to a domain aggregate.
 
 paths:
-  /healthz:
+  /healthz-canary:
     get:
       operationId: healthz
       summary: Liveness check
