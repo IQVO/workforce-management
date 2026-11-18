@@ -174,6 +174,7 @@ const sidebars: SidebarsConfig = {
         'adr/0040-adopt-the-fleet-rest-api-guideline',
         'adr/0041-agent-authority-levels-and-attributable-assignments',
         'adr/0042-idempotency-key-wire-pattern',
+        'adr/0043-propose-heads-from-the-published-labour-plan',
       ],
     },
   ],
