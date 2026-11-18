@@ -96,7 +96,7 @@ Every integration test starts its own containers, so no `DATABASE_URL` or
 | Outbox trace continuity (D27): the request's `traceparent` reaches Kafka through the outbox; an untraced row relays unchanged | `outbox_trace_integration_test.go` (postgres package, real Postgres and Kafka) |
 | Pool limits (`MaxConns`, `statement_timeout`) | `pool_limits_integration_test.go` |
 | Housekeeping | `internal/adapters/outbound/postgres/sweeper_integration_test.go`, `cmd/workforce/housekeeping_integration_test.go` |
-| Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `siteconv_integration_test.go` |
+| Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `idempotency_5xx_integration_test.go`, `siteconv_integration_test.go` |
 | Use-case wiring over real Postgres | `internal/application/usecases/usecases_wiring_integration_test.go` |
 | MCP over Streamable HTTP | `internal/adapters/inbound/mcp/streamable_http_integration_test.go` |
 | MCP writes land in the outbox | `cmd/mcp/outbox_integration_test.go` |
