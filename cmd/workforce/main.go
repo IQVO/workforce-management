@@ -168,20 +168,21 @@ func run(ctx context.Context) error {
 	readiness := buildReadiness(pool, cfg.brokers)
 
 	handler := newOLTPHandler(oltpHandlerDeps{
-		associates:       repos.associates,
-		shiftPlans:       repos.shiftPlans,
-		assignments:      repos.assignments,
-		publisher:        repos.publisher,
-		sysClock:         sysClock,
-		uow:              repos.uow,
-		measuredRate:     measuredRate,
-		idleShare:        idleShare,
-		breakerMetrics:   breakerMetrics,
-		maxHoursPerShift: settings.maxHoursPerShift,
-		catalogue:        catalogue,
-		readiness:        readiness,
-		idempotencyPool:  pool,
-		logger:           logger,
+		associates:         repos.associates,
+		shiftPlans:         repos.shiftPlans,
+		labourRequirements: repos.labourRequirements,
+		assignments:        repos.assignments,
+		publisher:          repos.publisher,
+		sysClock:           sysClock,
+		uow:                repos.uow,
+		measuredRate:       measuredRate,
+		idleShare:          idleShare,
+		breakerMetrics:     breakerMetrics,
+		maxHoursPerShift:   settings.maxHoursPerShift,
+		catalogue:          catalogue,
+		readiness:          readiness,
+		idempotencyPool:    pool,
+		logger:             logger,
 	})
 
 	server := &http.Server{
@@ -254,20 +255,21 @@ func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog
 
 // oltpHandlerDeps groups the inbound handler's wiring inputs.
 type oltpHandlerDeps struct {
-	associates       *postgres.AssociateRepo
-	shiftPlans       *postgres.ShiftPlanRepo
-	assignments      *postgres.AssignmentRepo
-	publisher        ports.EventPublisher
-	sysClock         clock.System
-	uow              ports.UnitOfWork
-	measuredRate     ports.MeasuredRateClient
-	idleShare        ports.IdleShareClient
-	breakerMetrics   resilience.StateRecorder
-	maxHoursPerShift float64
-	catalogue        ports.PathCatalogue
-	readiness        *inbound.Readiness
-	idempotencyPool  *pgxpool.Pool
-	logger           *slog.Logger
+	associates         *postgres.AssociateRepo
+	shiftPlans         *postgres.ShiftPlanRepo
+	labourRequirements ports.LabourRequirements
+	assignments        *postgres.AssignmentRepo
+	publisher          ports.EventPublisher
+	sysClock           clock.System
+	uow                ports.UnitOfWork
+	measuredRate       ports.MeasuredRateClient
+	idleShare          ports.IdleShareClient
+	breakerMetrics     resilience.StateRecorder
+	maxHoursPerShift   float64
+	catalogue          ports.PathCatalogue
+	readiness          *inbound.Readiness
+	idempotencyPool    *pgxpool.Pool
+	logger             *slog.Logger
 }
 
 // newOLTPHandler wires every use case into the inbound handler.
@@ -277,7 +279,7 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 	return &inbound.Handler{
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
-		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow},
+		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow, Requirements: d.labourRequirements},
 		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, Catalogue: d.catalogue, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
 		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, Catalogue: d.catalogue, Metrics: newLaborMetrics(d.logger), UnitOfWork: d.uow},
 		StartBreak:          &usecases.StartBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},

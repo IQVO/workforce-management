@@ -33,7 +33,7 @@ func TestTools_RejectPathIdsOutsideTheCatalogue(t *testing.T) {
 		}
 	})
 	t.Run("propose_path_heads", func(t *testing.T) {
-		_, err := h.deps.proposePathHeads(ctx, proposeHeadsInput{BuildingId: "B1", PathId: "hazmat", Charge: 10, PlannedRate: 5})
+		_, err := h.deps.proposePathHeads(ctx, proposeHeadsInput{BuildingId: "B1", PathId: "hazmat", Charge: chargeOf(10), PlannedRate: 5})
 		if !errors.Is(err, pathcatalog.ErrUnknownPath) {
 			t.Fatalf("err = %v, want ErrUnknownPath", err)
 		}

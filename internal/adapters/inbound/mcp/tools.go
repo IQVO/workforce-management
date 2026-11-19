@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"go.opentelemetry.io/otel"
@@ -105,20 +106,23 @@ func (d Deps) getStaffingGap(ctx context.Context, in staffingGapInput) (staffing
 // --- propose_path_heads -------------------------------------------------------
 
 type proposeHeadsInput struct {
-	SiteCode    string  `json:"siteCode,omitempty" jsonschema:"the canonical site code (the facility-layout Site code, e.g. WH1) the proposal is for. Required unless the deprecated buildingId is given"`
-	BuildingId  string  `json:"buildingId,omitempty" jsonschema:"DEPRECATED, use siteCode. Alias of siteCode with the same value; sending both with different values is rejected"`
-	PathId      string  `json:"pathId" jsonschema:"the process path to size (e.g. pack, pick, stow)"`
-	Charge      float64 `json:"charge" jsonschema:"the work charge (units) the path must clear this shift"`
-	PlannedRate float64 `json:"plannedRate" jsonschema:"the planned rate (units per head) used to size headcount; must be greater than zero"`
+	SiteCode    string   `json:"siteCode,omitempty" jsonschema:"the canonical site code (the facility-layout Site code, e.g. WH1) the proposal is for. Required unless the deprecated buildingId is given"`
+	BuildingId  string   `json:"buildingId,omitempty" jsonschema:"DEPRECATED, use siteCode. Alias of siteCode with the same value; sending both with different values is rejected"`
+	PathId      string   `json:"pathId" jsonschema:"the process path to size (e.g. pack, pick, stow)"`
+	ShiftId     string   `json:"shiftId,omitempty" jsonschema:"optional: the shift whose published labour plan to read. Omit charge and name shiftId to get the heads warehouse-planning requires for this site, shift and path (no trim); nothing published is an error, never zero heads"`
+	Charge      *float64 `json:"charge,omitempty" jsonschema:"DEPRECATED, optional: the work charge (units) the path must clear this shift; when given, heads are sized from it as before and plannedRate is required"`
+	PlannedRate float64  `json:"plannedRate,omitempty" jsonschema:"optional: the planned rate (units per head) used to size headcount from a charge; must be greater than zero when charge is given"`
 }
 
 type proposeHeadsOutput struct {
-	SiteCode      string  `json:"siteCode"`
-	BuildingId    string  `json:"buildingId"`
-	PathId        string  `json:"pathId"`
-	Charge        float64 `json:"charge"`
-	PlannedRate   float64 `json:"plannedRate"`
-	ProposedHeads int     `json:"proposedHeads"`
+	SiteCode      string   `json:"siteCode"`
+	BuildingId    string   `json:"buildingId"`
+	PathId        string   `json:"pathId"`
+	ShiftId       string   `json:"shiftId,omitempty"`
+	Charge        *float64 `json:"charge,omitempty"`
+	PlannedRate   float64  `json:"plannedRate"`
+	ProposedHeads int      `json:"proposedHeads"`
+	RateSource    string   `json:"rateSource,omitempty"`
 }
 
 func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (proposeHeadsOutput, error) {
@@ -132,27 +136,35 @@ func (d Deps) proposePathHeads(ctx context.Context, in proposeHeadsInput) (propo
 	if err := d.validatePathId(in.PathId); err != nil {
 		return proposeHeadsOutput{}, err
 	}
-	if in.Charge < 0 {
+	out := proposeHeadsOutput{SiteCode: siteKey, BuildingId: siteKey, PathId: in.PathId}
+	if in.Charge == nil {
+		// ADR 0043: no charge means the heads warehouse-planning published.
+		shiftId := strings.TrimSpace(in.ShiftId)
+		if shiftId == "" {
+			return proposeHeadsOutput{}, fmt.Errorf("name shiftId to read the published labour plan, or send the deprecated charge with plannedRate")
+		}
+		heads, rate, source, err := d.ProposePathPlan.ExecuteFromLabourPlan(ctx, siteKey, shiftId, shared.PathId(in.PathId))
+		if err != nil {
+			return proposeHeadsOutput{}, err
+		}
+		out.ShiftId, out.PlannedRate, out.ProposedHeads, out.RateSource = shiftId, rate, heads, source
+		return out, nil
+	}
+	if *in.Charge < 0 {
 		return proposeHeadsOutput{}, fmt.Errorf("charge must not be negative")
 	}
 	if in.PlannedRate <= 0 {
 		return proposeHeadsOutput{}, fmt.Errorf("plannedRate must be greater than zero")
 	}
-	// This tool requires plannedRate > 0 above, so ProposePathPlan never
+	// This branch requires plannedRate > 0 above, so ProposePathPlan never
 	// consults the measured-rate fallback here; only rate-agnostic values
 	// (heads) are relevant to this MCP tool's existing output contract.
-	heads, _, _, _, err := d.ProposePathPlan.Execute(ctx, siteKey, shared.PathId(in.PathId), in.Charge, in.PlannedRate)
+	heads, _, _, _, err := d.ProposePathPlan.Execute(ctx, siteKey, shared.PathId(in.PathId), *in.Charge, in.PlannedRate)
 	if err != nil {
 		return proposeHeadsOutput{}, err
 	}
-	return proposeHeadsOutput{
-		SiteCode:      siteKey,
-		BuildingId:    siteKey,
-		PathId:        in.PathId,
-		Charge:        in.Charge,
-		PlannedRate:   in.PlannedRate,
-		ProposedHeads: heads,
-	}, nil
+	out.Charge, out.PlannedRate, out.ProposedHeads = in.Charge, in.PlannedRate, heads
+	return out, nil
 }
 
 // --- assign_labor (write) -----------------------------------------------------
