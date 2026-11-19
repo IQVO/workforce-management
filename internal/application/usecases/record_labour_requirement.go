@@ -16,7 +16,8 @@ type RecordLabourRequirement struct {
 	Requirements ports.LabourRequirements
 	Processed    ports.ProcessedEvents
 	// UnitOfWork brackets the claim and the upsert (ADR 0016); nil runs them
-	// back to back (the in-memory configuration).
+	// back to back (the in-memory configuration), where a claim survives a
+	// failed upsert, so only a wired unit of work makes a retry re-apply.
 	UnitOfWork ports.UnitOfWork
 }
 

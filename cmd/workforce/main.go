@@ -12,6 +12,7 @@
 //
 //	DATABASE_URL                REQUIRED. Postgres DSN
 //	KAFKA_BROKERS               REQUIRED. Comma-separated brokers
+//	LABOUR_PLAN_CONSUMER_GROUP  REQUIRED. Stable group of the labour-plan consumer (ADR 0043)
 //	MIGRATIONS_DATABASE_URL     direct DSN for the boot migrations (default DATABASE_URL)
 //	EVENT_PUBLISHER             kafka (default). log is REJECTED at boot
 //	PATH_CATALOGUE_SOURCE       kafka (default). file is REJECTED at boot
@@ -38,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	inbound "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
+	inboundkafka "github.com/claudioed/workforce-management/internal/adapters/inbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
@@ -153,6 +155,12 @@ func run(ctx context.Context) error {
 	}
 	logTopics(logger, cfg)
 
+	// The labour-plan consumer (ADR 0043) is always on; its Run goroutine
+	// is cancelled and its reader closed in step 4 of the shutdown.
+	labourPlanCtx, cancelLabourPlan := context.WithCancel(context.Background())
+	defer cancelLabourPlan()
+	labourPlan := startLabourPlanConsumer(labourPlanCtx, cfg, pool, repos.labourRequirements, repos.uow, logger)
+
 	// readiness gates GET /readyz (ADR-0022 §graceful shutdown, ported
 	// from order-management's ADR-0025, grown by ADR-0038): the drain gate
 	// AND a Postgres ping AND a Kafka metadata check. Flipped not-ready as
@@ -191,7 +199,7 @@ func run(ctx context.Context) error {
 
 	// Stopping the Kafka consumers is step 4 of the ADR-0022 §8 shutdown
 	// sequence, after the HTTP drain.
-	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate)
+	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate, cancelLabourPlan, labourPlan)
 
 	return serveWorkforce(ctx, logger, settings.httpAddr, server, readiness, repos.relay, stopConsumers, stopSweeper)
 }
@@ -211,7 +219,7 @@ func buildReadiness(pool *pgxpool.Pool, brokers []string) *inbound.Readiness {
 // consumes from. It creates none of them: the cluster broker auto-creates a
 // topic on the first write and /readyz does not depend on topics existing.
 func logTopics(logger *slog.Logger, cfg bootConfig) {
-	consumes := []string{kafkacatalog.Topic}
+	consumes := []string{kafkacatalog.Topic, inboundkafka.LabourPlanTopic}
 	if cfg.laborMode == laborModeKafkaCache {
 		consumes = append(consumes, laborperformancecache.Topic)
 	}
@@ -223,9 +231,11 @@ func logTopics(logger *slog.Logger, cfg bootConfig) {
 }
 
 // consumerStopper returns the step-4 shutdown action of ADR-0022 §8: cancel
-// each Kafka consumer's Run context, then release its reader. The consumers
-// are nil when their mode is not kafka.
-func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer) func() {
+// each Kafka consumer's Run context, then release its reader. The cache
+// consumers are nil when their mode is not kafka; the labour-plan consumer is
+// always on.
+func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer,
+	cancelLabourPlan context.CancelFunc, labourPlan *inboundkafka.LabourPlanConsumer) func() {
 	return func() {
 		cancelCatalogue()
 		if catalogue != nil {
@@ -234,6 +244,10 @@ func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog
 		cancelRate()
 		if rate != nil {
 			_ = rate.Close()
+		}
+		cancelLabourPlan()
+		if labourPlan != nil {
+			_ = labourPlan.Close()
 		}
 	}
 }
