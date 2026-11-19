@@ -101,6 +101,7 @@ func newServer(idleShare ports.IdleShareClient, installedCapacity ports.Installe
 	associates := memory.NewAssociateRepo()
 	shiftPlans := memory.NewShiftPlanRepo()
 	assignments := memory.NewAssignmentRepo().WithAssociates(associates)
+	requirements := memory.NewLabourRequirementRepo()
 	pub := &recordingPublisher{inner: events.NewLogPublisher(slog.New(slog.NewTextHandler(io.Discard, nil)))}
 	readiness := &inboundhttp.Readiness{}
 	clock := &fixedClock{now: time.Date(2026, 1, 1, 8, 0, 0, 0, time.UTC)}
@@ -112,18 +113,18 @@ func newServer(idleShare ports.IdleShareClient, installedCapacity ports.Installe
 	handler := &inboundhttp.Handler{
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: associates, Events: pub, Clock: clock},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: associates, Events: pub, Clock: clock},
-		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock, IdleShare: idleShare, MeasuredRate: measuredRate},
-		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: installedCapacity, Catalogue: catalogue, MaxHoursPerShift: maxHoursPerShift},
+		ProposePathPlan:     &usecases.ProposePathPlan{Events: pub, Clock: clock, IdleShare: idleShare, MeasuredRate: measuredRate, Requirements: requirements},
+		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: shiftPlans, Events: pub, Clock: clock, InstalledCapacity: installedCapacity, Catalogue: catalogue, MaxHoursPerShift: maxHoursPerShift, Requirements: requirements},
 		AssignLabor:         &usecases.AssignLabor{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift, Catalogue: catalogue},
 		StartBreak:          &usecases.StartBreak{Associates: associates, Events: pub, Clock: clock},
 		EndBreak:            &usecases.EndBreak{Associates: associates, Events: pub, Clock: clock},
-		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: pub, Clock: clock, IdleShare: idleShare},
+		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: shiftPlans, Assignments: assignments, Events: pub, Clock: clock, IdleShare: idleShare, Requirements: requirements},
 		EndAssociateShift:   &usecases.EndAssociateShift{Associates: associates, Assignments: assignments, Events: pub, Clock: clock, MaxHoursPerShift: maxHoursPerShift},
 		Catalogue:           catalogue,
 		Readiness:           readiness,
 	}
 
-	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), "")), &harness{published: pub, readiness: readiness, clock: clock}
+	return httptest.NewServer(inboundhttp.NewRouter(handler, slog.New(slog.NewTextHandler(io.Discard, nil)), "")), &harness{published: pub, readiness: readiness, clock: clock, requirements: requirements}
 }
 
 // fixedIdleShareClient is a BDD-suite test double for
@@ -722,8 +723,9 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the proposal suggests (\d+) heads at resolved rate (\d+) from source "([^"]*)"$`, w.proposalSuggestsHeads)
 	sc.Step(`^the proposed heads are trimmed to (\d+) with a non-empty trim reason$`, w.proposedHeadsAreTrimmedWithNonEmptyTrimReason)
 
-	registerWave2(sc, w) // features_wave2_test.go
-	registerRules(sc, w) // steps_rules_test.go
+	registerWave2(sc, w)      // features_wave2_test.go
+	registerRules(sc, w)      // steps_rules_test.go
+	registerLabourPlan(sc, w) // steps_labour_plan_test.go
 }
 
 // TestFeatures runs every Gherkin feature under features/ as a Go test.

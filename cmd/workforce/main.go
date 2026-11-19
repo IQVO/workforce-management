@@ -12,6 +12,7 @@
 //
 //	DATABASE_URL                REQUIRED. Postgres DSN
 //	KAFKA_BROKERS               REQUIRED. Comma-separated brokers
+//	LABOUR_PLAN_CONSUMER_GROUP  REQUIRED. Stable group of the labour-plan consumer (ADR 0043)
 //	MIGRATIONS_DATABASE_URL     direct DSN for the boot migrations (default DATABASE_URL)
 //	EVENT_PUBLISHER             kafka (default). log is REJECTED at boot
 //	PATH_CATALOGUE_SOURCE       kafka (default). file is REJECTED at boot
@@ -38,6 +39,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	inbound "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
+	inboundkafka "github.com/claudioed/workforce-management/internal/adapters/inbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/clock"
 	outboundkafka "github.com/claudioed/workforce-management/internal/adapters/outbound/kafka"
 	"github.com/claudioed/workforce-management/internal/adapters/outbound/kafkacatalog"
@@ -152,7 +154,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 	logTopics(logger, cfg)
-
+	labourPlan, cancelLabourPlan := startLabourPlanConsumer(cfg, pool, repos.labourRequirements, repos.uow, logger)
+	defer cancelLabourPlan()
 	// readiness gates GET /readyz (ADR-0022 §graceful shutdown, ported
 	// from order-management's ADR-0025, grown by ADR-0038): the drain gate
 	// AND a Postgres ping AND a Kafka metadata check. Flipped not-ready as
@@ -160,20 +163,21 @@ func run(ctx context.Context) error {
 	readiness := buildReadiness(pool, cfg.brokers)
 
 	handler := newOLTPHandler(oltpHandlerDeps{
-		associates:       repos.associates,
-		shiftPlans:       repos.shiftPlans,
-		assignments:      repos.assignments,
-		publisher:        repos.publisher,
-		sysClock:         sysClock,
-		uow:              repos.uow,
-		measuredRate:     measuredRate,
-		idleShare:        idleShare,
-		breakerMetrics:   breakerMetrics,
-		maxHoursPerShift: settings.maxHoursPerShift,
-		catalogue:        catalogue,
-		readiness:        readiness,
-		idempotencyPool:  pool,
-		logger:           logger,
+		associates:         repos.associates,
+		shiftPlans:         repos.shiftPlans,
+		labourRequirements: repos.labourRequirements,
+		assignments:        repos.assignments,
+		publisher:          repos.publisher,
+		sysClock:           sysClock,
+		uow:                repos.uow,
+		measuredRate:       measuredRate,
+		idleShare:          idleShare,
+		breakerMetrics:     breakerMetrics,
+		maxHoursPerShift:   settings.maxHoursPerShift,
+		catalogue:          catalogue,
+		readiness:          readiness,
+		idempotencyPool:    pool,
+		logger:             logger,
 	})
 
 	server := &http.Server{
@@ -191,7 +195,7 @@ func run(ctx context.Context) error {
 
 	// Stopping the Kafka consumers is step 4 of the ADR-0022 §8 shutdown
 	// sequence, after the HTTP drain.
-	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate)
+	stopConsumers := consumerStopper(cancelCatalogueConsumer, kafkaCatalogue, cancelRateConsumer, kafkaMeasuredRate, cancelLabourPlan, labourPlan)
 
 	return serveWorkforce(ctx, logger, settings.httpAddr, server, readiness, repos.relay, stopConsumers, stopSweeper)
 }
@@ -211,7 +215,7 @@ func buildReadiness(pool *pgxpool.Pool, brokers []string) *inbound.Readiness {
 // consumes from. It creates none of them: the cluster broker auto-creates a
 // topic on the first write and /readyz does not depend on topics existing.
 func logTopics(logger *slog.Logger, cfg bootConfig) {
-	consumes := []string{kafkacatalog.Topic}
+	consumes := []string{kafkacatalog.Topic, inboundkafka.LabourPlanTopic}
 	if cfg.laborMode == laborModeKafkaCache {
 		consumes = append(consumes, laborperformancecache.Topic)
 	}
@@ -223,9 +227,11 @@ func logTopics(logger *slog.Logger, cfg bootConfig) {
 }
 
 // consumerStopper returns the step-4 shutdown action of ADR-0022 §8: cancel
-// each Kafka consumer's Run context, then release its reader. The consumers
-// are nil when their mode is not kafka.
-func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer) func() {
+// each Kafka consumer's Run context, then release its reader. The cache
+// consumers are nil when their mode is not kafka; the labour-plan consumer is
+// always on.
+func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog.Consumer, cancelRate context.CancelFunc, rate *laborperformancecache.Consumer,
+	cancelLabourPlan context.CancelFunc, labourPlan *inboundkafka.LabourPlanConsumer) func() {
 	return func() {
 		cancelCatalogue()
 		if catalogue != nil {
@@ -235,25 +241,30 @@ func consumerStopper(cancelCatalogue context.CancelFunc, catalogue *kafkacatalog
 		if rate != nil {
 			_ = rate.Close()
 		}
+		cancelLabourPlan()
+		if labourPlan != nil {
+			_ = labourPlan.Close()
+		}
 	}
 }
 
 // oltpHandlerDeps groups the inbound handler's wiring inputs.
 type oltpHandlerDeps struct {
-	associates       *postgres.AssociateRepo
-	shiftPlans       *postgres.ShiftPlanRepo
-	assignments      *postgres.AssignmentRepo
-	publisher        ports.EventPublisher
-	sysClock         clock.System
-	uow              ports.UnitOfWork
-	measuredRate     ports.MeasuredRateClient
-	idleShare        ports.IdleShareClient
-	breakerMetrics   resilience.StateRecorder
-	maxHoursPerShift float64
-	catalogue        ports.PathCatalogue
-	readiness        *inbound.Readiness
-	idempotencyPool  *pgxpool.Pool
-	logger           *slog.Logger
+	associates         *postgres.AssociateRepo
+	shiftPlans         *postgres.ShiftPlanRepo
+	labourRequirements ports.LabourRequirements
+	assignments        *postgres.AssignmentRepo
+	publisher          ports.EventPublisher
+	sysClock           clock.System
+	uow                ports.UnitOfWork
+	measuredRate       ports.MeasuredRateClient
+	idleShare          ports.IdleShareClient
+	breakerMetrics     resilience.StateRecorder
+	maxHoursPerShift   float64
+	catalogue          ports.PathCatalogue
+	readiness          *inbound.Readiness
+	idempotencyPool    *pgxpool.Pool
+	logger             *slog.Logger
 }
 
 // newOLTPHandler wires every use case into the inbound handler.
@@ -263,12 +274,12 @@ func newOLTPHandler(d oltpHandlerDeps) *inbound.Handler {
 	return &inbound.Handler{
 		StartAssociateShift: &usecases.StartAssociateShift{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		CertifyAssociate:    &usecases.CertifyAssociate{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
-		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow},
-		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, Catalogue: d.catalogue, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
+		ProposePathPlan:     &usecases.ProposePathPlan{Events: d.publisher, Clock: d.sysClock, MeasuredRate: d.measuredRate, IdleShare: d.idleShare, IdleShareTrimThreshold: idleShareTrimThreshold, UnitOfWork: d.uow, Requirements: d.labourRequirements},
+		CommitShiftPlan:     &usecases.CommitShiftPlan{ShiftPlans: d.shiftPlans, Events: d.publisher, Clock: d.sysClock, InstalledCapacity: installedCapacity, Catalogue: d.catalogue, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow, Requirements: d.labourRequirements},
 		AssignLabor:         &usecases.AssignLabor{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, Catalogue: d.catalogue, Metrics: newLaborMetrics(d.logger), UnitOfWork: d.uow},
 		StartBreak:          &usecases.StartBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
 		EndBreak:            &usecases.EndBreak{Associates: d.associates, Events: d.publisher, Clock: d.sysClock, UnitOfWork: d.uow},
-		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: d.shiftPlans, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, IdleShare: d.idleShare, UnitOfWork: d.uow},
+		GetStaffingGap:      &usecases.GetStaffingGap{ShiftPlans: d.shiftPlans, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, IdleShare: d.idleShare, UnitOfWork: d.uow, Requirements: d.labourRequirements},
 		EndAssociateShift:   &usecases.EndAssociateShift{Associates: d.associates, Assignments: d.assignments, Events: d.publisher, Clock: d.sysClock, MaxHoursPerShift: d.maxHoursPerShift, UnitOfWork: d.uow},
 		Catalogue:           d.catalogue,
 		// readiness backs GET /readyz (ADR-0022 §graceful shutdown):

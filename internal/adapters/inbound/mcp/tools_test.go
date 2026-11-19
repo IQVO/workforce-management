@@ -154,14 +154,14 @@ func TestProposePathHeads(t *testing.T) {
 		wantErr   bool
 		wantHeads int
 	}{
-		{"rounds up", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 100, PlannedRate: 30}, false, 4},
-		{"exact division", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 90, PlannedRate: 30}, false, 3},
-		{"zero charge -> zero heads", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 0, PlannedRate: 30}, false, 0},
-		{"missing buildingId rejected", proposeHeadsInput{BuildingId: "", PathId: "pack", Charge: 10, PlannedRate: 30}, true, 0},
-		{"missing pathId rejected", proposeHeadsInput{BuildingId: "B1", PathId: "", Charge: 10, PlannedRate: 30}, true, 0},
-		{"negative charge rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: -1, PlannedRate: 30}, true, 0},
-		{"zero rate rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 10, PlannedRate: 0}, true, 0},
-		{"negative rate rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 10, PlannedRate: -5}, true, 0},
+		{"rounds up", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(100), PlannedRate: 30}, false, 4},
+		{"exact division", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(90), PlannedRate: 30}, false, 3},
+		{"zero charge -> zero heads", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(0), PlannedRate: 30}, false, 0},
+		{"missing buildingId rejected", proposeHeadsInput{BuildingId: "", PathId: "pack", Charge: chargeOf(10), PlannedRate: 30}, true, 0},
+		{"missing pathId rejected", proposeHeadsInput{BuildingId: "B1", PathId: "", Charge: chargeOf(10), PlannedRate: 30}, true, 0},
+		{"negative charge rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(-1), PlannedRate: 30}, true, 0},
+		{"zero rate rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(10), PlannedRate: 0}, true, 0},
+		{"negative rate rejected", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(10), PlannedRate: -5}, true, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

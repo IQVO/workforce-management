@@ -70,11 +70,11 @@ func TestProposePathHeads_SiteCodeCanonicalBuildingIdDeprecatedAlias(t *testing.
 		wantKey   string
 		wantHeads int
 	}{
-		{"siteCode only", proposeHeadsInput{SiteCode: "WH1", PathId: "pack", Charge: 100, PlannedRate: 30}, "", "WH1", 4},
-		{"buildingId only (deprecated alias)", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: 100, PlannedRate: 30}, "", "B1", 4},
-		{"both equal", proposeHeadsInput{SiteCode: "WH1", BuildingId: "WH1", PathId: "pack", Charge: 90, PlannedRate: 30}, "", "WH1", 3},
-		{"both different is a conflict", proposeHeadsInput{SiteCode: "WH1", BuildingId: "B1", PathId: "pack", Charge: 100, PlannedRate: 30}, "different values", "", 0},
-		{"neither", proposeHeadsInput{PathId: "pack", Charge: 100, PlannedRate: 30}, "siteCode is required", "", 0},
+		{"siteCode only", proposeHeadsInput{SiteCode: "WH1", PathId: "pack", Charge: chargeOf(100), PlannedRate: 30}, "", "WH1", 4},
+		{"buildingId only (deprecated alias)", proposeHeadsInput{BuildingId: "B1", PathId: "pack", Charge: chargeOf(100), PlannedRate: 30}, "", "B1", 4},
+		{"both equal", proposeHeadsInput{SiteCode: "WH1", BuildingId: "WH1", PathId: "pack", Charge: chargeOf(90), PlannedRate: 30}, "", "WH1", 3},
+		{"both different is a conflict", proposeHeadsInput{SiteCode: "WH1", BuildingId: "B1", PathId: "pack", Charge: chargeOf(100), PlannedRate: 30}, "different values", "", 0},
+		{"neither", proposeHeadsInput{PathId: "pack", Charge: chargeOf(100), PlannedRate: 30}, "siteCode is required", "", 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

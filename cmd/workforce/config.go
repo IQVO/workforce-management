@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/claudioed/workforce-management/internal/composition"
 )
@@ -27,7 +28,13 @@ type bootConfig struct {
 	// meaningful in http mode.
 	laborMode    string
 	laborBaseURL string
+	// labourPlanGroup is LABOUR_PLAN_CONSUMER_GROUP: the stable, shared group
+	// of the always-on labour-plan consumer (ADR 0043).
+	labourPlanGroup string
 }
+
+// errNoLabourPlanGroup names the required group of the labour-plan consumer.
+var errNoLabourPlanGroup = errors.New("LABOUR_PLAN_CONSUMER_GROUP is required: the stable Kafka group id of the labour-plan consumer (ADR 0043); there is no default")
 
 // checkLaborPerformanceMode validates LABOR_PERFORMANCE_MODE (already
 // defaulted to kafka-cache by the caller).
@@ -52,10 +59,11 @@ func checkLaborPerformanceMode(mode, baseURL string) error {
 // boot, before it opens a connection or binds the listener.
 func loadBootConfig() (bootConfig, error) {
 	cfg := bootConfig{
-		databaseURL:  os.Getenv("DATABASE_URL"),
-		brokers:      composition.ParseBrokers(os.Getenv("KAFKA_BROKERS")),
-		laborMode:    envOrDefault("LABOR_PERFORMANCE_MODE", laborModeKafkaCache),
-		laborBaseURL: os.Getenv("LABOR_PERFORMANCE_BASE_URL"),
+		databaseURL:     os.Getenv("DATABASE_URL"),
+		brokers:         composition.ParseBrokers(os.Getenv("KAFKA_BROKERS")),
+		laborMode:       envOrDefault("LABOR_PERFORMANCE_MODE", laborModeKafkaCache),
+		laborBaseURL:    os.Getenv("LABOR_PERFORMANCE_BASE_URL"),
+		labourPlanGroup: strings.TrimSpace(os.Getenv("LABOUR_PLAN_CONSUMER_GROUP")),
 	}
 	var errs []error
 	if cfg.databaseURL == "" {
@@ -63,6 +71,9 @@ func loadBootConfig() (bootConfig, error) {
 	}
 	if len(cfg.brokers) == 0 {
 		errs = append(errs, composition.ErrNoBrokers)
+	}
+	if cfg.labourPlanGroup == "" {
+		errs = append(errs, errNoLabourPlanGroup)
 	}
 	errs = append(errs,
 		composition.CheckEventPublisher(os.Getenv("EVENT_PUBLISHER")),

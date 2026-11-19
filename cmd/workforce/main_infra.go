@@ -31,9 +31,12 @@ type workforceRepos struct {
 	associates  *postgres.AssociateRepo
 	shiftPlans  *postgres.ShiftPlanRepo
 	assignments *postgres.AssignmentRepo
-	publisher   ports.EventPublisher
-	relay       *postgres.OutboxRelay
-	uow         ports.UnitOfWork
+	// labourRequirements is the local copy of warehouse-planning's
+	// LabourPlanCommitted (ADR 0043).
+	labourRequirements *postgres.LabourRequirementRepo
+	publisher          ports.EventPublisher
+	relay              *postgres.OutboxRelay
+	uow                ports.UnitOfWork
 }
 
 // wireRepos builds the Postgres repositories, the transactional-outbox event
@@ -53,12 +56,13 @@ func wireRepos(pool *pgxpool.Pool, brokers []string, logger *slog.Logger) (*work
 		return nil, nil, errors.New("the outbox relay cannot be built: events would never leave the service")
 	}
 	return &workforceRepos{
-		associates:  postgres.NewAssociateRepo(pool),
-		shiftPlans:  shiftPlans,
-		assignments: postgres.NewAssignmentRepo(pool),
-		publisher:   built.Publisher,
-		relay:       built.Relay,
-		uow:         postgres.NewUnitOfWork(pool),
+		associates:         postgres.NewAssociateRepo(pool),
+		shiftPlans:         shiftPlans,
+		assignments:        postgres.NewAssignmentRepo(pool),
+		labourRequirements: postgres.NewLabourRequirementRepo(pool),
+		publisher:          built.Publisher,
+		relay:              built.Relay,
+		uow:                postgres.NewUnitOfWork(pool),
 	}, built.Close, nil
 }
 

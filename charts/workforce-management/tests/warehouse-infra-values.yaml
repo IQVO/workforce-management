@@ -6,6 +6,9 @@
 kafka:
   enabled: true
   brokers: kafka.warehouse-systems.svc.cluster.local:9092
+# IQVO/warehouse-infra#240 pins the labour-plan consumer group (ADR 0043).
+labourPlan:
+  consumerGroup: workforce-management-labour-plans
 config:
   httpAddr: ":8080"
   eventPublisher: "kafka"
