@@ -18,6 +18,12 @@
       "repo": "IQVO/workforce-management",
       "path": "apis/openapi-reports.yaml",
       "ref": "develop"
+    },
+    {
+      "local": "internal/adapters/inbound/kafka/testdata/warehouse-planning.asyncapi.yaml",
+      "repo": "IQVO/warehouse-planning",
+      "path": "apis/asyncapi.yaml",
+      "ref": "develop"
     }
   ]
 }
