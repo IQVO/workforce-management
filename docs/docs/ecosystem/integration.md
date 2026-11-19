@@ -22,6 +22,7 @@ two REST edges are selected by an env var. The table below lists every edge in
 | In (sync) | `labor-performance` | `GET /task-types/{taskType}/performance` when `ProposePathPlan` has no caller rate ([ADR 0012](../adr/0012-measured-rate-feed-for-propose-path-plan.md)) | `LABOR_PERFORMANCE_MODE=http` + `LABOR_PERFORMANCE_BASE_URL` (REST rollback) | `kafka-cache`; `permissive` is a boot error |
 | In (async) | `labor-performance` | Kafka `warehouse.labor-performance.events` (`TaskPerformanceRecorded`) into an in-memory cache ([ADR 0019](../adr/0019-labor-performance-cache-consumer.md), [ADR 0020](../adr/0020-idle-share-staffing-signal.md)) | `LABOR_PERFORMANCE_MODE=kafka-cache` | on |
 | In (async) | `process-path-management` | Kafka `warehouse.process-path-management.events` (`ProcessPathCreated`/`Updated`/`Deactivated`) into the in-memory process-path catalogue | always (`PATH_CATALOGUE_SOURCE` unset or `kafka`) | on; `file` is a boot error |
+| In (async) | `warehouse-planning` | Kafka `warehouse.warehouse-planning.events` (`LabourPlanCommitted`) into the Postgres labour-plan copy `labour_requirements` ([ADR 0043](../adr/0043-propose-heads-from-the-published-labour-plan.md)) | `LABOUR_PLAN_CONSUMER_GROUP` (required) | always on |
 
 The Helm chart defaults the installed-capacity edge to `http` against
 fulfillment-execution's in-cluster Service (`config.installedCapacityMode`,
@@ -129,6 +130,7 @@ kind-cluster broker works too.
 ```bash
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 # two path lines -> expect two messages
@@ -175,9 +177,10 @@ events.
 
 ## What is consumed
 
-Two sibling topics, both used only to build an in-memory
+Three sibling topics. Two only build an in-memory
 cache that the `cmd/workforce` process rebuilds from the earliest offset on
-every start (the catalogue always; the labor-performance cache unless the REST rollback is selected):
+every start (the catalogue always; the labor-performance cache unless the REST rollback is selected);
+the third feeds a durable Postgres copy:
 
 - **`warehouse.process-path-management.events`**
   (`internal/adapters/outbound/kafkacatalog`). It is the only catalogue
@@ -189,8 +192,17 @@ every start (the catalogue always; the labor-performance cache unless the REST r
   `LABOR_PERFORMANCE_MODE=kafka-cache`, the default). It supplies measured rates to
   `ProposePathPlan` and the observed idle share to `GetStaffingGap` and
   `ProposePathPlan`.
+- **`warehouse.warehouse-planning.events`**
+  (`internal/adapters/inbound/kafka.LabourPlanConsumer`, stable group
+  `LABOUR_PLAN_CONSUMER_GROUP`, [ADR 0043](../adr/0043-propose-heads-from-the-published-labour-plan.md)).
+  Only `com.warehouse.wes.warehouse-planning.labourplan.LabourPlanCommitted` is acted on;
+  the CloudEvents `id` is claimed and the `labour_requirements` row upserted under the
+  event's `version` guard in one unit of work; poison goes to
+  `warehouse.warehouse-planning.events.dlq`. It supplies the heads of a proposal made
+  from the labour plan and the optional `requiredHeads` on staffing-gap and committed
+  plan lines.
 
-Both consumers decode every message with the CloudEvents SDK, dispatch on the
+The two cache consumers decode every message with the CloudEvents SDK, dispatch on the
 full `type` (`com.warehouse.wes.process-path-management.processpath.ProcessPathCreated`
 / `Updated` / `Deactivated` and
 `com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded`), and

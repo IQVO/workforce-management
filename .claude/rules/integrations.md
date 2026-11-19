@@ -83,9 +83,17 @@ This service publishes `ShiftPlanCommitted` to the shared warehouse-systems
 Kafka broker; `wes-work-planning` projects it into its own
 `LaborPlanObserved` read model, keyed by `path_id`, and `warehouse-planning`'s
 labor-capacity consumer (group `warehouse-planning-labor-capacity`) registers
-it as a labor capacity constraint. On the consuming side,
-the only inbound topics are the two cache feeds above
-(`kafkacatalog`, `laborperformancecache`); neither writes to Postgres.
+it as a labor capacity constraint. On the consuming side, the two cache feeds
+above (`kafkacatalog`, `laborperformancecache`) never write to Postgres; the
+third inbound topic, warehouse-planning's `warehouse.warehouse-planning.events`,
+feeds the durable labour-plan consumer (`inbound/kafka.LabourPlanConsumer`,
+ADR 0043): stable group `LABOUR_PLAN_CONSUMER_GROUP` (REQUIRED, no default,
+chart `labourPlan.consumerGroup`), only `LabourPlanCommitted` acted on, claim
+on the CloudEvents id (`labour_plan_consumed_events`) + version-guarded upsert
+of `labour_requirements` in one unit of work, poison messages dead-lettered to
+`<topic>.dlq`. Only cmd/workforce runs it; cmd/mcp and cmd/a2a read the copy.
+Its contract is the pinned copy of warehouse-planning's AsyncAPI
+(`internal/adapters/inbound/kafka/testdata/warehouse-planning.asyncapi.yaml`).
 
 - **Topic**: `warehouse.workforce.events`. **Broker**: `KAFKA_BROKERS`
   (REQUIRED, no default: the service does not boot without it, ADR-0038; the
@@ -144,8 +152,8 @@ wire: its first segment IS the site code, formerly called the building id),
 identical to the Kafka key. `time` is the domain occurred-at, UTC. `dataschema` is
 `...:events:...` on the integration topic and `...:analytics:...` on the
 analytics topic. Consumers dispatch on the FULL `type`, ignore unknown types,
-dedupe on `id`, and DLQ (analytics projector) or WARN-and-skip (catalogue /
-labor-performance caches) any message that fails CloudEvents validation.
+dedupe on `id`, and DLQ (analytics projector, labour-plan consumer) or
+WARN-and-skip (catalogue / labor-performance caches) any message that fails CloudEvents validation.
 
 The **full CloudEvents domain-event catalog** (all ten events, reverse-DNS
 `type` naming `com.warehouse.wes.workforce-management.<entity>.<EventName>`)

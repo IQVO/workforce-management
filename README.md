@@ -152,6 +152,7 @@ raised before the listener binds.
 docker compose up -d --wait          # Postgres 16 on :5432 and a single-node Kafka (KRaft) on :9092
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce                # applies migrations, then serves on :8080
 ```
 
@@ -169,6 +170,7 @@ Env vars:
 |-----|----------|---------|---------|
 | `DATABASE_URL` | **yes** | — | Postgres connection string; boot error `DATABASE_URL is required: this context runs on real Postgres` without it |
 | `KAFKA_BROKERS` | **yes** | — | comma-separated broker list; boot error `KAFKA_BROKERS is required: this context runs on real Kafka` without it. Used by the outbox relay, the catalogue and labor-performance consumers and `/readyz` |
+| `LABOUR_PLAN_CONSUMER_GROUP` | **yes** | — | stable consumer group of the labour-plan copy on `warehouse.warehouse-planning.events` (`LabourPlanCommitted` only; poison to `warehouse.warehouse-planning.events.dlq`; [ADR 0043](docs/docs/adr/0043-propose-heads-from-the-published-labour-plan.md)); chart `labourPlan.consumerGroup`, default `workforce-management-labour-plans`; boot error without it |
 | `HTTP_ADDR` | no | `:8080` | listen address |
 | `MIGRATIONS_PATH` | no | `migrations` | path to golang-migrate SQL files |
 | `MIGRATIONS_DATABASE_URL` | no | `DATABASE_URL` | direct (non-PgBouncer) connection string used ONLY by the boot-time golang-migrate step ([ADR-0025](docs/docs/adr/0025-migrations-direct-postgres-connection.md)); the request pool always uses `DATABASE_URL` |
@@ -211,6 +213,7 @@ integration topic and publisher are left untouched.
 
 # 2. OLTP service, fanning events onto the analytics topic:
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 # 3. Projector — the ONLY writer of the analytical DB. Runs migrations/analytics
@@ -501,6 +504,7 @@ Smoke test against the shared broker:
 # shared broker reachable at localhost:9092 (warehouse-infra kind cluster)
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 curl -X POST localhost:8080/shift-plans \
