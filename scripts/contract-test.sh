@@ -76,7 +76,10 @@ go build -o "$BIN" ./cmd/workforce
 # catalogue is empty for the whole run. That is what the operations excluded
 # below already assumed (see the exclusions), and the boot does not wait for
 # a non-empty catalogue.
-LOG_LEVEL="${LOG_LEVEL:-warn}" HTTP_ADDR="127.0.0.1:${PORT}" "$BIN" &
+# LABOUR_PLAN_CONSUMER_GROUP is required at boot (ADR 0043); the hermetic broker
+# has no LabourPlanCommitted, so the copy stays empty for the whole run.
+LOG_LEVEL="${LOG_LEVEL:-warn}" HTTP_ADDR="127.0.0.1:${PORT}" \
+  LABOUR_PLAN_CONSUMER_GROUP="${LABOUR_PLAN_CONSUMER_GROUP:-workforce-contract-labour-plans}" "$BIN" &
 SERVER_PID=$!
 trap 'kill "$SERVER_PID" 2>/dev/null || true' EXIT
 

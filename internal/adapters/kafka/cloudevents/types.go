@@ -32,4 +32,8 @@ const (
 	TypeProcessPathUpdated      = "com.warehouse.wes.process-path-management.processpath.ProcessPathUpdated"
 	TypeProcessPathDeactivated  = "com.warehouse.wes.process-path-management.processpath.ProcessPathDeactivated"
 	TypeTaskPerformanceRecorded = "com.warehouse.wes.labor-performance.performance.TaskPerformanceRecorded"
+	// TypeLabourPlanCommitted is warehouse-planning's published labour
+	// requirement per site, shift and path (its ADR 0023; consumed here by
+	// ADR 0043). The only type the labour-plan consumer acts on.
+	TypeLabourPlanCommitted = "com.warehouse.wes.warehouse-planning.labourplan.LabourPlanCommitted"
 )

@@ -109,6 +109,10 @@ spec:
             # switch.
             - name: KAFKA_BROKERS
               value: {{ .Values.kafka.brokers | quote }}
+            # The labour-plan consumer's stable, shared group (ADR 0043):
+            # mandatory, no default in the binary; only this api runs it.
+            - name: LABOUR_PLAN_CONSUMER_GROUP
+              value: {{ .Values.labourPlan.consumerGroup | quote }}
             {{- if .Values.otel.enabled }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.otel.endpoint | quote }}

@@ -247,6 +247,15 @@ kafka:
   enabled: true
   brokers: ""
 
+# The api's labour-plan consumer (ADR 0043): it keeps labour_requirements, the
+# local copy of warehouse-planning's LabourPlanCommitted, on a STABLE, shared
+# Kafka consumer group. Rendered as LABOUR_PLAN_CONSUMER_GROUP into the api
+# Deployment only (cmd/mcp and cmd/a2a read the copy and never consume).
+# cmd/workforce refuses to boot without it and the chart refuses to render an
+# empty value. warehouse-infra pins the same group.
+labourPlan:
+  consumerGroup: "workforce-management-labour-plans"
+
 # OpenTelemetry. Traces and metrics are PUSHED over OTLP/gRPC to a Collector;
 # there is no scrape endpoint on the pod. Export is non-blocking, so pointing
 # this at an unreachable Collector degrades to "telemetry dropped", never to a

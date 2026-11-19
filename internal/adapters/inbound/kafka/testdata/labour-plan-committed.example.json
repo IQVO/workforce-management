@@ -1,0 +1,22 @@
+{
+  "specversion": "1.0",
+  "id": "7f1c2a9e-3b4d-4e5f-8a6b-1c2d3e4f5a6b",
+  "source": "/warehouse/warehouse-planning",
+  "type": "com.warehouse.wes.warehouse-planning.labourplan.LabourPlanCommitted",
+  "subject": "WH1/2026-11-18-day/PICK",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:warehouse-planning:events:LabourPlanCommitted:v1",
+  "time": "2026-11-18T05:30:00Z",
+  "data": {
+    "site_id": "WH1",
+    "shift_id": "2026-11-18-day",
+    "path_id": "PICK",
+    "planned_heads": 6,
+    "rate_units_per_hour": 120,
+    "hours": 8,
+    "installed_stations": 10,
+    "shift_start": "2026-11-18T06:00:00Z",
+    "heads_source": "forecast",
+    "version": 2
+  }
+}

@@ -44,6 +44,7 @@ docker compose up -d --wait   # Postgres 16 on :5432, Kafka on :9092
 
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 export INSTALLED_CAPACITY_MODE=http
 export FULFILLMENT_EXECUTION_BASE_URL=http://localhost:8000/api/fulfillment-execution   # e.g. via the kind cluster's Kong
 go run ./cmd/workforce   # applies migrations, then serves on :8080

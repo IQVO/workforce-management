@@ -18,6 +18,7 @@ func setBootEnv(t *testing.T) {
 	t.Setenv("PATH_CATALOGUE_SOURCE", "kafka")
 	t.Setenv("LABOR_PERFORMANCE_MODE", "kafka-cache")
 	t.Setenv("LABOR_PERFORMANCE_BASE_URL", "")
+	t.Setenv("LABOUR_PLAN_CONSUMER_GROUP", "workforce-management-labour-plans")
 }
 
 func freeAddr(t *testing.T) string {
@@ -85,6 +86,8 @@ func TestLoadBootConfigRefusesEachMissingOrRejectedValue(t *testing.T) {
 		{"permissive labor-performance", "LABOR_PERFORMANCE_MODE", "permissive", "LABOR_PERFORMANCE_MODE=permissive is not supported: this context runs on real Kafka"},
 		{"unknown labor-performance", "LABOR_PERFORMANCE_MODE", "off", `unknown LABOR_PERFORMANCE_MODE "off"`},
 		{"http without base url", "LABOR_PERFORMANCE_MODE", "http", "LABOR_PERFORMANCE_MODE=http requires LABOR_PERFORMANCE_BASE_URL"},
+		{"labour-plan group unset", "LABOUR_PLAN_CONSUMER_GROUP", "", "LABOUR_PLAN_CONSUMER_GROUP is required: the stable Kafka group id of the labour-plan consumer"},
+		{"labour-plan group blank", "LABOUR_PLAN_CONSUMER_GROUP", "   ", "LABOUR_PLAN_CONSUMER_GROUP is required"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -108,11 +111,12 @@ func TestLoadBootConfigReportsEveryProblemAtOnce(t *testing.T) {
 	t.Setenv("EVENT_PUBLISHER", "log")
 	t.Setenv("PATH_CATALOGUE_SOURCE", "file")
 	t.Setenv("LABOR_PERFORMANCE_MODE", "permissive")
+	t.Setenv("LABOUR_PLAN_CONSUMER_GROUP", "")
 	_, err := loadBootConfig()
 	if err == nil {
 		t.Fatal("want a boot error")
 	}
-	for _, name := range []string{"DATABASE_URL", "KAFKA_BROKERS", "EVENT_PUBLISHER", "PATH_CATALOGUE_SOURCE", "LABOR_PERFORMANCE_MODE"} {
+	for _, name := range []string{"DATABASE_URL", "KAFKA_BROKERS", "EVENT_PUBLISHER", "PATH_CATALOGUE_SOURCE", "LABOR_PERFORMANCE_MODE", "LABOUR_PLAN_CONSUMER_GROUP"} {
 		if !strings.Contains(err.Error(), name) {
 			t.Errorf("the error does not name %s: %v", name, err)
 		}

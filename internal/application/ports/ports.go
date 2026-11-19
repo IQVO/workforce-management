@@ -11,6 +11,7 @@ import (
 
 	"github.com/claudioed/workforce-management/internal/domain/assignment"
 	"github.com/claudioed/workforce-management/internal/domain/associate"
+	"github.com/claudioed/workforce-management/internal/domain/labourplan"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
@@ -175,13 +176,29 @@ type UnitOfWork interface {
 
 // ProcessedEvents is the idempotency gate for at-least-once event consumption:
 // it records which event ids have already been handled so a redelivery is a
-// no-op. It is used by the analytics projector's inbound consumer; the OLTP
-// write path does not depend on it.
+// no-op. It is used by the analytics projector's inbound consumer and by the
+// labour-plan consumer (ADR 0043), whose claim joins the UnitOfWork bound to
+// ctx so the claim and the copy's upsert commit together; the OLTP REST write
+// path does not depend on it.
 type ProcessedEvents interface {
 	// MarkProcessed records eventId if absent, returning true iff this call
 	// newly recorded it (so the caller should process the event) and false if
 	// it was already seen (a duplicate to skip).
 	MarkProcessed(ctx context.Context, eventId string) (bool, error)
+}
+
+// LabourRequirements is this context's local copy of warehouse-planning's
+// LabourPlanCommitted (ADR 0043 decision 1): one row per (site_code,
+// shift_id, path_id). It is written only by the labour-plan consumer and
+// read by ProposePathPlan, GetStaffingGap and CommitShiftPlan.
+type LabourRequirements interface {
+	// Find returns the stored requirement for key; found is false (with a
+	// nil error) when none has been received for it.
+	Find(ctx context.Context, key labourplan.Key) (req labourplan.Requirement, found bool, err error)
+	// Save stores r, joining the UnitOfWork bound to ctx when there is one.
+	// The store enforces the version guard again (a stored row is replaced
+	// only by a greater version), so a concurrent older write never wins.
+	Save(ctx context.Context, r labourplan.Requirement) error
 }
 
 // Clock supplies the current time so domain logic never calls time.Now()

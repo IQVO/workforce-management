@@ -20,6 +20,7 @@ import (
 	"github.com/cucumber/godog"
 
 	inboundhttp "github.com/claudioed/workforce-management/internal/adapters/inbound/http"
+	"github.com/claudioed/workforce-management/internal/adapters/outbound/memory"
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
@@ -30,6 +31,9 @@ type harness struct {
 	published *recordingPublisher
 	readiness *inboundhttp.Readiness
 	clock     *fixedClock
+	// requirements is the local copy of warehouse-planning's labour plan
+	// (ADR 0043) the scenarios seed, as the consumer would.
+	requirements *memory.LabourRequirementRepo
 }
 
 // recordingPublisher forwards to the production-shaped log publisher and

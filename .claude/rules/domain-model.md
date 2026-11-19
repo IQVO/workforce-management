@@ -97,9 +97,15 @@ raised and consumed in-process.
    `plannedRate` is optional — omit it (or send `<= 0`) to fall back to a
    real measured rate from labor-performance (ADR-0012); response includes
    `resolvedRate` + `rateSource` (`"caller"` or `"measured"`).
+   Without `charge` and with `shiftId` (ADR 0043) the proposal is the
+   published `planned_heads` from the labour-plan copy (`rateSource`
+   `"labour-plan"`, no idle-share trim, no row = 404 `labour-plan-not-found`);
+   the charge-based form is deprecated but unchanged.
 4. `CommitShiftPlan(siteCode, pathPlans) -> ShiftPlan` — validates
    `plannedHeads <= installedStations` AND `plannedHeads <= live installed
-   capacity`; a human-initiated commit, not automatic.
+   capacity`; a human-initiated commit, not automatic. Committed lines (and
+   staffing-gap lines) carry an optional `requiredHeads` from the labour-plan
+   copy; a line is never refused for differing from it (ADR 0043).
 5. `AssignLabor(associateId, pathId) -> LaborAssignment` — validates
    certification, ends any prior active assignment for this associate.
 6. `StartBreak(associateId)` / `EndBreak(associateId)`

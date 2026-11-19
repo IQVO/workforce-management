@@ -219,6 +219,7 @@ func (e env) apply(t *testing.T) {
 	t.Setenv("EVENT_PUBLISHER", "kafka")
 	t.Setenv("PATH_CATALOGUE_SOURCE", "kafka")
 	t.Setenv("LABOR_PERFORMANCE_MODE", "kafka-cache")
+	t.Setenv("LABOUR_PLAN_CONSUMER_GROUP", fmt.Sprintf("workforce-itest-labour-plans-%d", time.Now().UnixNano()))
 	t.Setenv("INSTALLED_CAPACITY_MODE", "http")
 	t.Setenv("FULFILLMENT_EXECUTION_BASE_URL", e.capacity)
 	t.Setenv("HTTP_ADDR", e.addr)
