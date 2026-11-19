@@ -153,3 +153,21 @@ different request → 409, missing header → 400, five goroutines racing one ke
 exactly one effect, a cached business error, the transaction being bound into
 the request context, and a panic rolling back with nothing cached — for both
 routes (`internal/adapters/inbound/http/idempotency_integration_test.go`).
+
+## Addendum (2026-11-18) — a 5xx is never stored
+
+The Decision above says "every normal response is cached". The fleet rule is
+narrower: a 5xx answer is **never** stored under the key. The middleware used
+to store it (a `503 installed-capacity-unavailable` was replayed for the whole
+TTL, 24 h, even after fulfillment-execution recovered). It now rolls the whole
+transaction back on any status `>= 500` — the key row and every write the
+handler made go with it — and still writes the 5xx itself to the client. A
+retry under the same key runs the handler again; a different body under that
+key is a new request, not a 409. A concurrent request with the same key is
+still serialised by the primary-key unique-index lock described above: it
+waits for the first transaction, and when that one fails with a 5xx it
+proceeds as a fresh request (it never replays the failure and never runs
+beside the first). 2xx and 4xx behaviour is unchanged, and a panic was and
+remains rolled back and never cached. Tests:
+`internal/adapters/inbound/http/idempotency_5xx_test.go` (unit, fake
+transaction) and `idempotency_5xx_integration_test.go` (real Postgres).

@@ -353,7 +353,8 @@ curl -X POST localhost:8080/paths/pack/plan-proposals \
 # printable ASCII is 400 idempotency-key-invalid, the same key with a
 # different method/path/body is 409 idempotency-key-reused, and a retry with
 # the same key + request replays the stored response with
-# "Idempotency-Replayed: true". The key is global (not per route).
+# "Idempotency-Replayed: true" (a 2xx or 4xx; a 5xx is never stored, so a
+# retry after one runs again). The key is global (not per route).
 curl -X POST localhost:8080/shift-plans \
   -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
   -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[

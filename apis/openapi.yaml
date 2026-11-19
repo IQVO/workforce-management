@@ -1053,6 +1053,8 @@ components:
         request (same body) — the first response, success or business
         error, is stored and replayed byte-for-byte for the key's TTL
         (24h by default) — and a NEW key for each new logical request.
+        A 5xx answer is never stored: the request's writes and the key roll
+        back, so a retry with the same key runs again.
         Reusing a key with a different request (method, path or body) is
         rejected with 409 idempotency-key-reused. A key that is not 1-128
         printable ASCII characters that start and end with a visible

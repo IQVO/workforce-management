@@ -147,5 +147,5 @@ changes, update `apis/openapi.yaml` AND regenerate
 — see the top-level CLAUDE.md's Definition of Done.
 
 Fleet REST guideline (ADR-0040): every POST is idempotent with a fresh
-`Idempotency-Key`; replays carry `Idempotency-Replayed: true`; key reuse
+`Idempotency-Key`; replays carry `Idempotency-Replayed: true` (a 5xx or a panic is never stored: a retry runs again); key reuse
 with a different request is 409 `idempotency-key-reused` (never 422).

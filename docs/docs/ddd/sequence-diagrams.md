@@ -105,7 +105,8 @@ breaker around the capacity client. The plan key is the canonical `siteCode`;
 `buildingId` is accepted as a deprecated alias (same value, same
 `building_id` column) and each published line message carries `site_code` next
 to `building_id` ([ADR 0035](../adr/0035-sitecode-converges-building-id.md)). Every normal response, including a 4xx,
-is stored against the key; only a panic rolls the key back. The wrapped
+is stored against the key; a 5xx answer and a panic are never stored — the
+whole transaction rolls back, the key with it, and a retry runs again. The wrapped
 handler runs inside a savepoint: a 2xx releases it, any other status rolls
 back to it first, so a failed request's domain writes and outbox rows are
 discarded (no partial write) while the idempotency row still records the
