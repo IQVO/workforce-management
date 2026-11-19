@@ -19,6 +19,11 @@ import (
 //
 // SiteCode is the site the ActiveHeads were counted at (ADR 0034): empty
 // means the gap is unscoped, i.e. fleet-wide across every site.
+//
+// RequiredHeads is the heads warehouse-planning published for this line
+// (ADR 0043 decision 4), read from the local copy by the plan's site code,
+// shift and path: nil when no row exists. Pure surfacing next to the
+// committed PlannedHeads; Understaffed still compares active with planned.
 type StaffingGap struct {
 	PathId          shared.PathId
 	PlannedHeads    int
@@ -26,6 +31,7 @@ type StaffingGap struct {
 	Understaffed    bool
 	ObservedIdlePct *float64
 	SiteCode        shared.SiteCode
+	RequiredHeads   *int
 }
 
 // GetStaffingGap computes the staffing gap for a path within a building's
@@ -57,6 +63,9 @@ type GetStaffingGap struct {
 	// nothing, so the scope is trivial, but wrapping it keeps every
 	// publishing use case uniform: the outbox row commits on its own.
 	UnitOfWork ports.UnitOfWork
+	// Requirements surfaces RequiredHeads from the local copy of
+	// warehouse-planning's labour plan (ADR 0043); nil = never surfaced.
+	Requirements ports.LabourRequirements
 }
 
 // Execute computes the unscoped (fleet-wide) gap for pathId within
@@ -151,6 +160,10 @@ func (uc *GetStaffingGap) gapForLine(ctx context.Context, sp *shiftplan.ShiftPla
 	if err != nil {
 		return StaffingGap{}, nil, err
 	}
+	required, err := requiredHeadsFor(ctx, uc.Requirements, sp.SiteCode(), sp.ShiftId(), pathId)
+	if err != nil {
+		return StaffingGap{}, nil, err
+	}
 
 	gap := StaffingGap{
 		PathId:          pathId,
@@ -159,6 +172,7 @@ func (uc *GetStaffingGap) gapForLine(ctx context.Context, sp *shiftplan.ShiftPla
 		Understaffed:    activeHeads < plannedHeads,
 		ObservedIdlePct: uc.observedIdlePct(ctx, pathId),
 		SiteCode:        siteCode,
+		RequiredHeads:   required,
 	}
 
 	var event shared.DomainEvent

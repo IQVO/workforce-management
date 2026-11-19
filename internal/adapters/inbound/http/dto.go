@@ -89,11 +89,15 @@ type shiftPlanResponse struct {
 	Lines      []pathPlanLineResp `json:"lines"`
 }
 
+// pathPlanLineResp's RequiredHeads is the heads warehouse-planning published
+// for this line (ADR 0043 decision 4), omitted when none was published. It is
+// shown next to the commitment, never enforced against it.
 type pathPlanLineResp struct {
-	PathId       string  `json:"pathId"`
-	PlannedHeads int     `json:"plannedHeads"`
-	PlannedRate  float64 `json:"plannedRate"`
-	PlannedHours float64 `json:"plannedHours"`
+	PathId        string  `json:"pathId"`
+	PlannedHeads  int     `json:"plannedHeads"`
+	PlannedRate   float64 `json:"plannedRate"`
+	PlannedHours  float64 `json:"plannedHours"`
+	RequiredHeads *int    `json:"requiredHeads,omitempty"`
 }
 
 type assignLaborRequest struct {
@@ -124,6 +128,9 @@ type staffingGapResponse struct {
 	// Deprecated: use ObservedIdleShare; same fraction value.
 	ObservedIdlePct *float64 `json:"observedIdlePct,omitempty"`
 	SiteCode        string   `json:"siteCode,omitempty"`
+	// RequiredHeads is warehouse-planning's published requirement for this
+	// line (ADR 0043), omitted when none was published.
+	RequiredHeads *int `json:"requiredHeads,omitempty"`
 }
 
 func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
@@ -135,6 +142,7 @@ func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
 		ObservedIdleShare: g.ObservedIdlePct,
 		ObservedIdlePct:   g.ObservedIdlePct,
 		SiteCode:          string(g.SiteCode),
+		RequiredHeads:     g.RequiredHeads,
 	}
 }
 

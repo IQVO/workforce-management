@@ -50,6 +50,10 @@ type CommitShiftPlan struct {
 	// The integration publisher re-reads the saved plan while encoding, so
 	// the Publish MUST run inside the same scope as the Save.
 	UnitOfWork ports.UnitOfWork
+	// Requirements is the local copy of warehouse-planning's labour plan,
+	// read by RequiredHeads to show the requirement next to each committed
+	// line (ADR 0043 decision 4). Execute never reads it; nil = none shown.
+	Requirements ports.LabourRequirements
 }
 
 // Execute resolves every line's path to its required capabilities,

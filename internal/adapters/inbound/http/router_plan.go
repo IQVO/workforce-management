@@ -130,14 +130,25 @@ func (h *Handler) commitShiftPlan(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The plan is committed: the requirement is only shown next to each
+	// line (ADR 0043 decision 4), never compared with it.
+	required, err := h.CommitShiftPlan.RequiredHeads(r.Context(), sp)
+	if err != nil {
+		writeError(w, r, statusFor(err), err)
+		return
+	}
 	respLines := make([]pathPlanLineResp, 0, len(sp.Lines()))
 	for _, l := range sp.Lines() {
-		respLines = append(respLines, pathPlanLineResp{
+		line := pathPlanLineResp{
 			PathId:       string(l.PathId),
 			PlannedHeads: l.PlannedHeads,
 			PlannedRate:  l.PlannedRate,
 			PlannedHours: l.PlannedHours,
-		})
+		}
+		if heads, ok := required[l.PathId]; ok {
+			line.RequiredHeads = &heads
+		}
+		respLines = append(respLines, line)
 	}
 	w.Header().Set("Location", fmt.Sprintf("/shift-plans/%s/%s", sp.SiteCode(), sp.ShiftId()))
 	writeJSON(w, http.StatusCreated, shiftPlanResponse{
