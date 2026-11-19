@@ -18,8 +18,10 @@ import (
 // always on (Kafka is part of the runtime, ADR-0038) and only this API binary
 // starts it: cmd/mcp and cmd/a2a read the copy and never consume. The claim on
 // the CloudEvents id and the upsert share one unit of work. The returned
-// consumer is closed by the step-4 shutdown action (consumerStopper).
-func startLabourPlanConsumer(ctx context.Context, cfg bootConfig, pool *pgxpool.Pool, requirements ports.LabourRequirements, uow ports.UnitOfWork, logger *slog.Logger) *inboundkafka.LabourPlanConsumer {
+// cancel stops its Run goroutine; the step-4 shutdown action
+// (consumerStopper) cancels it and closes the consumer.
+func startLabourPlanConsumer(cfg bootConfig, pool *pgxpool.Pool, requirements ports.LabourRequirements, uow ports.UnitOfWork, logger *slog.Logger) (*inboundkafka.LabourPlanConsumer, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(context.Background())
 	record := &usecases.RecordLabourRequirement{
 		Requirements: requirements,
 		Processed:    postgres.NewLabourPlanConsumedEvents(pool),
@@ -32,5 +34,5 @@ func startLabourPlanConsumer(ctx context.Context, cfg bootConfig, pool *pgxpool.
 			logger.Error("labour-plan consumer stopped: the labour-plan copy is no longer updated", "error", err)
 		}
 	}()
-	return consumer
+	return consumer, cancel
 }

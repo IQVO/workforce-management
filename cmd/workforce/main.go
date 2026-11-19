@@ -154,13 +154,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 	logTopics(logger, cfg)
-
-	// The labour-plan consumer (ADR 0043) is always on; its Run goroutine
-	// is cancelled and its reader closed in step 4 of the shutdown.
-	labourPlanCtx, cancelLabourPlan := context.WithCancel(context.Background())
+	labourPlan, cancelLabourPlan := startLabourPlanConsumer(cfg, pool, repos.labourRequirements, repos.uow, logger)
 	defer cancelLabourPlan()
-	labourPlan := startLabourPlanConsumer(labourPlanCtx, cfg, pool, repos.labourRequirements, repos.uow, logger)
-
 	// readiness gates GET /readyz (ADR-0022 §graceful shutdown, ported
 	// from order-management's ADR-0025, grown by ADR-0038): the drain gate
 	// AND a Postgres ping AND a Kafka metadata check. Flipped not-ready as
