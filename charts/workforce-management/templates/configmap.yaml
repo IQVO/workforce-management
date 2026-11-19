@@ -26,3 +26,6 @@ data:
   FULFILLMENT_EXECUTION_BASE_URL: {{ .Values.config.fulfillmentExecutionBaseUrl | default (printf "http://fulfillment-execution.%s.svc.cluster.local:80" .Release.Namespace) | quote }}
   # KAFKA_BROKERS is mandatory and always rendered (ADR-0038).
   KAFKA_BROKERS: {{ .Values.kafka.brokers | quote }}
+  # LABOUR_PLAN_CONSUMER_GROUP is mandatory for cmd/workforce (ADR 0043); the
+  # api Deployment also sets it explicitly. Only the api mounts this ConfigMap.
+  LABOUR_PLAN_CONSUMER_GROUP: {{ .Values.labourPlan.consumerGroup | quote }}

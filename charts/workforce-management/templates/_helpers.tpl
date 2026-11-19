@@ -137,6 +137,17 @@ instead of crash-looping.
 {{- end -}}
 
 {{/*
+The api's labour-plan consumer is always on (ADR 0043): cmd/workforce exits at
+boot without LABOUR_PLAN_CONSUMER_GROUP, a stable Kafka group id. A blank
+labourPlan.consumerGroup fails the render instead of crash-looping the pod.
+*/}}
+{{- define "workforce-management.requireLabourPlan" -}}
+{{- if not (trim (toString (default "" .Values.labourPlan.consumerGroup))) -}}
+{{- fail "labourPlan.consumerGroup is empty: cmd/workforce exits at boot without LABOUR_PLAN_CONSUMER_GROUP, the stable Kafka group of its labour-plan consumer (ADR 0043)." -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
 Every render-time requirement of the real runtime, in one include. The api
 Deployment (always rendered) includes it, so a mis-set release fails
 `helm template` / `helm install` whichever component is enabled.
@@ -144,6 +155,7 @@ Deployment (always rendered) includes it, so a mis-set release fails
 {{- define "workforce-management.requireRealRuntime" -}}
 {{- include "workforce-management.requireDatabase" . -}}
 {{- include "workforce-management.requireKafka" . -}}
+{{- include "workforce-management.requireLabourPlan" . -}}
 {{- include "workforce-management.requireGracePeriod" . -}}
 {{- include "workforce-management.requireNoInMemoryEnv" . -}}
 {{- if .Values.analytics.enabled -}}

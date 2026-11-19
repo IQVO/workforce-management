@@ -51,6 +51,12 @@ grep -A3 'envFrom:' <<<"$api_deployment" | grep -q "name: $configmap_name" \
 [[ "$(env_value "$api_deployment" EVENT_PUBLISHER)" == "kafka" ]] || fail "EVENT_PUBLISHER must default to kafka"
 grep -q '^  EVENT_PUBLISHER: "kafka"' <<<"$configmap" || fail "the ConfigMap must carry EVENT_PUBLISHER=kafka"
 grep -q '^  KAFKA_BROKERS: "kafka.example.invalid:9092"' <<<"$configmap" || fail "the ConfigMap must carry KAFKA_BROKERS"
+# ADR 0043: the api's labour-plan consumer runs on the stable group of
+# labourPlan.consumerGroup, defaulting to the group warehouse-infra pins.
+[[ "$(env_value "$api_deployment" LABOUR_PLAN_CONSUMER_GROUP)" == "workforce-management-labour-plans" ]] || fail "LABOUR_PLAN_CONSUMER_GROUP must default to workforce-management-labour-plans (the group warehouse-infra pins)"
+grep -q '^  LABOUR_PLAN_CONSUMER_GROUP: "workforce-management-labour-plans"' <<<"$configmap" || fail "the ConfigMap must carry LABOUR_PLAN_CONSUMER_GROUP"
+regrouped="$(render --set labourPlan.consumerGroup=g-labour --show-only templates/deployment.yaml)"
+[[ "$(env_value "$regrouped" LABOUR_PLAN_CONSUMER_GROUP)" == "g-labour" ]] || fail "labourPlan.consumerGroup does not reach LABOUR_PLAN_CONSUMER_GROUP"
 grep -A4 'name: DATABASE_URL$' <<<"$api_deployment" | grep -q 'secretKeyRef:' || fail "DATABASE_URL must come from a Secret (secretKeyRef)"
 if grep -qE '^  (MIGRATIONS_)?DATABASE_URL:' <<<"$configmap"; then fail "a DSN must never land in the ConfigMap"; fi
 # warehouse-infra still passes the pre-ADR-0038 switch kafka.enabled=true: it must keep rendering.
@@ -150,6 +156,19 @@ for var in DATABASE_URL KAFKA_BROKERS EVENT_PUBLISHER; do
   grep -q "name: $var\$" <<<"$mcp_dep" || fail "the mcp Deployment does not render $var"
   grep -q "name: $var\$" <<<"$a2a_dep" || fail "the a2a Deployment does not render $var"
 done
+# Every variable cmd/workforce's boot config names as REQUIRED is rendered into
+# the api Deployment, derived from the Go source (LABOUR_PLAN_CONSUMER_GROUP,
+# ADR 0043, included) so a new mandatory variable fails until the chart has it.
+api_vars="$(grep -ho '[A-Z][A-Z0-9_]\{2,\} is required' "$repo_dir"/cmd/workforce/*.go "$repo_dir"/internal/composition/*.go | sed -E 's/ is required//' | sort -u)"
+grep -qx LABOUR_PLAN_CONSUMER_GROUP <<<"$api_vars" || fail "found no LABOUR_PLAN_CONSUMER_GROUP among cmd/workforce's mandatory variables; the scan is looking in the wrong place"
+for var in $api_vars; do
+  grep -q "name: $var\$" <<<"$api_deployment" || fail "the api Deployment does not render $var, which cmd/workforce requires"
+done
+# Only the api starts the labour-plan consumer: mcp and a2a read the copy and
+# must never join its group.
+for dep in "$mcp_dep" "$a2a_dep"; do
+  if grep -q 'LABOUR_PLAN_CONSUMER_GROUP' <<<"$dep"; then fail "only the api Deployment may carry LABOUR_PLAN_CONSUMER_GROUP"; fi
+done
 # Every variable cmd/a2a's boot config names as REQUIRED is rendered, derived
 # from the Go source so a new mandatory variable fails until the chart has it.
 a2a_vars="$(grep -ho '[A-Z][A-Z0-9_]\{2,\} is required' "$repo_dir"/cmd/a2a/*.go "$repo_dir"/internal/composition/*.go | sed -E 's/ is required//' | sort -u)"
@@ -189,6 +208,8 @@ expect_refusal "the log publisher through extraEnv" "EVENT_PUBLISHER" "${base[@]
 expect_refusal "an unknown *_MODE through extraEnv" "*_MODE" "${base[@]}" --set 'extraEnv[0].name=LAYOUT_MODE' --set 'extraEnv[0].value=permissive'
 expect_refusal "analytics without a DSN source" "analytics.database.projectorUrl" "${base[@]}" --set analytics.enabled=true
 expect_refusal "analytics without a consumer group" "analytics.projector.consumerGroup" "${base[@]}" "${analytics[@]}" --set analytics.projector.consumerGroup=
+expect_refusal "an empty labour-plan consumer group" "labourPlan.consumerGroup" "${base[@]}" --set labourPlan.consumerGroup=
+expect_refusal "a blank labour-plan consumer group" "LABOUR_PLAN_CONSUMER_GROUP" "${base[@]}" --set 'labourPlan.consumerGroup=  '
 
 # --- what warehouse-infra sets keeps working -----------------------------------------
 # tests/warehouse-infra-values.yaml mirrors helm-values/workforce-management.yaml
@@ -202,6 +223,7 @@ infra_api="$(helm template "$release" "$chart_dir" "${infra[@]}" --show-only tem
 [[ "$(env_value "$infra_api" KAFKA_BROKERS)" == "kafka.warehouse-systems.svc.cluster.local:9092" ]] || fail "infra values: KAFKA_BROKERS"
 [[ "$(env_value "$infra_api" PATH_CATALOGUE_SOURCE)" == "kafka" ]] || fail "infra values: PATH_CATALOGUE_SOURCE=kafka must reach the api"
 [[ "$(env_value "$infra_api" LABOR_PERFORMANCE_MODE)" == "kafka-cache" ]] || fail "infra values: LABOR_PERFORMANCE_MODE=kafka-cache must reach the api"
+[[ "$(env_value "$infra_api" LABOUR_PLAN_CONSUMER_GROUP)" == "workforce-management-labour-plans" ]] || fail "infra values: labourPlan.consumerGroup must reach the api as LABOUR_PLAN_CONSUMER_GROUP"
 helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/mcp-deployment.yaml >/dev/null || fail "infra values: mcp"
 helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/a2a-deployment.yaml >/dev/null || fail "infra values: a2a"
 helm template "$release" "$chart_dir" "${infra[@]}" --show-only templates/a2a-route.yaml | grep -q "replacePrefixMatch: /$" || fail "infra values: the a2a route must rewrite to /"
