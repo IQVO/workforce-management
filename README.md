@@ -152,6 +152,7 @@ raised before the listener binds.
 docker compose up -d --wait          # Postgres 16 on :5432 and a single-node Kafka (KRaft) on :9092
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce                # applies migrations, then serves on :8080
 ```
 
@@ -169,6 +170,7 @@ Env vars:
 |-----|----------|---------|---------|
 | `DATABASE_URL` | **yes** | — | Postgres connection string; boot error `DATABASE_URL is required: this context runs on real Postgres` without it |
 | `KAFKA_BROKERS` | **yes** | — | comma-separated broker list; boot error `KAFKA_BROKERS is required: this context runs on real Kafka` without it. Used by the outbox relay, the catalogue and labor-performance consumers and `/readyz` |
+| `LABOUR_PLAN_CONSUMER_GROUP` | **yes** | — | stable consumer group of the labour-plan copy on `warehouse.warehouse-planning.events` (`LabourPlanCommitted` only; poison to `warehouse.warehouse-planning.events.dlq`; [ADR 0043](docs/docs/adr/0043-propose-heads-from-the-published-labour-plan.md)); chart `labourPlan.consumerGroup`, default `workforce-management-labour-plans`; boot error without it |
 | `HTTP_ADDR` | no | `:8080` | listen address |
 | `MIGRATIONS_PATH` | no | `migrations` | path to golang-migrate SQL files |
 | `MIGRATIONS_DATABASE_URL` | no | `DATABASE_URL` | direct (non-PgBouncer) connection string used ONLY by the boot-time golang-migrate step ([ADR-0025](docs/docs/adr/0025-migrations-direct-postgres-connection.md)); the request pool always uses `DATABASE_URL` |
@@ -211,6 +213,7 @@ integration topic and publisher are left untouched.
 
 # 2. OLTP service, fanning events onto the analytics topic:
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 # 3. Projector — the ONLY writer of the analytical DB. Runs migrations/analytics
@@ -353,7 +356,8 @@ curl -X POST localhost:8080/paths/pack/plan-proposals \
 # printable ASCII is 400 idempotency-key-invalid, the same key with a
 # different method/path/body is 409 idempotency-key-reused, and a retry with
 # the same key + request replays the stored response with
-# "Idempotency-Replayed: true". The key is global (not per route).
+# "Idempotency-Replayed: true" (a 2xx or 4xx; a 5xx is never stored, so a
+# retry after one runs again). The key is global (not per route).
 curl -X POST localhost:8080/shift-plans \
   -H 'Idempotency-Key: 6f1d2c3a-commit-wh1-shift-1' \
   -d '{"siteCode":"WH1","shiftId":"shift-1","lines":[
@@ -500,6 +504,7 @@ Smoke test against the shared broker:
 # shared broker reachable at localhost:9092 (warehouse-infra kind cluster)
 export DATABASE_URL="postgres://workforce:workforce@localhost:5432/workforce?sslmode=disable"
 export KAFKA_BROKERS=localhost:9092
+export LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 curl -X POST localhost:8080/shift-plans \
@@ -665,6 +670,19 @@ go test ./... -run TestFeatures -v
 | `features/associate_shift_lifecycle.feature` | `EndAssociateShift` — closes the active assignment, ending an ended shift is a no-op, an ended shift cannot be assigned |
 | `features/staffing_gap.feature` | `GetStaffingGap` — a path below plan is flagged `PathUnderstaffed` |
 | `features/staffing_gap_read_model.feature` | `GetStaffingGap` — a fully staffed path is not flagged; no committed `ShiftPlan` is rejected |
+| `features/associate_roster.feature`, `features/associate_roster_doc_rules.feature` | the associate roster: starting a shift, certifying, and what a restart replaces (certifications, site, break, hours, an ended shift) |
+| `features/break_rules.feature` | logging breaks |
+| `features/labor_assignment_rules.feature`, `features/assignment_doc_rules.feature` | `AssignLabor` / `EndAssociateShift` — catalogue-family certification gate, invariant order, the `MAX_HOURS_PER_SHIFT` boundary, `LaborAssigned` / `LaborReassigned` payloads |
+| `features/path_plan_proposal_rules.feature`, `features/path_plan_doc_rules.feature` | `ProposePathPlan` — measured rate, idle trim, fail-open, `ShiftPlanProposed` payload |
+| `features/shift_plan_commit_rules.feature`, `features/shift_plan_doc_rules.feature` | `CommitShiftPlan` — all-or-nothing lines, re-commit, live capacity per capability, hours bound, `ShiftPlanCommitted` payload |
+| `features/staffing_gap_views.feature`, `features/staffing_gap_doc_rules.feature` | `GetStaffingGap` — site scope, keyset paging (ADR 0040), idle share, deprecated route |
+| `features/probes.feature` | liveness and readiness |
+
+`features/*.feature` holds 21 files with 154 `Scenario` / `Scenario Outline`
+headings; none is tagged `@known-bug` (the runner still excludes that tag by
+default: `BDD_TAGS` defaults to `~@known-bug`), so the default run executes 218
+scenarios (Examples rows expanded). Per-file counts are in
+[Testing](docs/docs/development/testing.md).
 
 Step definitions and the suite entry point (`TestFeatures`) are in
 [`features/features_test.go`](features/features_test.go) (and

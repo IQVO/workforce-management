@@ -24,18 +24,34 @@ const IdempotencyKeyHeader = "Idempotency-Key"
 // never on a first execution (fleet REST guideline 2.3/2.4).
 const IdempotencyReplayedHeader = "Idempotency-Replayed"
 
-// validIdempotencyKey reports whether key is 1-128 printable ASCII characters.
+// maxIdempotencyKeyLength is the IdempotencyKey field value's upper bound in
+// apis/openapi.yaml.
+const maxIdempotencyKeyLength = 128
+
+// validIdempotencyKey reports whether key matches the IdempotencyKey field
+// value in apis/openapi.yaml (ADR 0042): 1-128 printable ASCII characters
+// (0x20-0x7E) whose first and last character are visible (0x21-0x7E), the
+// schema's `^[!-~]([ -~]*[!-~])?$`. Over HTTP/1.1 the edge rule is already
+// guaranteed by the stack, which strips OWS before this runs; checking it
+// here keeps the middleware exact for any caller that hands it an unstripped
+// value.
 func validIdempotencyKey(key string) bool {
-	if len(key) < 1 || len(key) > 128 {
+	if key == "" || len(key) > maxIdempotencyKeyLength {
+		return false
+	}
+	if !visibleASCII(key[0]) || !visibleASCII(key[len(key)-1]) {
 		return false
 	}
 	for i := 0; i < len(key); i++ {
-		if key[i] < 0x20 || key[i] > 0x7e {
+		if key[i] < ' ' || key[i] > '~' {
 			return false
 		}
 	}
 	return true
 }
+
+// visibleASCII reports whether b is a visible (non-space) printable ASCII byte.
+func visibleASCII(b byte) bool { return b > ' ' && b <= '~' }
 
 // RequireIdempotencyKey is route-scoped (chi's r.With(...)) transactional
 // idempotency-key middleware wrapping EVERY POST route (see router.go;
@@ -79,6 +95,16 @@ func validIdempotencyKey(key string) bool {
 // (the "fresh key" branch). No polling loop, lock-retry budget or timeout is
 // needed — the database's own MVCC/locking semantics ARE the
 // synchronization primitive.
+//
+// # What is stored: every answer except a 5xx
+//
+// A 2xx and a 4xx (and any other non-5xx) answer is stored and replayed for
+// the key's TTL. A 5xx answer and a panic are NEVER stored: the transaction
+// rolls back — the key row and the handler's writes with it — and a retry
+// under the same key runs the handler again (see runFreshRequest). A
+// concurrent same-key request that was blocked on the first one's key row
+// therefore runs fresh once the first fails; it never replays the failure
+// and never runs beside it.
 func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -93,7 +119,7 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			if !validIdempotencyKey(key) {
 				writeProblem(w, http.StatusBadRequest,
 					problemCategory{"idempotency-key-invalid", "Idempotency-Key header is invalid"},
-					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters.",
+					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters that start and end with a visible character.",
 					r.URL.Path)
 				return
 			}
@@ -261,7 +287,22 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 	rec := httptest.NewRecorder()
 	next.ServeHTTP(rec, r.WithContext(txCtx))
 
-	// Every NORMAL (non-panic) response is cached here, including a
+	// A server failure is never stored (fleet idempotency rule, ADR-0027
+	// addendum): a 5xx says "this attempt failed", not "this is the answer
+	// for this key", so the retry the client is told to make must run the
+	// real work again. Rolling back the WHOLE transaction takes the key row
+	// and every write the handler made (aggregate, outbox) with it, which
+	// also releases the in-flight guard: a second request with the same key
+	// that is blocked on the key row's unique index then proceeds as a fresh
+	// request instead of replaying the failure. The client still receives
+	// the 5xx itself, verbatim.
+	if rec.Code >= http.StatusInternalServerError {
+		_ = tx.Rollback(ctx)
+		writeRecorded(w, rec)
+		return
+	}
+
+	// Every other NORMAL (non-panic) response is cached here, including a
 	// business-logic error response (4xx from validation, etc.) — a
 	// deliberate v1 simplification (ADR-0027): a client retrying the exact
 	// same key+body deterministically gets the exact same answer. A caller
@@ -312,6 +353,12 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 
 	// Only after a successful commit does the real client see anything — the
 	// recorder's headers, then status, then body, VERBATIM.
+	writeRecorded(w, rec)
+}
+
+// writeRecorded copies the captured response onto the real client connection:
+// headers, then status, then body, verbatim.
+func writeRecorded(w http.ResponseWriter, rec *httptest.ResponseRecorder) {
 	for k, vs := range rec.Header() {
 		for _, v := range vs {
 			w.Header().Add(k, v)

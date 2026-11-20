@@ -32,27 +32,51 @@ packages changed against HEAD) is the agent stop-hook gate.
 
 ## BDD features
 
-16 feature files hold **85** `Scenario`/`Scenario Outline` blocks (8 of them
-outlines, which expand to more runs):
+21 feature files hold **154** `Scenario`/`Scenario Outline` blocks (27 of them
+outlines, which expand to more runs). No block is tagged `@known-bug` any more
+(the runner still excludes that tag by default: `BDD_TAGS` defaults to
+`~@known-bug`, see below), so `make bdd` runs all 154 blocks as **218**
+executed scenarios and 1000 steps (`218 scenarios (218 passed)`,
+`1000 steps (1000 passed)`, godog's own summary from
+`go test ./features -run TestFeatures -count=1 -v`).
 
-| Feature file | Scenarios |
-|---|---|
-| `associate_roster.feature` | 11 |
-| `associate_shift_lifecycle.feature` | 3 |
-| `break_rules.feature` | 8 |
-| `break_state_transitions.feature` | 2 |
-| `breaks.feature` | 1 |
-| `labor_assignment.feature` | 4 |
-| `labor_assignment_rules.feature` | 6 |
-| `path_plan_proposal.feature` | 1 |
-| `path_plan_proposal_rules.feature` | 11 |
-| `probes.feature` | 2 |
-| `shift_plan.feature` | 5 |
-| `shift_plan_commit_rules.feature` | 14 |
-| `shift_plan_hours_capacity.feature` | 1 |
-| `staffing_gap.feature` | 3 |
-| `staffing_gap_read_model.feature` | 2 |
-| `staffing_gap_views.feature` | 11 |
+| Feature file | Scenarios | Executed |
+|---|---|---|
+| `assignment_doc_rules.feature` | 14 | 30 |
+| `associate_roster.feature` | 11 | 13 |
+| `associate_roster_doc_rules.feature` | 10 | 10 |
+| `associate_shift_lifecycle.feature` | 3 | 3 |
+| `break_rules.feature` | 8 | 8 |
+| `break_state_transitions.feature` | 2 | 2 |
+| `breaks.feature` | 1 | 1 |
+| `labor_assignment.feature` | 4 | 4 |
+| `labor_assignment_rules.feature` | 6 | 8 |
+| `path_plan_doc_rules.feature` | 12 | 21 |
+| `path_plan_proposal.feature` | 1 | 1 |
+| `path_plan_proposal_rules.feature` | 11 | 19 |
+| `probes.feature` | 2 | 2 |
+| `shift_plan.feature` | 5 | 5 |
+| `shift_plan_commit_rules.feature` | 14 | 18 |
+| `shift_plan_doc_rules.feature` | 13 | 20 |
+| `shift_plan_hours_capacity.feature` | 1 | 1 |
+| `staffing_gap.feature` | 3 | 3 |
+| `staffing_gap_doc_rules.feature` | 20 | 34 |
+| `staffing_gap_read_model.feature` | 2 | 2 |
+| `staffing_gap_views.feature` | 11 | 13 |
+| **21 files** | **154** | **218** |
+
+The `*_doc_rules.feature` files (`assignment`, `associate_roster`,
+`path_plan`, `shift_plan`, `staffing_gap`) pin the rules written in the
+documentation; their steps are in `features/steps_rules_test.go`.
+
+The scenario in `shift_plan_doc_rules.feature` where a line omits
+`installedStations` pins the specification's `400
+shift-plan-missing-installed-stations`. It was a `@known-bug` while the handler
+decoded the omitted number as 0 and answered `409 planned-heads-exceed-installed`;
+the line request now carries `installedStations` as a pointer, so an omitted or
+`null` count is refused with the 400 and an explicit `0` is still a stated count.
+`BDD_TAGS=@known-bug go test ./features -run TestFeatures -count=1` now selects
+no scenario.
 
 A separate godog suite, `internal/adapters/inbound/mcp/testdata/features/mcp_tools.feature`
 (17 scenarios), drives the MCP tools. It runs as part of the MCP evals
@@ -72,7 +96,7 @@ Every integration test starts its own containers, so no `DATABASE_URL` or
 | Outbox trace continuity (D27): the request's `traceparent` reaches Kafka through the outbox; an untraced row relays unchanged | `outbox_trace_integration_test.go` (postgres package, real Postgres and Kafka) |
 | Pool limits (`MaxConns`, `statement_timeout`) | `pool_limits_integration_test.go` |
 | Housekeeping | `internal/adapters/outbound/postgres/sweeper_integration_test.go`, `cmd/workforce/housekeeping_integration_test.go` |
-| Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `siteconv_integration_test.go` |
+| Idempotency-Key middleware, site-code conversion | `internal/adapters/inbound/http/idempotency_integration_test.go`, `idempotency_5xx_integration_test.go`, `siteconv_integration_test.go` |
 | Use-case wiring over real Postgres | `internal/application/usecases/usecases_wiring_integration_test.go` |
 | MCP over Streamable HTTP | `internal/adapters/inbound/mcp/streamable_http_integration_test.go` |
 | MCP writes land in the outbox | `cmd/mcp/outbox_integration_test.go` |

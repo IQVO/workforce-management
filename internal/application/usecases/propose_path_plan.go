@@ -7,6 +7,7 @@ import (
 	"math"
 
 	"github.com/claudioed/workforce-management/internal/application/ports"
+	"github.com/claudioed/workforce-management/internal/domain/labourplan"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
 )
@@ -19,7 +20,17 @@ import (
 const (
 	RateSourceCaller   = "caller"
 	RateSourceMeasured = "measured"
+	// RateSourceLabourPlan marks a proposal read from the local copy of
+	// warehouse-planning's LabourPlanCommitted (ADR 0043 decision 2): the
+	// heads are the published requirement and the rate is the one
+	// warehouse-planning used.
+	RateSourceLabourPlan = "labour-plan"
 )
+
+// ErrProposeNoLabourPlanCopy is a wiring defect: a proposal from the labour
+// plan was asked of a ProposePathPlan with no Requirements copy wired. It
+// surfaces as a 500, never as a fabricated "not published".
+var ErrProposeNoLabourPlanCopy = errors.New("propose path plan: no labour-plan copy wired")
 
 // DefaultIdleShareTrimThreshold is the idle share above which ProposePathPlan
 // trims its proposed heads (idleness-as-staffing-signal). Applied whenever
@@ -74,6 +85,37 @@ type ProposePathPlan struct {
 	// nothing, so the scope is trivial, but wrapping it keeps every
 	// publishing use case uniform: the outbox row commits on its own.
 	UnitOfWork ports.UnitOfWork
+	// Requirements is the local copy of warehouse-planning's
+	// LabourPlanCommitted read by ExecuteFromLabourPlan (ADR 0043). Execute
+	// (the deprecated charge-based proposal) never reads it.
+	Requirements ports.LabourRequirements
+}
+
+// ExecuteFromLabourPlan proposes the heads warehouse-planning published for
+// (siteCode, shiftId, pathId) (ADR 0043 decision 2): proposedHeads is the
+// copy's planned_heads, the rate is its rate_units_per_hour and the source is
+// RateSourceLabourPlan. No idle-share trim applies (ADR 0020 stays with the
+// charge-based proposal): trimming here would compute the requirement in two
+// contexts. No row is labourplan.ErrRequirementNotFound, never zero heads.
+// Like Execute it publishes ShiftPlanProposed and persists nothing else.
+func (uc *ProposePathPlan) ExecuteFromLabourPlan(ctx context.Context, siteCode, shiftId string, pathId shared.PathId) (heads int, resolvedRate float64, rateSource string, err error) {
+	if uc.Requirements == nil {
+		return 0, 0, "", ErrProposeNoLabourPlanCopy
+	}
+	req, found, err := uc.Requirements.Find(ctx, labourplan.Key{SiteCode: siteCode, ShiftId: shiftId, PathId: pathId})
+	if err != nil {
+		return 0, 0, "", err
+	}
+	if !found {
+		return 0, 0, "", fmt.Errorf("site %q shift %q path %q: %w", siteCode, shiftId, pathId, labourplan.ErrRequirementNotFound)
+	}
+	event := shared.NewShiftPlanProposed(uc.Clock.Now(), siteCode, pathId, req.PlannedHeads, req.RateUnitsPerHour)
+	if err := atomically(ctx, uc.UnitOfWork, func(ctx context.Context) error {
+		return uc.Events.Publish(ctx, event)
+	}); err != nil {
+		return 0, 0, "", err
+	}
+	return req.PlannedHeads, req.RateUnitsPerHour, RateSourceLabourPlan, nil
 }
 
 // Execute computes proposed heads and publishes ShiftPlanProposed. It

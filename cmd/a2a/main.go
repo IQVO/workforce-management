@@ -89,8 +89,12 @@ type repos struct {
 	associates  ports.AssociateRepo
 	shiftPlans  ports.ShiftPlanRepo
 	assignments ports.AssignmentRepo
-	pool        *pgxpool.Pool
-	uow         ports.UnitOfWork
+	// labourRequirements is the local copy of warehouse-planning's labour
+	// plan (ADR 0043). This binary only READS it: cmd/workforce runs the
+	// consumer that writes it.
+	labourRequirements ports.LabourRequirements
+	pool               *pgxpool.Pool
+	uow                ports.UnitOfWork
 }
 
 // bootConfig is the mandatory configuration of cmd/mcp: real Postgres and
@@ -181,11 +185,12 @@ func newRepos(ctx context.Context, logger *slog.Logger, databaseURL, migrationsD
 		return repos{}, nil, err
 	}
 	return repos{
-		associates:  postgres.NewAssociateRepo(pool),
-		shiftPlans:  postgres.NewShiftPlanRepo(pool),
-		assignments: postgres.NewAssignmentRepo(pool),
-		pool:        pool,
-		uow:         postgres.NewUnitOfWork(pool),
+		associates:         postgres.NewAssociateRepo(pool),
+		shiftPlans:         postgres.NewShiftPlanRepo(pool),
+		assignments:        postgres.NewAssignmentRepo(pool),
+		labourRequirements: postgres.NewLabourRequirementRepo(pool),
+		pool:               pool,
+		uow:                postgres.NewUnitOfWork(pool),
 	}, func() { pool.Close() }, nil
 }
 
@@ -228,7 +233,7 @@ func buildDeps(r repos, publisher ports.EventPublisher, catalogue ports.PathCata
 	sysClock := clock.System{}
 	return inbounda2a.Deps{
 		GetStaffingGap:  &usecases.GetStaffingGap{ShiftPlans: r.shiftPlans, Assignments: r.assignments, Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
-		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, UnitOfWork: r.uow},
+		ProposePathPlan: &usecases.ProposePathPlan{Events: publisher, Clock: sysClock, UnitOfWork: r.uow, Requirements: r.labourRequirements},
 		AssignLabor:     &usecases.AssignLabor{Associates: r.associates, Assignments: r.assignments, Events: publisher, Clock: sysClock, MaxHoursPerShift: maxHoursPerShift, Catalogue: catalogue, Metrics: newLaborMetrics(logger), UnitOfWork: r.uow},
 		Catalogue:       catalogue,
 	}

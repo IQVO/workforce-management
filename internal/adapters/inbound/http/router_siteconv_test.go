@@ -13,7 +13,7 @@ import (
 // same stored column).
 
 func commitLines() []pathPlanLineRequest {
-	return []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: 10}}
+	return []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 5, PlannedRate: 30, PlannedHours: 40, InstalledStations: intp(10)}}
 }
 
 func decodeObject(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
@@ -169,7 +169,7 @@ func siteFixtureAtSite(t *testing.T) http.Handler {
 	}
 	rec := doRequest(t, router, http.MethodPost, "/shift-plans", commitShiftPlanRequest{
 		SiteCode: "WH1", ShiftId: "shift-1",
-		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 8, InstalledStations: 10}},
+		Lines: []pathPlanLineRequest{{PathId: "pack", PlannedHeads: 4, PlannedRate: 30, PlannedHours: 8, InstalledStations: intp(10)}},
 	})
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("commit plan: expected 201, got %d: %s", rec.Code, rec.Body.String())

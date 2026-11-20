@@ -92,6 +92,55 @@ func TestRequireIdempotencyKey_MalformedKeyIsRejected(t *testing.T) {
 	}
 }
 
+// TestValidIdempotencyKey_SpecBoundary pins validIdempotencyKey to the
+// IdempotencyKey field-value schema in apis/openapi.yaml (issue #254, ADR
+// 0042): 1-128 printable ASCII characters whose first and last character are
+// visible (0x21-0x7E).
+func TestValidIdempotencyKey_SpecBoundary(t *testing.T) {
+	cases := []struct {
+		name string
+		key  string
+		want bool
+	}{
+		{"too short: empty", "", false},
+		{"shortest valid: one visible character", "a", true},
+		{"longest valid: 128 characters", strings.Repeat("a", 128), true},
+		{"too long: 129 characters", strings.Repeat("a", 129), false},
+		{"valid: interior space", "a b", true},
+		{"valid: UUID", "3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10", true},
+		{"valid: every visible ASCII edge", "!~", true},
+		{"bad pattern: a lone space", " ", false},
+		{"bad pattern: leading space", " abc", false},
+		{"bad pattern: trailing space", "abc ", false},
+		{"bad pattern: leading tab", "\tabc", false},
+		{"bad pattern: trailing tab", "8G'S\t", false},
+		{"bad pattern: interior tab", "tab\there", false},
+		{"bad pattern: DEL", "a\x7fb", false},
+		{"bad pattern: non-ASCII", "ç", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := validIdempotencyKey(tc.key); got != tc.want {
+				t.Fatalf("validIdempotencyKey(%q) = %v, want %v", tc.key, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRequireIdempotencyKey_EdgeWhitespaceKeyIsRejected: a value that reaches
+// the middleware with edge whitespace (an in-process caller, or any transport
+// that does not strip OWS) is out of spec and answers the documented 400.
+func TestRequireIdempotencyKey_EdgeWhitespaceKeyIsRejected(t *testing.T) {
+	h := RequireIdempotencyKey(lazyIdempotencyPool(t))(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("must not run") }))
+	for _, key := range []string{" abc", "abc ", " ", "abc\t"} {
+		req := httptest.NewRequest(http.MethodPost, "/shift-plans", strings.NewReader(`{}`))
+		req.Header[IdempotencyKeyHeader] = []string{key}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		assertProblemDetails(t, rec, http.StatusBadRequest, "idempotency-key-invalid", "/shift-plans")
+	}
+}
+
 // TestRetiredRoutesAreGone: the pre-guideline command routes answer 404/405.
 func TestRetiredRoutesAreGone(t *testing.T) {
 	router := NewRouter(newTestHandler(), testLogger, "")

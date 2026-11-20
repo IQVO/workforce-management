@@ -262,6 +262,17 @@ paths:
       operationId: proposePathPlan
       summary: Propose planned heads for a path (pure computation, not committed)
       description: >-
+        Two forms (ADR 0043). FROM THE LABOUR PLAN: omit `charge` and name
+        `shiftId` (with `siteCode`): `proposedHeads` is the `planned_heads`
+        warehouse-planning published for (siteCode, shiftId, pathId) in
+        LabourPlanCommitted (this service keeps a local copy),
+        `resolvedRate` its `rate_units_per_hour`, `rateSource` is
+        `labour-plan` and NO idle-share trim applies; nothing published is
+        404 labour-plan-not-found, never zero heads. CHARGE-BASED
+        (DEPRECATED, unchanged; removed only by a later ADR once no caller
+        sends a charge): a request with `charge`, even one that also names
+        `shiftId`, works as described below. Neither `charge` nor `shiftId` is 400
+        missing-charge. Both forms raise ShiftPlanProposed.
         Computes `heads = ceil(charge / plannedRate)` for one path and
         raises ShiftPlanProposed for visibility — it persists nothing and
         commits nothing. A human must still call POST /shift-plans to commit
@@ -283,10 +294,18 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/ProposePathPlanRequest"
-            example:
-              siteCode: WH1
-              charge: 100
-              plannedRate: 30
+            examples:
+              fromLabourPlan:
+                summary: Heads from warehouse-planning's published labour plan (ADR 0043)
+                value:
+                  siteCode: WH1
+                  shiftId: 2026-11-18-day
+              chargeBased:
+                summary: DEPRECATED charge-based proposal (unchanged)
+                value:
+                  siteCode: WH1
+                  charge: 100
+                  plannedRate: 30
       responses:
         "200":
           headers:
@@ -304,6 +323,21 @@ paths:
                 rateSource: caller
         "400":
           $ref: "#/components/responses/BadRequest"
+        "404":
+          description: >-
+            No charge was sent and warehouse-planning has published no
+            labour plan for (siteCode, shiftId, pathId)
+            (labour-plan-not-found, ADR 0043). Never answered as zero heads.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+              example:
+                type: https://errors.workforce-management.warehouse-systems.dev/labour-plan-not-found
+                title: No labour plan has been published for this site, shift and path
+                status: 404
+                detail: 'site "WH1" shift "2026-11-18-day" path "pack": no labour plan has been published for this site, shift and path'
+                instance: /paths/pack/plan-proposals
         "409":
           $ref: "#/components/responses/IdempotencyKeyReused"
         "422":
@@ -1053,20 +1087,25 @@ components:
         request (same body) — the first response, success or business
         error, is stored and replayed byte-for-byte for the key's TTL
         (24h by default) — and a NEW key for each new logical request.
+        A 5xx answer is never stored: the request's writes and the key roll
+        back, so a retry with the same key runs again.
         Reusing a key with a different request (method, path or body) is
         rejected with 409 idempotency-key-reused. A key that is not 1-128
-        printable ASCII characters is a 400 idempotency-key-invalid. (The HTTP
-        stack strips leading/trailing spaces and tabs from the wire value
-        before the service sees it — and no HTTP client can transmit edge
-        whitespace in a header value at all — so the pattern states the
-        post-strip value: it starts and ends with a visible character.) Every
+        printable ASCII characters that start and end with a visible
+        character is a 400 idempotency-key-invalid. The pattern describes the
+        header as sent on the wire (ADR-0042): the key itself (1-128
+        characters, visible first and last character), optionally followed
+        by spaces or tabs. That trailing whitespace is HTTP optional
+        whitespace (RFC 9112 field-line grammar): the HTTP stack drops it
+        before the service reads the value (RFC 9110 section 5.5), so it is
+        never part of the key. Leading whitespace is not in the pattern
+        because HTTP clients do not send it. Every
         POST of this service takes the key; the key is global (looked up by
         key alone), so one key must never be reused across routes.
       schema:
         type: string
         minLength: 1
-        maxLength: 128
-        pattern: '^[!-~]([ -~]*[!-~])?$'
+        pattern: '^[!-~]([ -~]{0,126}[!-~])?[ \t]*$'
       example: 3f1d6a4e-9c0b-4a39-8f0f-5b2d1c7e9a10
 
   headers:
@@ -1094,7 +1133,8 @@ components:
         parameter other than limit, cursor and, on the deprecated route,
         siteCode). On every POST a missing Idempotency-Key
         header is also a 400 (idempotency-key-required) and a malformed one
-        (not 1-128 printable ASCII) a 400 (idempotency-key-invalid).
+        (not 1-128 printable ASCII starting and ending with a visible
+        character) a 400 (idempotency-key-invalid).
       content:
         application/problem+json:
           schema:
@@ -1272,8 +1312,9 @@ components:
         The ShiftPlan key is the canonical `siteCode`; `buildingId` is its
         DEPRECATED alias (same value; ADR 0035). Send at least one. Both
         present with different values is rejected with 422
-        conflicting-site-and-building.
-      required: [charge]
+        conflicting-site-and-building. Send `charge` (the DEPRECATED
+        charge-based proposal) or omit it and name `shiftId` (the proposal
+        from warehouse-planning's published labour plan, ADR 0043).
       anyOf:
         - required: [siteCode]
         - required: [buildingId]
@@ -1294,14 +1335,27 @@ components:
             DEPRECATED -- use siteCode. Alias of siteCode with the same
             value. Required only when siteCode is not sent.
           example: WH1
+        shiftId:
+          type: string
+          description: >-
+            OPTIONAL (ADR 0043). The shift whose published labour plan to
+            read. Used only when `charge` is omitted: the proposal is then
+            the heads warehouse-planning published for (siteCode, shiftId,
+            pathId), untrimmed; nothing published is 404
+            labour-plan-not-found. Ignored when `charge` is sent.
+          example: 2026-11-18-day
         charge:
           type: number
           format: double
+          deprecated: true
           description: >-
-            The volume of work (units) to be covered on this path.
-            Required: omitting it (or sending null) is rejected with a
-            400 missing-charge problem; an explicit 0 is a valid
-            "nothing to do" charge.
+            DEPRECATED (ADR 0043 decision 3): the volume of work (units) to
+            be covered on this path; a request with it behaves exactly as
+            before. Omit it and name `shiftId` to get the published
+            requirement instead. Omitting both `charge` and `shiftId` (or
+            sending a null charge without a shiftId) is rejected with a 400
+            missing-charge problem; an explicit 0 is a valid "nothing to do"
+            charge.
           example: 100
         plannedRate:
           type: number
@@ -1327,9 +1381,11 @@ components:
         proposedHeads:
           type: integer
           description: >-
-            ceil(charge / resolvedRate), further trimmed when a high
-            observed idle share exceeds IDLE_SHARE_TRIM_THRESHOLD (see
-            trimReason). Not committed.
+            Charge-based: ceil(charge / resolvedRate), further trimmed when
+            a high observed idle share exceeds IDLE_SHARE_TRIM_THRESHOLD
+            (see trimReason). From the labour plan (rateSource
+            labour-plan): the published planned_heads, never trimmed. Not
+            committed.
           example: 4
         resolvedRate:
           type: number
@@ -1344,11 +1400,13 @@ components:
           example: 30
         rateSource:
           type: string
-          enum: [caller, measured]
+          enum: [caller, measured, labour-plan]
           description: >-
             Where resolvedRate came from: "caller" (a supplied plannedRate,
-            or no rate was available at all) or "measured" (fed back from
-            labor-performance). Lets a human see why proposedHeads came
+            or no rate was available at all), "measured" (fed back from
+            labor-performance) or "labour-plan" (ADR 0043: heads and rate as
+            warehouse-planning published them; clients must tolerate
+            unknown values). Lets a human see why proposedHeads came
             back 0 (no rate from either source) rather than guessing.
           example: caller
         trimReason:
@@ -1455,6 +1513,16 @@ components:
           type: number
           format: double
           example: 24
+        requiredHeads:
+          type: integer
+          minimum: 0
+          description: >-
+            ADDITIVE (ADR 0043 decision 4). The heads warehouse-planning
+            published for this line's (siteCode, shiftId, pathId) in
+            LabourPlanCommitted, shown next to the committed plannedHeads.
+            Omitted when nothing was published. Never enforced: a line
+            committing fewer heads than required is accepted.
+          example: 4
 
     ShiftPlanResponse:
       type: object
@@ -1572,3 +1640,13 @@ components:
             i.e. the gap is fleet-wide across every site; consumers must
             treat absence as "unscoped", never as a particular site.
           example: WH1
+        requiredHeads:
+          type: integer
+          minimum: 0
+          description: >-
+            ADDITIVE (ADR 0043 decision 4). The heads warehouse-planning
+            published for this line's plan key (the plan's site code), shift
+            and path in LabourPlanCommitted, next to the committed
+            plannedHeads. Omitted when nothing was published; understaffed
+            still compares activeHeads with plannedHeads.
+          example: 4

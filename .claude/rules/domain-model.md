@@ -97,9 +97,15 @@ raised and consumed in-process.
    `plannedRate` is optional — omit it (or send `<= 0`) to fall back to a
    real measured rate from labor-performance (ADR-0012); response includes
    `resolvedRate` + `rateSource` (`"caller"` or `"measured"`).
+   Without `charge` and with `shiftId` (ADR 0043) the proposal is the
+   published `planned_heads` from the labour-plan copy (`rateSource`
+   `"labour-plan"`, no idle-share trim, no row = 404 `labour-plan-not-found`);
+   the charge-based form is deprecated but unchanged.
 4. `CommitShiftPlan(siteCode, pathPlans) -> ShiftPlan` — validates
    `plannedHeads <= installedStations` AND `plannedHeads <= live installed
-   capacity`; a human-initiated commit, not automatic.
+   capacity`; a human-initiated commit, not automatic. Committed lines (and
+   staffing-gap lines) carry an optional `requiredHeads` from the labour-plan
+   copy; a line is never refused for differing from it (ADR 0043).
 5. `AssignLabor(associateId, pathId) -> LaborAssignment` — validates
    certification, ends any prior active assignment for this associate.
 6. `StartBreak(associateId)` / `EndBreak(associateId)`
@@ -147,5 +153,5 @@ changes, update `apis/openapi.yaml` AND regenerate
 — see the top-level CLAUDE.md's Definition of Done.
 
 Fleet REST guideline (ADR-0040): every POST is idempotent with a fresh
-`Idempotency-Key`; replays carry `Idempotency-Replayed: true`; key reuse
+`Idempotency-Key`; replays carry `Idempotency-Replayed: true` (a 5xx or a panic is never stored: a retry runs again); key reuse
 with a different request is 409 `idempotency-key-reused` (never 422).

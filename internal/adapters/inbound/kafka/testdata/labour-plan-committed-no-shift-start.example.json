@@ -1,0 +1,21 @@
+{
+  "specversion": "1.0",
+  "id": "0b9d8c7e-6f5a-4b3c-9d2e-1f0a9b8c7d6e",
+  "source": "/warehouse/warehouse-planning",
+  "type": "com.warehouse.wes.warehouse-planning.labourplan.LabourPlanCommitted",
+  "subject": "WH1/2026-11-18-night/PACK",
+  "datacontenttype": "application/json",
+  "dataschema": "urn:warehouse:warehouse-planning:events:LabourPlanCommitted:v1",
+  "time": "2026-11-18T17:30:00Z",
+  "data": {
+    "site_id": "WH1",
+    "shift_id": "2026-11-18-night",
+    "path_id": "PACK",
+    "planned_heads": 0,
+    "rate_units_per_hour": 45.5,
+    "hours": 7.5,
+    "installed_stations": 4,
+    "heads_source": "request",
+    "version": 1
+  }
+}

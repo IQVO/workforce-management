@@ -27,19 +27,23 @@ type certifyRequest struct {
 // labor-performance when one is available for this path (ADR-0012).
 //
 // Charge is a pointer so an omitted field is distinguishable from an
-// explicit 0 charge (0 is a legitimate "nothing to do" charge; omitting
-// the field entirely is a client mistake and must 400 — without the
-// pointer, encoding/json silently coerced an omitted charge to 0 and the
-// request was accepted).
+// explicit 0 charge (0 is a legitimate "nothing to do" charge). A request
+// with a charge is the DEPRECATED charge-based proposal and behaves exactly
+// as before (ADR 0043 decision 3). A request that omits charge must name
+// ShiftId (ADR 0043 decision 2): the proposal is then read from the local
+// copy of warehouse-planning's labour plan for (siteCode, shiftId, pathId).
+// Omitting both is still 400 missing-charge.
 type proposePathPlanRequest struct {
 	SiteCode    string   `json:"siteCode,omitempty"`
 	BuildingId  string   `json:"buildingId,omitempty"`
+	ShiftId     string   `json:"shiftId,omitempty"`
 	Charge      *float64 `json:"charge,omitempty"`
 	PlannedRate float64  `json:"plannedRate,omitempty"`
 }
 
-// proposePathPlanResponse's RateSource is one of usecases.RateSourceCaller
-// or usecases.RateSourceMeasured, so a human can see WHERE the rate that
+// proposePathPlanResponse's RateSource is one of usecases.RateSourceCaller,
+// usecases.RateSourceMeasured or usecases.RateSourceLabourPlan (ADR 0043), so
+// a human can see WHERE the rate that
 // produced ProposedHeads came from -- and isn't left guessing why heads
 // came back 0 when no caller rate and no measured rate were available.
 // TrimReason is non-empty only when a high observed idle share
@@ -53,12 +57,17 @@ type proposePathPlanResponse struct {
 	TrimReason    string  `json:"trimReason,omitempty"`
 }
 
+// pathPlanLineRequest.InstalledStations is a pointer so an OMITTED (or null)
+// count is distinguishable from an explicit 0: the openapi makes the field
+// required and answers 400 shift-plan-missing-installed-stations when it is
+// absent, while an explicit 0 is a stated count that plannedHeads is checked
+// against (409 planned-heads-exceed-installed).
 type pathPlanLineRequest struct {
 	PathId            string  `json:"pathId"`
 	PlannedHeads      int     `json:"plannedHeads"`
 	PlannedRate       float64 `json:"plannedRate"`
 	PlannedHours      float64 `json:"plannedHours"`
-	InstalledStations int     `json:"installedStations"`
+	InstalledStations *int    `json:"installedStations"`
 }
 
 // commitShiftPlanRequest names the ShiftPlan key by the canonical SiteCode or
@@ -80,11 +89,15 @@ type shiftPlanResponse struct {
 	Lines      []pathPlanLineResp `json:"lines"`
 }
 
+// pathPlanLineResp's RequiredHeads is the heads warehouse-planning published
+// for this line (ADR 0043 decision 4), omitted when none was published. It is
+// shown next to the commitment, never enforced against it.
 type pathPlanLineResp struct {
-	PathId       string  `json:"pathId"`
-	PlannedHeads int     `json:"plannedHeads"`
-	PlannedRate  float64 `json:"plannedRate"`
-	PlannedHours float64 `json:"plannedHours"`
+	PathId        string  `json:"pathId"`
+	PlannedHeads  int     `json:"plannedHeads"`
+	PlannedRate   float64 `json:"plannedRate"`
+	PlannedHours  float64 `json:"plannedHours"`
+	RequiredHeads *int    `json:"requiredHeads,omitempty"`
 }
 
 type assignLaborRequest struct {
@@ -115,6 +128,9 @@ type staffingGapResponse struct {
 	// Deprecated: use ObservedIdleShare; same fraction value.
 	ObservedIdlePct *float64 `json:"observedIdlePct,omitempty"`
 	SiteCode        string   `json:"siteCode,omitempty"`
+	// RequiredHeads is warehouse-planning's published requirement for this
+	// line (ADR 0043), omitted when none was published.
+	RequiredHeads *int `json:"requiredHeads,omitempty"`
 }
 
 func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
@@ -126,6 +142,7 @@ func toStaffingGapResponse(g usecases.StaffingGap) staffingGapResponse {
 		ObservedIdleShare: g.ObservedIdlePct,
 		ObservedIdlePct:   g.ObservedIdlePct,
 		SiteCode:          string(g.SiteCode),
+		RequiredHeads:     g.RequiredHeads,
 	}
 }
 

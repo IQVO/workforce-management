@@ -7,6 +7,7 @@ import (
 	"github.com/claudioed/workforce-management/internal/application/ports"
 	"github.com/claudioed/workforce-management/internal/domain/assignment"
 	"github.com/claudioed/workforce-management/internal/domain/associate"
+	"github.com/claudioed/workforce-management/internal/domain/labourplan"
 	"github.com/claudioed/workforce-management/internal/domain/pathcatalog"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 	"github.com/claudioed/workforce-management/internal/domain/shiftplan"
@@ -35,7 +36,8 @@ const problemErrorsURIBase = "https://errors.workforce-management.warehouse-syst
 // statusFor maps a typed domain/application error to an HTTP status code.
 func statusFor(err error) int {
 	switch {
-	case errors.Is(err, ports.ErrNotFound):
+	case errors.Is(err, ports.ErrNotFound),
+		errors.Is(err, labourplan.ErrRequirementNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, shared.ErrEmptyAssociateId),
 		errors.Is(err, shared.ErrEmptyPathId),
@@ -101,6 +103,7 @@ var problemCategoryCatalog = []struct {
 	category problemCategory
 }{
 	{sentinel: ports.ErrNotFound, category: problemCategory{"resource-not-found", "Resource not found"}},
+	{sentinel: labourplan.ErrRequirementNotFound, category: problemCategory{"labour-plan-not-found", "No labour plan has been published for this site, shift and path"}},
 	{sentinel: shared.ErrEmptyAssociateId, category: problemCategory{"empty-associate-id", "Associate id must not be empty"}},
 	{sentinel: shared.ErrEmptyPathId, category: problemCategory{"empty-path-id", "Path id must not be empty"}},
 	{sentinel: pathcatalog.ErrUnknownPath, category: problemCategory{"unknown-path-id", "Unrecognized process-path id"}},

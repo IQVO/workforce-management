@@ -37,7 +37,7 @@ depend on it.)
 
 ```bash
 # 2. OLTP fanning events onto the analytics topic
-export DATABASE_URL="postgres://workforce:***@localhost:5432/workforce?sslmode=disable" KAFKA_BROKERS=localhost:9092
+export DATABASE_URL="postgres://workforce:***@localhost:5432/workforce?sslmode=disable" KAFKA_BROKERS=localhost:9092 LABOUR_PLAN_CONSUMER_GROUP=workforce-management-labour-plans
 go run ./cmd/workforce
 
 # 3. Projector (only writer of the analytical DB)

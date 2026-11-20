@@ -1,0 +1,16 @@
+{
+  "rows": [
+    {
+      "pathId": "pack",
+      "hourBucket": "2026-06-01T14:00:00Z",
+      "shiftsStarted": 3,
+      "shiftsEnded": 0,
+      "breaks": 2,
+      "avgBreakSeconds": 300,
+      "certifications": 1,
+      "laborAssigned": 12,
+      "laborReassigned": 3,
+      "understaffingEvents": 1
+    }
+  ]
+}

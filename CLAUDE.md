@@ -54,7 +54,7 @@ make check-all    # check + coverage gate (90%) + arch-test + bdd — before pus
 make vuln         # govulncheck — run after touching go.mod/go.sum
 
 docker compose up -d && go run ./cmd/workforce   # :8080, applies migrations on boot
-# needs DATABASE_URL and PATH_CATALOGUE_FILE=./process-paths.yaml (see README.md env table)
+# needs DATABASE_URL and KAFKA_BROKERS (the process-path catalogue is replayed from Kafka; PATH_CATALOGUE_FILE is gone, see README.md env table)
 ```
 
 `make help` lists every target; each mirrors a `.github/workflows/ci.yml` job.
@@ -83,6 +83,8 @@ details: `.claude/rules/architecture-and-testing.md`.
 - `.claude/rules/frontend.md` — the `web/` micro-frontend remote.
 
 Fleet-wide rules: `.claude/rules/fleet/*.md` (canonical in IQVO/warehouse-docs `agents/fleet/`; never hand-edit).
+
+Harness: `HARNESS.md` (what each CI job and local gate runs, and why) and `INCIDENTS.md` (the fleet incident log: every escaped failure and the guard that now catches it).
 
 A2A: `cmd/a2a` (port 8093) is this context's read and write Agent2Agent agent, skills `staffing_status` (read), `assign_labor` (write), decided in `docs/docs/adr/0039-a2a-inbound-adapter.md`; delegation only (facts stay CloudEvents on Kafka), unauthenticated like REST and MCP; rules in `.claude/rules/fleet/a2a.md`. Every MCP tool and A2A skill declares an authority level (MCP `com.warehouse/authority`, A2A tag `authority:L<n>`; ADR-0041, `TestEveryAgentToolDeclaresAuthority`); `assign_labor` is L3 and takes optional `proposalId`, `approvedBy`, `agentId`, which the adapter records as `initiated_by` on `LaborAssigned`/`LaborReassigned` (REST writes carry none).
 
