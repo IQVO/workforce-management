@@ -6,6 +6,7 @@ import (
 	"go/token"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -63,15 +64,13 @@ func TestEveryProblemCategoryDeclaresAReplayClass(t *testing.T) {
 // declare: a 5xx is never stored (ADR 0027 addendum), so its class is
 // RETRYABLE by definition.
 func TestFiveHundredClassIsRetryable(t *testing.T) {
-	fiveHundreds := map[string]int{
-		internalErrorProblem.slug:         http.StatusInternalServerError,
-		dependencyUnavailableProblem.slug: http.StatusServiceUnavailable,
+	fiveHundreds := map[string]bool{
+		internalErrorProblem.slug:         true,
+		dependencyUnavailableProblem.slug: true,
 	}
-	for slug := range fiveHundreds {
-		for _, cat := range classifiedProblemCategories(t) {
-			if cat.slug == slug && cat.class != replayRetryable {
-				t.Errorf("problem type %q answers 5xx: its class must be RETRYABLE, got %q", slug, cat.class)
-			}
+	for _, cat := range classifiedProblemCategories(t) {
+		if fiveHundreds[cat.slug] && cat.class != replayRetryable {
+			t.Errorf("problem type %q answers 5xx: its class must be RETRYABLE, got %q", cat.slug, cat.class)
 		}
 	}
 	// The domain catalogue's own 503 must be RETRYABLE too.
@@ -88,57 +87,91 @@ func TestFiveHundredClassIsRetryable(t *testing.T) {
 // problem type by writing a literal where no test walks it.
 func TestProblemCategoryLiteralsLiveOnlyInErrorsGo(t *testing.T) {
 	fset := token.NewFileSet()
-	pkgs, err := parser.ParseDir(fset, ".", nil, parser.SkipObjectResolution)
+	files, err := filepath.Glob("*.go")
 	if err != nil {
-		t.Fatalf("parse this package: %v", err)
+		t.Fatalf("list this package's files: %v", err)
 	}
-	for name, pkg := range pkgs {
-		if strings.HasSuffix(name, "_test") {
+	for _, fname := range files {
+		if strings.HasSuffix(fname, "_test.go") {
 			continue
 		}
-		for fname, f := range pkg.Files {
-			ast.Inspect(f, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				if ident, ok := lit.Type.(*ast.Ident); ok && ident.Name == "problemCategory" && !strings.HasSuffix(fname, "errors.go") {
-					t.Errorf("%s: a problemCategory literal outside errors.go — declare it (classified) next to the catalogue instead", fset.Position(lit.Pos()))
-				}
-				return true
-			})
+		f, err := parser.ParseFile(fset, fname, nil, parser.SkipObjectResolution)
+		if err != nil {
+			t.Fatalf("parse %s: %v", fname, err)
+		}
+		for _, lit := range problemCategoryLits(fset, f) {
+			t.Errorf("%s: a problemCategory literal outside errors.go — declare it (classified) next to the catalogue instead", fset.Position(lit.Pos()))
 		}
 	}
 }
 
-// TestADRClassTableMatchesTheCatalogue holds the class table of ADR 0044
-// equal to the declared catalogue: the document and the code cannot drift.
-func TestADRClassTableMatchesTheCatalogue(t *testing.T) {
+// problemCategoryLits returns the problemCategory composite literals of one
+// parsed file that live outside errors.go (the declaration-site rule above).
+func problemCategoryLits(fset *token.FileSet, f *ast.File) []ast.Node {
+	var lits []ast.Node
+	ast.Inspect(f, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		ident, ok := lit.Type.(*ast.Ident)
+		if ok && ident.Name == "problemCategory" && !strings.HasSuffix(fset.Position(lit.Pos()).Filename, "errors.go") {
+			lits = append(lits, lit)
+		}
+		return true
+	})
+	return lits
+}
+
+// parseADRClassTable reads the class table of ADR 0044: every markdown table
+// row whose first cell names the problem type in backticks, with the class
+// in the last-but-one cell (`| Problem type | Status | Class | Why |`).
+func parseADRClassTable(t *testing.T) map[string]string {
+	t.Helper()
 	raw, err := os.ReadFile("../../../../docs/docs/adr/0044-idempotency-replay-classes.md")
 	if err != nil {
 		t.Fatalf("read ADR 0044: %v", err)
 	}
 	adr := map[string]string{}
 	for _, line := range strings.Split(string(raw), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if !strings.HasPrefix(trimmed, "|") {
-			continue
+		if slug, class, ok := adrClassRow(line); ok {
+			adr[slug] = class
 		}
-		cells := strings.Split(strings.Trim(trimmed, "|"), "|")
-		if len(cells) < 3 {
-			continue
-		}
-		slug := strings.TrimSpace(cells[0])
-		// only the class-table rows name their problem type in backticks
-		if !strings.HasPrefix(slug, "`") {
-			continue
-		}
-		class := strings.TrimSpace(cells[len(cells)-2])
-		adr[strings.Trim(slug, "`")] = class
 	}
 	if len(adr) == 0 {
 		t.Fatal("no class rows parsed from ADR 0044: the table walker is broken")
 	}
+	return adr
+}
+
+// adrClassRow parses one line of the ADR's class table, if it is one.
+func adrClassRow(line string) (slug, class string, ok bool) {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, "|") {
+		return "", "", false
+	}
+	cells := strings.Split(strings.Trim(trimmed, "|"), "|")
+	if len(cells) < 3 {
+		return "", "", false
+	}
+	slug = strings.TrimSpace(cells[0])
+	// only the class-table rows name their problem type in backticks
+	if !strings.HasPrefix(slug, "`") {
+		return "", "", false
+	}
+	return strings.Trim(slug, "`"), strings.TrimSpace(cells[len(cells)-2]), true
+}
+
+// TestADRClassTableMatchesTheCatalogue holds the class table of ADR 0044
+// equal to the declared catalogue: the document and the code cannot drift.
+func TestADRClassTableMatchesTheCatalogue(t *testing.T) {
+	adr := parseADRClassTable(t)
+	adrCoversCatalogue(t, adr)
+	catalogueCoversADR(t, adr)
+}
+
+func adrCoversCatalogue(t *testing.T, adr map[string]string) {
+	t.Helper()
 	for _, cat := range classifiedProblemCategories(t) {
 		want, ok := adr[cat.slug]
 		if !ok {
@@ -149,26 +182,38 @@ func TestADRClassTableMatchesTheCatalogue(t *testing.T) {
 			t.Errorf("problem type %q: ADR 0044 says %q, the catalogue declares %q", cat.slug, want, cat.class)
 		}
 	}
+}
+
+// catalogueCoversADR fails on an ADR row no declared problem type backs.
+func catalogueCoversADR(t *testing.T, adr map[string]string) {
+	t.Helper()
+	// off-keyed-route problems: documented in the ADR, deliberately not in
+	// the idempotent-route walker
+	offRoute := map[string]bool{
+		"dependency-unavailable": true, "unknown-query-parameter": true,
+		"invalid-limit": true, "invalid-cursor": true,
+	}
 	for slug := range adr {
-		if slug == "dependency-unavailable" || slug == "unknown-query-parameter" || slug == "invalid-limit" || slug == "invalid-cursor" {
-			continue // off-keyed-route problems: documented in the ADR, deliberately not in the idempotent-route walker
+		if offRoute[slug] {
+			continue
 		}
-		found := false
-		for _, cat := range classifiedProblemCategories(t) {
-			if cat.slug == slug {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !slugInCategories(slug, classifiedProblemCategories(t)) {
 			t.Errorf("ADR 0044 classifies %q, but no such problem type is declared in errors.go", slug)
 		}
 	}
 }
 
-// TestRefusalClassesCoverTheKeyedRouteSentinels is a sanity net: every
-// sentinel of the catalogue must answer a status the middleware can see on a
-// keyed route, and no two classes may share a slug with different statuses.
+func slugInCategories(slug string, cats []problemCategory) bool {
+	for _, cat := range cats {
+		if cat.slug == slug {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRefusalClassesCoverTheKeyedRouteSentinels is a sanity net: no slug may
+// carry two different statuses, and every sentinel maps to a real status.
 func TestRefusalClassesCoverTheKeyedRouteSentinels(t *testing.T) {
 	seen := map[string]int{}
 	for _, entry := range problemCategoryCatalog {
