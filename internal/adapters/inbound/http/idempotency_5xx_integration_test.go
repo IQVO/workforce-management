@@ -28,12 +28,16 @@ import (
 
 // probeHandler is a fake wrapped handler: it records how often (and how
 // concurrently) it ran, writes one row through the bound transaction (so a
-// rollback is observable) and answers answer(call).
+// rollback is observable) and answers answer(call). With final4xx set, a
+// non-2xx answer is refused through the PRODUCTION error writer with a
+// FINAL sentinel instead of being written by hand, so the replay-class mark
+// travels exactly as a real handler's would (ADR 0044).
 type probeHandler struct {
 	mu                       sync.Mutex
 	calls, active, maxActive int
 	answer                   func(call int) int
 	enter                    func(call int)
+	final4xx                 bool
 }
 
 func (p *probeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -52,6 +56,10 @@ func (p *probeHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		_, _ = tx.Exec(r.Context(), "INSERT INTO idem_probe (v) VALUES ($1)", fmt.Sprint(call))
 	}
 	status := p.answer(call)
+	if p.final4xx && status != http.StatusCreated {
+		inboundhttp.RefuseForTest(w, r, "conflicting-site-and-building") // 422, FINAL (ADR 0044)
+		return
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w, `{"status":%d,"call":%d}`, status, call)
@@ -148,9 +156,15 @@ func TestIdempotency_5xx_DifferentBodyUnderSameKeyIsANewRequest(t *testing.T) {
 	}
 }
 
+// A 4xx that a FINAL problem type answers is still stored and replayed
+// (ADR 0044). The probe refuses through the PRODUCTION error writer with a
+// FINAL sentinel, so the class mark travels; a 4xx written by hand (no
+// class) is released like RETRYABLE — that case is covered by the rendered
+// fleet template's per-entry tests.
 func TestIdempotency_4xx_IsStillStoredAndReplayed(t *testing.T) {
 	pool := probeDB(t)
 	h := &probeHandler{answer: func(int) int { return http.StatusUnprocessableEntity }}
+	h.final4xx = true
 	mw := inboundhttp.RequireIdempotencyKey(pool)(h)
 
 	first := postRoute(mw, "/x", "four-xx", `{}`)

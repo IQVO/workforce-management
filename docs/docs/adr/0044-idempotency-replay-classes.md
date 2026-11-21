@@ -101,7 +101,7 @@ change.
 | `associate-on-break` | 409 | RETRYABLE | the break this refusal reads ends later |
 | `associate-shift-ended` | 409 | RETRYABLE | a new shift-start (POST shift-starts) makes the same request pass |
 | `max-hours-exceeded` | 409 | RETRYABLE | hours accrue with the clock and reset on the next shift-start |
-| `certification-required` | 409 | RETRYABLE | POST /associates/{id}/certifications adds the missing certification |
+| `certification-required` | 409 | RETRYABLE | `POST /associates/{id}/certifications` adds the missing certification |
 | `planned-heads-exceed-installed` | 409 | FINAL | both operands are in the request (plannedHeads vs the request's own installedStations; shift_plan.go CommitShiftPlan) — the same bytes always get the same answer |
 | `exceeds-installed-capacity` | 409 | RETRYABLE | the live ceiling is fetched from fulfillment-execution at commit time (ADR 0014); stations are installed and removed |
 | `planned-hours-exceed-capacity` | 409 | FINAL | plannedHours vs plannedHeads × maxHoursPerShift — every operand is request data times boot-time config |

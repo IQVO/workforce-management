@@ -33,7 +33,7 @@ func classifiedProblemCategories(t *testing.T) []problemCategory {
 		cats = append(cats, cat)
 	}
 	for _, entry := range problemCategoryCatalog {
-		add(statusFor(entry.sentinel), entry.category)
+		add(statusForProblemType(entry.sentinel), entry.category)
 	}
 	add(http.StatusBadRequest, idempotencyKeyRequiredProblem)
 	add(http.StatusBadRequest, idempotencyKeyInvalidProblem)
@@ -75,7 +75,7 @@ func TestFiveHundredClassIsRetryable(t *testing.T) {
 	}
 	// The domain catalogue's own 503 must be RETRYABLE too.
 	for _, entry := range problemCategoryCatalog {
-		if statusFor(entry.sentinel) == http.StatusServiceUnavailable && entry.category.class != replayRetryable {
+		if statusForProblemType(entry.sentinel) == http.StatusServiceUnavailable && entry.category.class != replayRetryable {
 			t.Errorf("problem type %q answers 503: its class must be RETRYABLE, got %q", entry.category.slug, entry.category.class)
 		}
 	}
@@ -217,7 +217,7 @@ func slugInCategories(slug string, cats []problemCategory) bool {
 func TestRefusalClassesCoverTheKeyedRouteSentinels(t *testing.T) {
 	seen := map[string]int{}
 	for _, entry := range problemCategoryCatalog {
-		status := statusFor(entry.sentinel)
+		status := statusForProblemType(entry.sentinel)
 		if prev, dup := seen[entry.category.slug]; dup && prev != status {
 			t.Fatalf("problem type %q answers both %d and %d", entry.category.slug, prev, status)
 		}

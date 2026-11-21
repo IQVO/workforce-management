@@ -15,6 +15,20 @@ import (
 // production writers.
 var errReplayProbe = errors.New("replay-class probe")
 
+// statusForProblemType is the status a catalogue sentinel is answered with
+// on the wire. It is statusFor for every domain sentinel, plus the explicit
+// 400 the HTTP-layer validation sentinels (errMissingShiftId,
+// errMissingCharge) are always written with — statusFor has no case for
+// them because handlers pass the status directly (errors.go). These two are
+// package-local sentinels compared by identity (never wrapped), so == is
+// exact here.
+func statusForProblemType(err error) int {
+	if err == errMissingShiftId || err == errMissingCharge {
+		return http.StatusBadRequest
+	}
+	return statusFor(err)
+}
+
 // ProblemTypeForTest is one problem type of the production catalogue as the
 // replay-class template test needs it (Slug, the status it is answered
 // with, and the replay class its catalogue entry declares).
@@ -32,7 +46,7 @@ type ProblemTypeForTest struct {
 func ReplayCatalogueForTest() []ProblemTypeForTest {
 	out := make([]ProblemTypeForTest, 0, len(problemCategoryCatalog)+5)
 	for _, e := range problemCategoryCatalog {
-		out = append(out, ProblemTypeForTest{Slug: e.category.slug, Status: statusFor(e.sentinel), Class: string(e.category.class)})
+		out = append(out, ProblemTypeForTest{Slug: e.category.slug, Status: statusForProblemType(e.sentinel), Class: string(e.category.class)})
 	}
 	out = append(out,
 		ProblemTypeForTest{Slug: idempotencyKeyRequiredProblem.slug, Status: http.StatusBadRequest, Class: string(idempotencyKeyRequiredProblem.class)},
@@ -52,7 +66,7 @@ func ReplayCatalogueForTest() []ProblemTypeForTest {
 func RefuseForTest(w http.ResponseWriter, r *http.Request, slug string) {
 	for _, e := range problemCategoryCatalog {
 		if e.category.slug == slug {
-			writeError(w, r, statusFor(e.sentinel), e.sentinel)
+			writeError(w, r, statusForProblemType(e.sentinel), e.sentinel)
 			return
 		}
 	}
