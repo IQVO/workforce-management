@@ -143,6 +143,9 @@ func newIdempotencyFixtureWith(t *testing.T, pool *pgxpool.Pool, clock ports.Clo
 	})
 
 	h := &inboundhttp.Handler{
+		CertifyAssociate: &usecases.CertifyAssociate{
+			Associates: associates, Events: publisher, Clock: clock, UnitOfWork: uow,
+		},
 		CommitShiftPlan: &usecases.CommitShiftPlan{
 			ShiftPlans: shiftPlans, Events: publisher, Clock: clock, InstalledCapacity: unlimitedCapacity{},
 			Catalogue: catalogue, MaxHoursPerShift: 8, UnitOfWork: uow,
@@ -526,9 +529,11 @@ func associateShiftState(t *testing.T, pool *pgxpool.Pool, id string) (hours flo
 // write loses an optimistic-concurrency race the response is a 409 — and the
 // associate's hours write made earlier in the SAME request must NOT survive:
 // the middleware used to commit the shared transaction for any non-panic
-// response, persisting the partial write. The 409 itself is still recorded
-// and replayed (ADR-0027's stored-response semantics), and the failed attempt
-// must not publish any event.
+// response, persisting the partial write. concurrent-modification is
+// RETRYABLE (ADR 0044): nothing committed, the answer depends on state that
+// changed, so the 409 is NOT stored — the key is released, the same key+body
+// retry executes the handler again (and once it succeeds, THAT answer is
+// stored and replayed). The failed attempt must not publish any event.
 func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *testing.T) {
 	pool := idempotencyDB(t)
 	clock := &settableClock{t: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)}
@@ -566,18 +571,66 @@ func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *test
 		t.Fatalf("outbox rows after a 409 = %d, want %d (no events from a failed request)", got, outboxBefore)
 	}
 
-	// The 409 is still the stored idempotent outcome for this key.
-	_, statusCode, _ := idempotencyRowOutcome(t, pool, "assign-conflict")
-	if statusCode == nil || *statusCode != http.StatusConflict {
-		t.Fatalf("stored status_code = %v, want 409", statusCode)
+	// concurrent-modification is RETRYABLE (ADR 0044): the key must be
+	// RELEASED — no row survives, nothing is replayed for it.
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-conflict'"); got != 0 {
+		t.Fatalf("key rows after the RETRYABLE 409 = %d, want 0: the key must be released", got)
 	}
 	conflict = false
-	replay := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
-	if replay.Code != http.StatusConflict || replay.Body.String() != rec.Body.String() {
-		t.Fatalf("replay = %d %s, want the stored 409 %s", replay.Code, replay.Body.String(), rec.Body.String())
+	// The same key and body executes the handler again now that the
+	// competing writer is done — and once it succeeds, that answer IS
+	// stored, so a third request replays it.
+	retry := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("retry under the released key = %d (body: %s), want 201: the retry must execute", retry.Code, retry.Body.String())
 	}
-	if h, v := associateShiftState(t, pool, "assoc-1"); h != hoursBefore || v != versionBefore {
-		t.Fatalf("replay changed associate_shift to (hours %v, version %d)", h, v)
+	replay := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if replay.Code != http.StatusCreated || replay.Header().Get(inboundhttp.IdempotencyReplayedHeader) != "true" {
+		t.Fatalf("third request = %d replayed=%q, want the stored 201 replayed with Idempotency-Replayed: true",
+			replay.Code, replay.Header().Get(inboundhttp.IdempotencyReplayedHeader))
+	}
+	if h, v := associateShiftState(t, pool, "assoc-1"); h == hoursBefore && v == versionBefore {
+		t.Fatalf("the successful retry logged no hours (hours %v, version %d)", h, v)
+	}
+}
+
+// certification-required is RETRYABLE (ADR 0044): the associate's
+// certification set is state that changes (POST
+// /associates/{id}/certifications), so the refusal is not stored and the key
+// is released; once the certification exists the SAME key and body executes
+// and is then stored and replayed.
+func TestIdempotency_Assign_CertificationRequiredIsReleasedThenRetried(t *testing.T) {
+	pool := idempotencyDB(t)
+	fx := newIdempotencyFixture(t, pool)
+	seedAssociate(t, pool, "assoc-cert", "other") // certified, but not for "pack"
+
+	first := post(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if first.Code != http.StatusConflict {
+		t.Fatalf("first = %d (body: %s), want 409", first.Code, first.Body.String())
+	}
+	if slug := problemSlug(t, first.Body.Bytes()); slug != "certification-required" {
+		t.Fatalf("problem.type slug = %q, want certification-required", slug)
+	}
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-cert-retry'"); got != 0 {
+		t.Fatalf("key rows after the RETRYABLE refusal = %d, want 0: the key must be released", got)
+	}
+
+	// The certification arrives — its own logical request with its own key.
+	if cert := post(fx.router, "/associates/assoc-cert/certifications", "cert-arrives-1", `{"certification":"pack"}`); cert.Code != http.StatusNoContent {
+		t.Fatalf("certification POST = %d (body: %s), want 204", cert.Code, cert.Body.String())
+	}
+
+	// The refused key is free: the same key and body is a NEW execution.
+	retry := post(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("retry under the released key = %d (body: %s), want 201: the retry must execute", retry.Code, retry.Body.String())
+	}
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-cert-retry'"); got != 1 {
+		t.Fatalf("key rows after the successful retry = %d, want 1: a 2xx is stored", got)
+	}
+	replay := post(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if replay.Code != http.StatusCreated || replay.Header().Get(inboundhttp.IdempotencyReplayedHeader) != "true" {
+		t.Fatalf("third request = %d replayed=%q, want the stored 201 replayed", replay.Code, replay.Header().Get(inboundhttp.IdempotencyReplayedHeader))
 	}
 }
 
