@@ -19,9 +19,7 @@ var errReplayProbe = errors.New("replay-class probe")
 // on the wire. It is statusFor for every domain sentinel, plus the explicit
 // 400 the HTTP-layer validation sentinels (errMissingShiftId,
 // errMissingCharge) are always written with — statusFor has no case for
-// them because handlers pass the status directly (errors.go). These two are
-// package-local sentinels compared by identity (never wrapped), so == is
-// exact here.
+// them because handlers pass the status directly (errors.go).
 func statusForProblemType(err error) int {
 	if errors.Is(err, errMissingShiftId) || errors.Is(err, errMissingCharge) {
 		return http.StatusBadRequest
