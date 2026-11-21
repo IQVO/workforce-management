@@ -23,7 +23,7 @@ var errReplayProbe = errors.New("replay-class probe")
 // package-local sentinels compared by identity (never wrapped), so == is
 // exact here.
 func statusForProblemType(err error) int {
-	if err == errMissingShiftId || err == errMissingCharge {
+	if errors.Is(err, errMissingShiftId) || errors.Is(err, errMissingCharge) {
 		return http.StatusBadRequest
 	}
 	return statusFor(err)
