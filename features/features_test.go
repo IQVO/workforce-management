@@ -723,9 +723,10 @@ func InitializeScenario(sc *godog.ScenarioContext) {
 	sc.Step(`^the proposal suggests (\d+) heads at resolved rate (\d+) from source "([^"]*)"$`, w.proposalSuggestsHeads)
 	sc.Step(`^the proposed heads are trimmed to (\d+) with a non-empty trim reason$`, w.proposedHeadsAreTrimmedWithNonEmptyTrimReason)
 
-	registerWave2(sc, w)      // features_wave2_test.go
-	registerRules(sc, w)      // steps_rules_test.go
-	registerLabourPlan(sc, w) // steps_labour_plan_test.go
+	registerWave2(sc, w)                  // features_wave2_test.go
+	registerRules(sc, w)                  // steps_rules_test.go
+	registerLabourPlan(sc, w)             // steps_labour_plan_test.go
+	registerLabourRequirementRules(sc, w) // steps_rules_test.go (ADR 0043 copy)
 }
 
 // TestFeatures runs every Gherkin feature under features/ as a Go test.

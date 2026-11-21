@@ -20,6 +20,7 @@ import (
 	"github.com/cucumber/godog"
 
 	"github.com/claudioed/workforce-management/internal/application/ports"
+	"github.com/claudioed/workforce-management/internal/domain/labourplan"
 	"github.com/claudioed/workforce-management/internal/domain/shared"
 )
 
@@ -143,6 +144,25 @@ func (w *world) associateRestartsShift(ctx context.Context, associateId, certs s
 
 func (w *world) associateRestartsShiftAtSite(ctx context.Context, associateId, siteCode, certs string) error {
 	return w.associateShiftStartedAtSite(ctx, associateId, siteCode, certs)
+}
+
+// labourPlanPublishedAtVersion stores one LabourPlanCommitted row carrying
+// an explicit version in the scenario's copy (ADR 0043 decision 1), exactly
+// as the labour-plan consumer would apply it — the repo's Supersedes guard
+// decides whether it actually replaces the stored row.
+func (w *world) labourPlanPublishedAtVersion(heads int, rate, site, shift, pathId string, version int) error {
+	r, err := parseFloat(rate)
+	if err != nil {
+		return err
+	}
+	return w.h.requirements.Save(context.Background(), labourplan.Requirement{
+		Key:              labourplan.Key{SiteCode: site, ShiftId: shift, PathId: shared.PathId(pathId)},
+		PlannedHeads:     heads,
+		RateUnitsPerHour: r,
+		Hours:            8,
+		HeadsSource:      labourplan.HeadsSourceForecast,
+		Version:          version,
+	})
 }
 
 // --- When -------------------------------------------------------------------
@@ -408,4 +428,14 @@ func registerRules(sc *godog.ScenarioContext, w *world) {
 	sc.Step(`^the last ShiftPlanCommitted event is for site "([^"]*)" shift "([^"]*)"$`, w.lastShiftPlanCommittedIs)
 	sc.Step(`^the last AssociateCertified event is for associate "([^"]*)" with certification "([^"]*)"$`, w.lastAssociateCertifiedIs)
 	sc.Step(`^the last AssociateShiftStarted event is for associate "([^"]*)" with certifications "([^"]*)"$`, w.lastAssociateShiftStartedIs)
+}
+
+// registerLabourRequirementRules registers the labour-requirement-copy steps
+// (ADR 0043): a LabourPlanCommitted row seeded with an explicit version, so
+// scenarios can pin the copy's version guard (decision 1: only a greater
+// version is applied; a redelivered or reordered older message never rolls
+// the copy back).
+func registerLabourRequirementRules(sc *godog.ScenarioContext, w *world) {
+	sc.Step(`^warehouse-planning has published a labour plan of (\d+) heads? at rate ([0-9.]+) for site "([^"]*)" shift "([^"]*)" path "([^"]*)" as version (\d+)$`, w.labourPlanPublishedAtVersion)
+	sc.Step(`^a late labour plan of (\d+) heads? at rate ([0-9.]+) for site "([^"]*)" shift "([^"]*)" path "([^"]*)" is delivered as version (\d+)$`, w.labourPlanPublishedAtVersion)
 }
