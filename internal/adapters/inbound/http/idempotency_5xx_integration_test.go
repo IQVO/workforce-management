@@ -82,7 +82,7 @@ func probeRows(t *testing.T, pool *pgxpool.Pool) int {
 	return count(t, pool, "SELECT count(*) FROM idem_probe")
 }
 
-func replayed(rec *httptest.ResponseRecorder) bool {
+func isReplayed(rec *httptest.ResponseRecorder) bool {
 	return rec.Header().Get(inboundhttp.IdempotencyReplayedHeader) == "true"
 }
 
@@ -104,9 +104,9 @@ func TestIdempotency_5xx_IsNeverStored_RetryRunsAgain_SuccessThenReplays(t *test
 			mw := inboundhttp.RequireIdempotencyKey(pool)(h)
 			key := fmt.Sprintf("five-xx-%d", status)
 
-			first := post(mw, "/x", key, `{"a":1}`)
-			if first.Code != status || replayed(first) || !strings.Contains(first.Body.String(), `"call":1`) {
-				t.Fatalf("first = %d replayed=%v body=%s; want the handler's own %d written to the client", first.Code, replayed(first), first.Body.String(), status)
+			first := postRoute(mw, "/x", key, `{"a":1}`)
+			if first.Code != status || isReplayed(first) || !strings.Contains(first.Body.String(), `"call":1`) {
+				t.Fatalf("first = %d replayed=%v body=%s; want the handler's own %d written to the client", first.Code, isReplayed(first), first.Body.String(), status)
 			}
 			if got := keyRows(t, pool, key); got != 0 {
 				t.Fatalf("idempotency rows after a %d = %d, want 0 (a 5xx is never stored)", status, got)
@@ -115,17 +115,17 @@ func TestIdempotency_5xx_IsNeverStored_RetryRunsAgain_SuccessThenReplays(t *test
 				t.Fatalf("handler writes after a %d = %d, want 0 (rolled back with the key)", status, got)
 			}
 
-			retry := post(mw, "/x", key, `{"a":1}`)
-			if retry.Code != http.StatusCreated || replayed(retry) || h.Calls() != 2 {
-				t.Fatalf("retry = %d replayed=%v calls=%d; want 201, not replayed, handler run again", retry.Code, replayed(retry), h.Calls())
+			retry := postRoute(mw, "/x", key, `{"a":1}`)
+			if retry.Code != http.StatusCreated || isReplayed(retry) || h.Calls() != 2 {
+				t.Fatalf("retry = %d replayed=%v calls=%d; want 201, not replayed, handler run again", retry.Code, isReplayed(retry), h.Calls())
 			}
 			if got := keyRows(t, pool, key); got != 1 {
 				t.Fatalf("idempotency rows after the successful retry = %d, want 1", got)
 			}
 
-			again := post(mw, "/x", key, `{"a":1}`)
-			if again.Code != http.StatusCreated || !replayed(again) || again.Body.String() != retry.Body.String() || h.Calls() != 2 {
-				t.Fatalf("third = %d replayed=%v calls=%d; want the stored 201 replayed with Idempotency-Replayed: true", again.Code, replayed(again), h.Calls())
+			again := postRoute(mw, "/x", key, `{"a":1}`)
+			if again.Code != http.StatusCreated || !isReplayed(again) || again.Body.String() != retry.Body.String() || h.Calls() != 2 {
+				t.Fatalf("third = %d replayed=%v calls=%d; want the stored 201 replayed with Idempotency-Replayed: true", again.Code, isReplayed(again), h.Calls())
 			}
 			if got := probeRows(t, pool); got != 1 {
 				t.Fatalf("handler writes = %d, want 1 (only the successful run committed)", got)
@@ -139,12 +139,12 @@ func TestIdempotency_5xx_DifferentBodyUnderSameKeyIsANewRequest(t *testing.T) {
 	h := &probeHandler{answer: failsThenSucceeds(http.StatusServiceUnavailable)}
 	mw := inboundhttp.RequireIdempotencyKey(pool)(h)
 
-	if first := post(mw, "/x", "five-xx-body", `{"a":1}`); first.Code != http.StatusServiceUnavailable {
+	if first := postRoute(mw, "/x", "five-xx-body", `{"a":1}`); first.Code != http.StatusServiceUnavailable {
 		t.Fatalf("first = %d, want 503", first.Code)
 	}
-	second := post(mw, "/x", "five-xx-body", `{"a":2}`)
-	if second.Code != http.StatusCreated || replayed(second) || h.Calls() != 2 {
-		t.Fatalf("different body after a 5xx = %d replayed=%v calls=%d; want a new request (201, handler run), not a 409", second.Code, replayed(second), h.Calls())
+	second := postRoute(mw, "/x", "five-xx-body", `{"a":2}`)
+	if second.Code != http.StatusCreated || isReplayed(second) || h.Calls() != 2 {
+		t.Fatalf("different body after a 5xx = %d replayed=%v calls=%d; want a new request (201, handler run), not a 409", second.Code, isReplayed(second), h.Calls())
 	}
 }
 
@@ -153,10 +153,10 @@ func TestIdempotency_4xx_IsStillStoredAndReplayed(t *testing.T) {
 	h := &probeHandler{answer: func(int) int { return http.StatusUnprocessableEntity }}
 	mw := inboundhttp.RequireIdempotencyKey(pool)(h)
 
-	first := post(mw, "/x", "four-xx", `{}`)
-	second := post(mw, "/x", "four-xx", `{}`)
-	if first.Code != 422 || second.Code != 422 || replayed(first) || !replayed(second) || h.Calls() != 1 {
-		t.Fatalf("first=%d second=%d replayed=%v/%v calls=%d; want a stored 422 replayed once", first.Code, second.Code, replayed(first), replayed(second), h.Calls())
+	first := postRoute(mw, "/x", "four-xx", `{}`)
+	second := postRoute(mw, "/x", "four-xx", `{}`)
+	if first.Code != 422 || second.Code != 422 || isReplayed(first) || !isReplayed(second) || h.Calls() != 1 {
+		t.Fatalf("first=%d second=%d replayed=%v/%v calls=%d; want a stored 422 replayed once", first.Code, second.Code, isReplayed(first), isReplayed(second), h.Calls())
 	}
 	if got := keyRows(t, pool, "four-xx"); got != 1 {
 		t.Fatalf("idempotency rows = %d, want 1", got)
@@ -187,9 +187,9 @@ func TestIdempotency_5xx_ConcurrentSameKey_SecondRunsAfterFirstNeverReplaysIt(t 
 	var first, second *httptest.ResponseRecorder
 	var wg sync.WaitGroup
 	wg.Add(2)
-	go func() { defer wg.Done(); first = post(mw, "/x", "five-xx-race", `{"a":1}`) }()
+	go func() { defer wg.Done(); first = postRoute(mw, "/x", "five-xx-race", `{"a":1}`) }()
 	<-entered
-	go func() { defer wg.Done(); second = post(mw, "/x", "five-xx-race", `{"a":1}`) }()
+	go func() { defer wg.Done(); second = postRoute(mw, "/x", "five-xx-race", `{"a":1}`) }()
 	time.Sleep(300 * time.Millisecond) // let the second block on the first's uncommitted key row
 	if got := h.Calls(); got != 1 {
 		t.Fatalf("handler calls while the first is in flight = %d, want 1 (the second must wait)", got)
@@ -200,8 +200,8 @@ func TestIdempotency_5xx_ConcurrentSameKey_SecondRunsAfterFirstNeverReplaysIt(t 
 	if first.Code != http.StatusServiceUnavailable {
 		t.Fatalf("first = %d, want 503", first.Code)
 	}
-	if second.Code != http.StatusCreated || replayed(second) {
-		t.Fatalf("second = %d replayed=%v; want 201 from its own run, never a replayed 5xx", second.Code, replayed(second))
+	if second.Code != http.StatusCreated || isReplayed(second) {
+		t.Fatalf("second = %d replayed=%v; want 201 from its own run, never a replayed 5xx", second.Code, isReplayed(second))
 	}
 	if h.maxActive != 1 || h.Calls() != 2 {
 		t.Fatalf("maxActive=%d calls=%d; want never concurrent and run twice", h.maxActive, h.Calls())
@@ -222,15 +222,15 @@ func TestIdempotency_Panic_RetryRunsAgainAndSuccessIsStored(t *testing.T) {
 
 	func() {
 		defer func() { _ = recover() }()
-		post(mw, "/x", "panic-retry", `{}`)
+		postRoute(mw, "/x", "panic-retry", `{}`)
 	}()
 	if got := keyRows(t, pool, "panic-retry"); got != 0 {
 		t.Fatalf("idempotency rows after a panic = %d, want 0", got)
 	}
-	retry := post(mw, "/x", "panic-retry", `{}`)
-	again := post(mw, "/x", "panic-retry", `{}`)
-	if retry.Code != 201 || replayed(retry) || !replayed(again) || h.Calls() != 2 {
-		t.Fatalf("retry=%d again replayed=%v calls=%d; want run again, then stored and replayed", retry.Code, replayed(again), h.Calls())
+	retry := postRoute(mw, "/x", "panic-retry", `{}`)
+	again := postRoute(mw, "/x", "panic-retry", `{}`)
+	if retry.Code != 201 || isReplayed(retry) || !isReplayed(again) || h.Calls() != 2 {
+		t.Fatalf("retry=%d again replayed=%v calls=%d; want run again, then stored and replayed", retry.Code, isReplayed(again), h.Calls())
 	}
 }
 
@@ -258,7 +258,7 @@ func TestIdempotency_5xx_ShiftPlanCapacityOutageIsNotReplayedAfterRecovery(t *te
 	capacity := &flakyCapacity{}
 	fx.handler.CommitShiftPlan.InstalledCapacity = capacity
 
-	first := post(fx.router, "/shift-plans", "capacity-outage-1", commitBody)
+	first := postRoute(fx.router, "/shift-plans", "capacity-outage-1", commitBody)
 	if first.Code != http.StatusServiceUnavailable || problemSlug(t, first.Body.Bytes()) != "installed-capacity-unavailable" {
 		t.Fatalf("first = %d %s, want 503 installed-capacity-unavailable", first.Code, first.Body.String())
 	}
@@ -268,9 +268,9 @@ func TestIdempotency_5xx_ShiftPlanCapacityOutageIsNotReplayedAfterRecovery(t *te
 	capacity.mu.Lock()
 	capacity.healthy = true
 	capacity.mu.Unlock()
-	retry := post(fx.router, "/shift-plans", "capacity-outage-1", commitBody)
-	if retry.Code != http.StatusCreated || replayed(retry) {
-		t.Fatalf("retry after recovery = %d replayed=%v (body %s); want a fresh 201", retry.Code, replayed(retry), retry.Body.String())
+	retry := postRoute(fx.router, "/shift-plans", "capacity-outage-1", commitBody)
+	if retry.Code != http.StatusCreated || isReplayed(retry) {
+		t.Fatalf("retry after recovery = %d replayed=%v (body %s); want a fresh 201", retry.Code, isReplayed(retry), retry.Body.String())
 	}
 	if got := count(t, pool, "SELECT count(*) FROM shift_plan"); got != 1 {
 		t.Fatalf("shift_plan rows = %d, want 1", got)

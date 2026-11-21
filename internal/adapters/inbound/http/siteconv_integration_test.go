@@ -66,7 +66,7 @@ func TestSiteConvergence_PlanWrittenViaOneNameIsReadableViaTheOther(t *testing.T
 	line := `"lines":[{"pathId":"pack","plannedHeads":5,"plannedRate":30,"plannedHours":40,"installedStations":10}]`
 
 	// Written via the DEPRECATED alias.
-	rec := post(router, "/shift-plans", "sc-1", `{"buildingId":"LEGACY-1","shiftId":"S1",`+line+`}`)
+	rec := postRoute(router, "/shift-plans", "sc-1", `{"buildingId":"LEGACY-1","shiftId":"S1",`+line+`}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("commit via buildingId: %d %s", rec.Code, rec.Body.String())
 	}
@@ -77,7 +77,7 @@ func TestSiteConvergence_PlanWrittenViaOneNameIsReadableViaTheOther(t *testing.T
 	}
 
 	// Written via the CANONICAL name.
-	rec = post(router, "/shift-plans", "sc-2", `{"siteCode":"WH7","shiftId":"S1",`+line+`}`)
+	rec = postRoute(router, "/shift-plans", "sc-2", `{"siteCode":"WH7","shiftId":"S1",`+line+`}`)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("commit via siteCode: %d %s", rec.Code, rec.Body.String())
 	}
@@ -134,7 +134,7 @@ func TestSiteConvergence_PlanWrittenViaOneNameIsReadableViaTheOther(t *testing.T
 func TestSiteConvergence_ConflictingNamesAreRejectedAndNothingIsWritten(t *testing.T) {
 	pool := idempotencyDB(t)
 	router := siteConvRouter(t, pool)
-	rec := post(router, "/shift-plans", "sc-conflict",
+	rec := postRoute(router, "/shift-plans", "sc-conflict",
 		`{"siteCode":"WH7","buildingId":"LEGACY-1","shiftId":"S1","lines":[{"pathId":"pack","plannedHeads":5,"plannedRate":30,"plannedHours":40,"installedStations":10}]}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (%s)", rec.Code, rec.Body.String())
