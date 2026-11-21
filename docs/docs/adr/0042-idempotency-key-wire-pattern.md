@@ -84,3 +84,10 @@ sensor.
 - Sibling contexts that declare `^[ -~]+$` (inventory-storage,
   labor-performance) have the same latent false positive for a key followed
   by a TAB. Each needs this change in its own repo.
+
+## Addendum (2026-11-21) — replay classes
+
+What a stored answer IS (which refusals are stored and replayed) is now
+governed by [ADR 0044](./0044-idempotency-replay-classes.md): FINAL
+refusals are stored and replayed; RETRYABLE ones release the key. This ADR's
+wire contract (the pattern, the 400s, the 409 reuse conflict) is unchanged.
