@@ -113,8 +113,10 @@ func (g *Readiness) Failing(ctx context.Context) []string {
 	return append([]string(nil), failing...)
 }
 
-// dependencyUnavailable is the 503 problem of a failed dependency check.
-var dependencyUnavailable = problemCategory{"dependency-unavailable", "A runtime dependency is unavailable"}
+// dependencyUnavailable is the 503 problem of a failed dependency check;
+// declared with its replay class in errors.go (ADR 0044) like every other
+// problem category of this package.
+var dependencyUnavailable = dependencyUnavailableProblem
 
 // handleReadyz serves 200 {"status":"ready"} while ready; 503
 // {"status":"not_ready"} once SetNotReady was called (draining); 503

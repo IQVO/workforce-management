@@ -143,6 +143,9 @@ func newIdempotencyFixtureWith(t *testing.T, pool *pgxpool.Pool, clock ports.Clo
 	})
 
 	h := &inboundhttp.Handler{
+		CertifyAssociate: &usecases.CertifyAssociate{
+			Associates: associates, Events: publisher, Clock: clock, UnitOfWork: uow,
+		},
 		CommitShiftPlan: &usecases.CommitShiftPlan{
 			ShiftPlans: shiftPlans, Events: publisher, Clock: clock, InstalledCapacity: unlimitedCapacity{},
 			Catalogue: catalogue, MaxHoursPerShift: 8, UnitOfWork: uow,
@@ -204,7 +207,7 @@ func problemSlug(t *testing.T, body []byte) string {
 	return problem.Type
 }
 
-func post(router http.Handler, path, key, body string) *httptest.ResponseRecorder {
+func postRoute(router http.Handler, path, key, body string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	if key != "" {
@@ -226,7 +229,7 @@ func TestIdempotency_Commit_FreshKey_RecordsOutcome(t *testing.T) {
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 
-	rec := post(fx.router, "/shift-plans", "commit-fresh-1", commitBody)
+	rec := postRoute(fx.router, "/shift-plans", "commit-fresh-1", commitBody)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -248,7 +251,7 @@ func TestIdempotency_Commit_Replay_ReturnsIdenticalResponseNoDoubleEffect(t *tes
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 
-	first := post(fx.router, "/shift-plans", "commit-replay-1", commitBody)
+	first := postRoute(fx.router, "/shift-plans", "commit-replay-1", commitBody)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
@@ -257,7 +260,7 @@ func TestIdempotency_Commit_Replay_ReturnsIdenticalResponseNoDoubleEffect(t *tes
 		t.Fatal("the commit must have written outbox rows inside the shared transaction")
 	}
 
-	second := post(fx.router, "/shift-plans", "commit-replay-1", commitBody)
+	second := postRoute(fx.router, "/shift-plans", "commit-replay-1", commitBody)
 	if first.Header().Get("Idempotency-Replayed") != "" || second.Header().Get("Idempotency-Replayed") != "true" {
 		t.Fatalf("Idempotency-Replayed first=%q replay=%q, want absent then true", first.Header().Get("Idempotency-Replayed"), second.Header().Get("Idempotency-Replayed"))
 	}
@@ -280,10 +283,10 @@ func TestIdempotency_Commit_SameKeyDifferentBody_Returns409(t *testing.T) {
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 
-	if first := post(fx.router, "/shift-plans", "commit-mismatch-1", commitBody); first.Code != http.StatusCreated {
+	if first := postRoute(fx.router, "/shift-plans", "commit-mismatch-1", commitBody); first.Code != http.StatusCreated {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
-	second := post(fx.router, "/shift-plans", "commit-mismatch-1", strings.Replace(commitBody, `"S1"`, `"S2"`, 1))
+	second := postRoute(fx.router, "/shift-plans", "commit-mismatch-1", strings.Replace(commitBody, `"S1"`, `"S2"`, 1))
 	if second.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (body: %s)", second.Code, second.Body.String())
 	}
@@ -300,7 +303,7 @@ func TestIdempotency_Commit_NoHeader_Returns400(t *testing.T) {
 	pool := idempotencyDB(t)
 	fx := newIdempotencyFixture(t, pool)
 
-	rec := post(fx.router, "/shift-plans", "", commitBody)
+	rec := postRoute(fx.router, "/shift-plans", "", commitBody)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -325,7 +328,7 @@ func TestIdempotency_Commit_Concurrent_ExactlyOneEffect(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i] = post(fx.router, "/shift-plans", "commit-concurrent-1", commitBody)
+			results[i] = postRoute(fx.router, "/shift-plans", "commit-concurrent-1", commitBody)
 		}(i)
 	}
 	wg.Wait()
@@ -353,7 +356,7 @@ func TestIdempotency_Commit_BusinessErrorResponse_IsCachedAndReplayed(t *testing
 	fx := newIdempotencyFixture(t, pool)
 	overBody := strings.Replace(commitBody, `"plannedHeads":5`, `"plannedHeads":11`, 1)
 
-	first := post(fx.router, "/shift-plans", "commit-business-error-1", overBody)
+	first := postRoute(fx.router, "/shift-plans", "commit-business-error-1", overBody)
 	if first.Code != http.StatusConflict {
 		t.Fatalf("first call status = %d, want 409 (body: %s)", first.Code, first.Body.String())
 	}
@@ -361,7 +364,7 @@ func TestIdempotency_Commit_BusinessErrorResponse_IsCachedAndReplayed(t *testing
 	if statusCode == nil || *statusCode != http.StatusConflict {
 		t.Fatalf("stored status_code = %v, want 409 — the business error response must be cached", statusCode)
 	}
-	second := post(fx.router, "/shift-plans", "commit-business-error-1", overBody)
+	second := postRoute(fx.router, "/shift-plans", "commit-business-error-1", overBody)
 	if second.Code != first.Code || second.Body.String() != first.Body.String() {
 		t.Fatal("replay differs from the cached error response")
 	}
@@ -386,7 +389,7 @@ func TestIdempotency_Assign_FreshKeyThenReplay_NoDoubleEffect(t *testing.T) {
 	fx := newIdempotencyFixture(t, pool)
 	seedAssociate(t, pool, "assoc-1", "pack")
 
-	first := post(fx.router, "/associates/assoc-1/assignments", "assign-1", assignBody)
+	first := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-1", assignBody)
 	if first.Code != http.StatusCreated {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
@@ -394,7 +397,7 @@ func TestIdempotency_Assign_FreshKeyThenReplay_NoDoubleEffect(t *testing.T) {
 		t.Fatalf("assignment outbox rows = %d, want 1", got)
 	}
 
-	second := post(fx.router, "/associates/assoc-1/assignments", "assign-1", assignBody)
+	second := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-1", assignBody)
 	if second.Code != first.Code || second.Body.String() != first.Body.String() {
 		t.Fatalf("replay differs:\nfirst:  %d %s\nsecond: %d %s", first.Code, first.Body.String(), second.Code, second.Body.String())
 	}
@@ -411,10 +414,10 @@ func TestIdempotency_Assign_SameKeyDifferentBody_Returns409(t *testing.T) {
 	fx := newIdempotencyFixture(t, pool)
 	seedAssociate(t, pool, "assoc-1", "pack")
 
-	if first := post(fx.router, "/associates/assoc-1/assignments", "assign-mismatch", assignBody); first.Code != http.StatusCreated {
+	if first := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-mismatch", assignBody); first.Code != http.StatusCreated {
 		t.Fatalf("first call status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
-	second := post(fx.router, "/associates/assoc-1/assignments", "assign-mismatch", `{"pathId":"pack-zone-a"}`)
+	second := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-mismatch", `{"pathId":"pack-zone-a"}`)
 	if second.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (body: %s)", second.Code, second.Body.String())
 	}
@@ -428,7 +431,7 @@ func TestIdempotency_Assign_NoHeader_Returns400(t *testing.T) {
 	fx := newIdempotencyFixture(t, pool)
 	seedAssociate(t, pool, "assoc-1", "pack")
 
-	rec := post(fx.router, "/associates/assoc-1/assignments", "", assignBody)
+	rec := postRoute(fx.router, "/associates/assoc-1/assignments", "", assignBody)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -452,7 +455,7 @@ func TestIdempotency_Assign_Concurrent_ExactlyOneEffect(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			results[i] = post(fx.router, "/associates/assoc-1/assignments", "assign-concurrent", assignBody)
+			results[i] = postRoute(fx.router, "/associates/assoc-1/assignments", "assign-concurrent", assignBody)
 		}(i)
 	}
 	wg.Wait()
@@ -526,9 +529,11 @@ func associateShiftState(t *testing.T, pool *pgxpool.Pool, id string) (hours flo
 // write loses an optimistic-concurrency race the response is a 409 — and the
 // associate's hours write made earlier in the SAME request must NOT survive:
 // the middleware used to commit the shared transaction for any non-panic
-// response, persisting the partial write. The 409 itself is still recorded
-// and replayed (ADR-0027's stored-response semantics), and the failed attempt
-// must not publish any event.
+// response, persisting the partial write. concurrent-modification is
+// RETRYABLE (ADR 0044): nothing committed, the answer depends on state that
+// changed, so the 409 is NOT stored — the key is released, the same key+body
+// retry executes the handler again (and once it succeeds, THAT answer is
+// stored and replayed). The failed attempt must not publish any event.
 func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *testing.T) {
 	pool := idempotencyDB(t)
 	clock := &settableClock{t: time.Date(2026, 9, 27, 9, 0, 0, 0, time.UTC)}
@@ -539,7 +544,7 @@ func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *test
 	fx := newIdempotencyFixtureWith(t, pool, clock, wrap)
 	seedAssociate(t, pool, "assoc-1", "pack")
 
-	if first := post(fx.router, "/associates/assoc-1/assignments", "assign-setup", assignBody); first.Code != http.StatusCreated {
+	if first := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-setup", assignBody); first.Code != http.StatusCreated {
 		t.Fatalf("setup assignment status = %d, want 201 (body: %s)", first.Code, first.Body.String())
 	}
 	hoursBefore, versionBefore := associateShiftState(t, pool, "assoc-1")
@@ -549,7 +554,7 @@ func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *test
 	// concurrent writer wins the labor_assignment row.
 	clock.Set(clock.Now().Add(2 * time.Hour))
 	conflict = true
-	rec := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	rec := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body.String())
 	}
@@ -566,18 +571,66 @@ func TestIdempotency_Assign_ConcurrentEditConflict_RollsBackPartialWrite(t *test
 		t.Fatalf("outbox rows after a 409 = %d, want %d (no events from a failed request)", got, outboxBefore)
 	}
 
-	// The 409 is still the stored idempotent outcome for this key.
-	_, statusCode, _ := idempotencyRowOutcome(t, pool, "assign-conflict")
-	if statusCode == nil || *statusCode != http.StatusConflict {
-		t.Fatalf("stored status_code = %v, want 409", statusCode)
+	// concurrent-modification is RETRYABLE (ADR 0044): the key must be
+	// RELEASED — no row survives, nothing is replayed for it.
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-conflict'"); got != 0 {
+		t.Fatalf("key rows after the RETRYABLE 409 = %d, want 0: the key must be released", got)
 	}
 	conflict = false
-	replay := post(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
-	if replay.Code != http.StatusConflict || replay.Body.String() != rec.Body.String() {
-		t.Fatalf("replay = %d %s, want the stored 409 %s", replay.Code, replay.Body.String(), rec.Body.String())
+	// The same key and body executes the handler again now that the
+	// competing writer is done — and once it succeeds, that answer IS
+	// stored, so a third request replays it.
+	retry := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("retry under the released key = %d (body: %s), want 201: the retry must execute", retry.Code, retry.Body.String())
 	}
-	if h, v := associateShiftState(t, pool, "assoc-1"); h != hoursBefore || v != versionBefore {
-		t.Fatalf("replay changed associate_shift to (hours %v, version %d)", h, v)
+	replay := postRoute(fx.router, "/associates/assoc-1/assignments", "assign-conflict", assignBody)
+	if replay.Code != http.StatusCreated || replay.Header().Get(inboundhttp.IdempotencyReplayedHeader) != "true" {
+		t.Fatalf("third request = %d replayed=%q, want the stored 201 replayed with Idempotency-Replayed: true",
+			replay.Code, replay.Header().Get(inboundhttp.IdempotencyReplayedHeader))
+	}
+	if h, v := associateShiftState(t, pool, "assoc-1"); h == hoursBefore && v == versionBefore {
+		t.Fatalf("the successful retry logged no hours (hours %v, version %d)", h, v)
+	}
+}
+
+// certification-required is RETRYABLE (ADR 0044): the associate's
+// certification set is state that changes (POST
+// /associates/{id}/certifications), so the refusal is not stored and the key
+// is released; once the certification exists the SAME key and body executes
+// and is then stored and replayed.
+func TestIdempotency_Assign_CertificationRequiredIsReleasedThenRetried(t *testing.T) {
+	pool := idempotencyDB(t)
+	fx := newIdempotencyFixture(t, pool)
+	seedAssociate(t, pool, "assoc-cert", "other") // certified, but not for "pack"
+
+	first := postRoute(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if first.Code != http.StatusConflict {
+		t.Fatalf("first = %d (body: %s), want 409", first.Code, first.Body.String())
+	}
+	if slug := problemSlug(t, first.Body.Bytes()); slug != "certification-required" {
+		t.Fatalf("problem.type slug = %q, want certification-required", slug)
+	}
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-cert-retry'"); got != 0 {
+		t.Fatalf("key rows after the RETRYABLE refusal = %d, want 0: the key must be released", got)
+	}
+
+	// The certification arrives — its own logical request with its own key.
+	if cert := postRoute(fx.router, "/associates/assoc-cert/certifications", "cert-arrives-1", `{"certification":"pack"}`); cert.Code != http.StatusNoContent {
+		t.Fatalf("certification POST = %d (body: %s), want 204", cert.Code, cert.Body.String())
+	}
+
+	// The refused key is free: the same key and body is a NEW execution.
+	retry := postRoute(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if retry.Code != http.StatusCreated {
+		t.Fatalf("retry under the released key = %d (body: %s), want 201: the retry must execute", retry.Code, retry.Body.String())
+	}
+	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'assign-cert-retry'"); got != 1 {
+		t.Fatalf("key rows after the successful retry = %d, want 1: a 2xx is stored", got)
+	}
+	replay := postRoute(fx.router, "/associates/assoc-cert/assignments", "assign-cert-retry", assignBody)
+	if replay.Code != http.StatusCreated || replay.Header().Get(inboundhttp.IdempotencyReplayedHeader) != "true" {
+		t.Fatalf("third request = %d replayed=%q, want the stored 201 replayed", replay.Code, replay.Header().Get(inboundhttp.IdempotencyReplayedHeader))
 	}
 }
 
@@ -610,7 +663,7 @@ func TestRequireIdempotencyKey_BindsItsTransactionIntoTheRequestContext(t *testi
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
-	rec := post(h, "/x", "bind-1", `{}`)
+	rec := postRoute(h, "/x", "bind-1", `{}`)
 	if rec.Code != http.StatusNoContent || !bound {
 		t.Fatalf("status = %d, tx bound = %v; want 204 and a transaction bound into ctx", rec.Code, bound)
 	}
@@ -631,7 +684,7 @@ func TestRequireIdempotencyKey_PanicRollsBackAndRePanics(t *testing.T) {
 				t.Fatalf("recovered %v, want the handler's panic re-raised", p)
 			}
 		}()
-		post(h, "/x", "panic-1", `{}`)
+		postRoute(h, "/x", "panic-1", `{}`)
 	}()
 
 	if got := count(t, pool, "SELECT count(*) FROM idempotency_keys WHERE key = 'panic-1'"); got != 0 {

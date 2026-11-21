@@ -96,29 +96,40 @@ func visibleASCII(b byte) bool { return b > ' ' && b <= '~' }
 // needed — the database's own MVCC/locking semantics ARE the
 // synchronization primitive.
 //
-// # What is stored: every answer except a 5xx
+// # What is stored: a 2xx and a FINAL/OUTCOME refusal, never a RETRYABLE one, a 5xx or a panic
 //
-// A 2xx and a 4xx (and any other non-5xx) answer is stored and replayed for
-// the key's TTL. A 5xx answer and a panic are NEVER stored: the transaction
-// rolls back — the key row and the handler's writes with it — and a retry
-// under the same key runs the handler again (see runFreshRequest). A
-// concurrent same-key request that was blocked on the first one's key row
-// therefore runs fresh once the first fails; it never replays the failure
-// and never runs beside it.
+// Every problem type carries a replay class on its catalogue entry (ADR
+// 0044): FINAL answers are a function of the request alone and are stored
+// and replayed; OUTCOME answers (none exist in this service — the savepoint
+// below discards every refusal's writes) would commit the writes with the
+// stored answer; RETRYABLE answers depend on state that can change, so they
+// are released exactly like a 5xx. The class mark travels on the capture
+// recorder: writeError sets it from the catalogue entry it resolved, and
+// this middleware holds no list of slugs and no status ranges beyond 2xx
+// and 5xx. A refusal that arrives UNMARKED (a handler writing a problem by
+// hand, bypassing writeError) is released like RETRYABLE — the safe
+// fallback, never a silently-stored refusal.
+//
+// A 5xx answer and a panic are NEVER stored: the transaction rolls back —
+// the key row and the handler's writes with it — and a retry under the
+// same key runs the handler again (see runFreshRequest). A concurrent
+// same-key request that was blocked on the first one's key row therefore
+// runs fresh once the first fails; it never replays the failure and never
+// runs beside it.
 func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			key := r.Header.Get(IdempotencyKeyHeader)
 			if key == "" {
 				writeProblem(w, http.StatusBadRequest,
-					problemCategory{"idempotency-key-required", "Idempotency-Key header is required"},
+					idempotencyKeyRequiredProblem,
 					"Every POST requires a caller-supplied "+IdempotencyKeyHeader+" header so a retried request is never applied twice.",
 					r.URL.Path)
 				return
 			}
 			if !validIdempotencyKey(key) {
 				writeProblem(w, http.StatusBadRequest,
-					problemCategory{"idempotency-key-invalid", "Idempotency-Key header is invalid"},
+					idempotencyKeyInvalidProblem,
 					IdempotencyKeyHeader+" must be 1-128 printable ASCII characters that start and end with a visible character.",
 					r.URL.Path)
 				return
@@ -130,7 +141,7 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			bodyBytes, err := io.ReadAll(r.Body)
 			if err != nil {
 				writeProblem(w, http.StatusBadRequest,
-					problemCategory{"malformed-request-body", "Malformed request body"},
+					malformedRequestBodyProblem,
 					err.Error(), r.URL.Path)
 				return
 			}
@@ -173,15 +184,18 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 	}
 }
 
-// internalErrorProblem mirrors categoryFor's own default case — this
-// middleware runs before any domain/application error exists to map, so it
-// constructs the same category directly.
-var internalErrorProblem = problemCategory{"internal-error", "Internal server error"}
-
-// writeProblem writes an RFC 7807 (application/problem+json) response for a
-// middleware-level failure that has no domain error to map through
-// categoryFor.
+// writeProblem writes an RFC 7807 (application/problem+json) response for
+// any problem this package answers without a domain error to map through
+// categoryFor (the middleware's own key-contract problems, infra failures,
+// GET-route paging). The categories come from errors.go, classified (ADR
+// 0044); like writeError, this writer marks the capture recorder with the
+// category's class, so any refusal written through a shared writer carries
+// its class (today no production writeProblem call runs inside the capture;
+// the mark keeps the two writers uniform).
 func writeProblem(w http.ResponseWriter, status int, cat problemCategory, detail, instance string) {
+	if cap, ok := w.(*captureRecorder); ok {
+		cap.markedClass = cat.class
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problemDetails{
@@ -222,7 +236,7 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 
 	if storedHash != requestHash || storedMethod != r.Method || storedPath != r.URL.Path {
 		writeProblem(w, http.StatusConflict,
-			problemCategory{"idempotency-key-reused", "Idempotency-Key was already used with a different request"},
+			idempotencyKeyReusedProblem,
 			"The Idempotency-Key header on this request was already used with a different request (method, path or body). "+
 				"Use a new Idempotency-Key for a genuinely different request.",
 			r.URL.Path)
@@ -255,6 +269,17 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 	_, _ = w.Write(responseBody)
 }
 
+// captureRecorder is the recorder runFreshRequest captures the handler's
+// answer in, extended with the replay-class mark writeError sets while
+// writing a refusal through it (ADR 0044). An unmarked refusal (a handler
+// that bypassed the shared error writer) reads as the empty class and is
+// released like RETRYABLE — the middleware never stores what it cannot
+// classify.
+type captureRecorder struct {
+	*httptest.ResponseRecorder
+	markedClass replayClass
+}
+
 // runFreshRequest handles the "genuinely new key" path: it calls next with a
 // CAPTURING recorder (rather than the real http.ResponseWriter), persists
 // the outcome and commits, and ONLY THEN copies the captured response onto
@@ -284,7 +309,7 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 	}
 
 	txCtx := pgtx.WithTx(ctx, sp)
-	rec := httptest.NewRecorder()
+	rec := &captureRecorder{ResponseRecorder: httptest.NewRecorder()}
 	next.ServeHTTP(rec, r.WithContext(txCtx))
 
 	// A server failure is never stored (fleet idempotency rule, ADR-0027
@@ -296,17 +321,28 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 	// that is blocked on the key row's unique index then proceeds as a fresh
 	// request instead of replaying the failure. The client still receives
 	// the 5xx itself, verbatim.
-	if rec.Code >= http.StatusInternalServerError {
+	//
+	// A RETRYABLE refusal (ADR 0044) is released by exactly the same
+	// branch: nothing committed, and the answer depends on state that can
+	// change (an optimistic-lock loss, a referenced fact an event or another
+	// request may deliver later), so a stored copy would pin a stale refusal
+	// for the key's TTL. An unmarked refusal is released too — the safe
+	// fallback for any answer this package did not classify.
+	is2xx := rec.Code >= 200 && rec.Code < 300
+	released := rec.Code >= http.StatusInternalServerError ||
+		(!is2xx && rec.markedClass != replayFinal && rec.markedClass != replayOutcome)
+	if released {
 		_ = tx.Rollback(ctx)
-		writeRecorded(w, rec)
+		writeRecorded(w, rec.ResponseRecorder)
 		return
 	}
 
-	// Every other NORMAL (non-panic) response is cached here, including a
-	// business-logic error response (4xx from validation, etc.) — a
-	// deliberate v1 simplification (ADR-0027): a client retrying the exact
-	// same key+body deterministically gets the exact same answer. A caller
-	// wanting a different outcome must use a new Idempotency-Key.
+	// Every remaining NORMAL response is cached here. A 2xx keeps its
+	// writes; a FINAL refusal is a function of the request alone, so its
+	// stored copy can never go stale; an OUTCOME refusal (no catalogue
+	// entry of this service uses the class — see ADR 0044) would keep the
+	// writes the command made, committing them together with the stored
+	// answer.
 	//
 	// But the DOMAIN writes of a non-2xx request must never be committed
 	// with it: a use case can fail late (e.g. a 409 optimistic-concurrency
@@ -317,8 +353,8 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 	// transaction and commit together with the idempotency row), anything
 	// else rolls back to it (domain writes and outbox rows vanish) while the
 	// idempotency row itself — inserted BEFORE the savepoint — survives and
-	// still records the failed outcome for replay.
-	if rec.Code >= 200 && rec.Code < 300 {
+	// still records the outcome for replay.
+	if is2xx || rec.markedClass == replayOutcome {
 		err = sp.Commit(ctx) // RELEASE SAVEPOINT
 	} else {
 		err = sp.Rollback(ctx) // ROLLBACK TO SAVEPOINT
@@ -353,7 +389,7 @@ func runFreshRequest(w http.ResponseWriter, r *http.Request, ctx context.Context
 
 	// Only after a successful commit does the real client see anything — the
 	// recorder's headers, then status, then body, VERBATIM.
-	writeRecorded(w, rec)
+	writeRecorded(w, rec.ResponseRecorder)
 }
 
 // writeRecorded copies the captured response onto the real client connection:

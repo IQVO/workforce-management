@@ -375,9 +375,12 @@ paths:
         alias with the same value and the same stored column; ADR 0035): the
         underlying repository upserts on that key. A blind retry would
         nevertheless re-publish ShiftPlanCommitted, so this route is also
-        protected by the Idempotency-Key header (ADR-0027): a retried
-        request with the same key and body replays the first response
-        without committing or publishing again.
+        protected by the Idempotency-Key header (ADR-0027, ADR-0044): a
+        retried request with the same key and body replays the first
+        response without committing or publishing again — unless the first
+        answer was RETRYABLE (e.g. exceeds-installed-capacity,
+        concurrent-modification), which is not stored: the key is released
+        and the retry executes again.
       tags: [Shift Plans]
       parameters:
         - $ref: "#/components/parameters/IdempotencyKey"
@@ -523,8 +526,12 @@ paths:
         is rejected if the associate is currently on a logged break or their
         shift has ended. Because each call closes the prior interval and
         raises an event, a blind retry would double-apply it, so this route
-        is protected by the Idempotency-Key header (ADR-0027): a retried
-        request with the same key and body replays the first response.
+        is protected by the Idempotency-Key header (ADR-0027, ADR-0044): a
+        retried request with the same key and body replays the first
+        response — unless the first answer was RETRYABLE (e.g.
+        certification-required, associate-on-break, concurrent-modification),
+        which is not stored: the key is released and the retry executes
+        again once the state allows it.
       tags: [Assignments]
       parameters:
         - $ref: "#/components/parameters/AssociateId"
@@ -1084,9 +1091,18 @@ components:
         safe (ADR-0027). Required on every POST: the service runs on Postgres in
         every deployment (ADR-0038) and rejects a request without it with
         400 idempotency-key-required. Reuse the SAME key for retries of one logical
-        request (same body) — the first response, success or business
-        error, is stored and replayed byte-for-byte for the key's TTL
-        (24h by default) — and a NEW key for each new logical request.
+        request (same body) — the first response is stored and replayed
+        byte-for-byte for the key's TTL (24h by default) when it is final
+        for that request: a 2xx, a request-shape 400/422, or a FINAL
+        conflict whose every operand the request itself carries
+        (planned-heads-exceed-installed, planned-hours-exceed-capacity) —
+        and a NEW key for each new logical request.
+        A RETRYABLE refusal (404 resource-not-found or
+        labour-plan-not-found, 400 unknown-path-id, the associate-state
+        409s, exceeds-installed-capacity, concurrent-modification) is NOT
+        stored (ADR-0044): the key is released, so the same key and body
+        executes again once the state allows it — and a different body
+        under that key is a new request, not a 409.
         A 5xx answer is never stored: the request's writes and the key roll
         back, so a retry with the same key runs again.
         Reusing a key with a different request (method, path or body) is

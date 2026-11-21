@@ -171,3 +171,20 @@ beside the first). 2xx and 4xx behaviour is unchanged, and a panic was and
 remains rolled back and never cached. Tests:
 `internal/adapters/inbound/http/idempotency_5xx_test.go` (unit, fake
 transaction) and `idempotency_5xx_integration_test.go` (real Postgres).
+
+## Addendum (2026-11-21) — replay classes: a RETRYABLE refusal is not stored
+
+The Decision above (and the 2026-11-18 addendum's "2xx and 4xx behaviour is
+unchanged") stored every 4xx. The fleet replay-class rule
+([ADR 0044](./0044-idempotency-replay-classes.md)) narrows that: every
+problem type now declares FINAL, OUTCOME or RETRYABLE on its catalogue
+entry; FINAL answers are stored and replayed as before, a RETRYABLE refusal
+(concurrent-modification, the associate-state 409s, the not-yet-known 404s,
+the live-capacity 409) is released by the same whole-transaction rollback
+the 5xx branch uses — the key row is gone, a retry under the same key
+executes again, and a different body under the released key is a new
+request. No OUTCOME entry exists in this store: every non-2xx answer's
+writes are rolled back to the request's savepoint, so a refusal can never
+commit state. The class lives on the catalogue entry
+(`internal/adapters/inbound/http/errors.go`); the middleware reads a mark
+the shared error writers set and holds no slug list.
