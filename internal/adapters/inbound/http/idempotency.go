@@ -192,23 +192,8 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 				// A row already exists — see the doc comment's concurrency
 				// argument for why the transaction that inserted it is
 				// GUARANTEED to have already resolved by this point. A row
-				// past the replay window never answers (ADR 0044 addendum):
-				// claim it and EXECUTE fresh under the same key.
-				claimed, err := claimExpiredKey(ctx, tx, r, key, requestHash)
-				if err != nil {
-					_ = tx.Rollback(ctx)
-					writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
-					return
-				}
-				if claimed {
-					runFreshRequest(w, r, ctx, tx, key, next)
-					return
-				}
-				// A live row: this call's own transaction never wrote
-				// anything, so it is rolled back before the plain,
-				// non-transactional read.
-				_ = tx.Rollback(ctx)
-				replayCachedResponse(w, r, pool, key, requestHash)
+				// past the replay window never answers (ADR 0044 addendum).
+				replayOrClaim(w, r, pool, tx, key, requestHash, next)
 				return
 			}
 
@@ -303,6 +288,29 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 	w.Header().Set(IdempotencyReplayedHeader, "true")
 	w.WriteHeader(*statusCode)
 	_, _ = w.Write(responseBody)
+}
+
+// replayOrClaim serves the "a row already exists for this key" branch with
+// the request transaction still open. A row past the replay window
+// (idempotency.KeyTTL) never answers (ADR 0044 addendum): it is CLAIMED —
+// created_at refreshed, stored answer cleared — and this request EXECUTES
+// fresh under the same key. A live row is replayed: this call's own
+// transaction never wrote anything, so it is rolled back before the plain,
+// non-transactional read.
+func replayOrClaim(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, tx pgx.Tx, key, requestHash string, next http.Handler) {
+	ctx := r.Context()
+	claimed, err := claimExpiredKey(ctx, tx, r, key, requestHash)
+	if err != nil {
+		_ = tx.Rollback(ctx)
+		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
+		return
+	}
+	if claimed {
+		runFreshRequest(w, r, ctx, tx, key, next)
+		return
+	}
+	_ = tx.Rollback(ctx)
+	replayCachedResponse(w, r, pool, key, requestHash)
 }
 
 // claimExpiredKey takes over an idempotency_keys row that has aged past the
