@@ -317,7 +317,7 @@ func (c *AnalyticsConsumer) deadLetterAndCommit(ctx context.Context, span trace.
 	span.RecordError(cause)
 	span.SetStatus(codes.Error, cause.Error())
 	c.Logger.ErrorContext(ctx, "analytics: exhausted retries, sending to dead-letter topic",
-		"topic", msg.Topic, "dlq_topic", msg.Topic+analyticsDLQTopicSuffix, "attempts", maxAnalyticsHandlerAttempts, "error", cause)
+		"topic", msg.Topic, "dlq_topic", msg.Topic+analyticsDLQTopicSuffix, "attempts", maxAnalyticsHandlerAttempts, "error", sanitizeErr(cause))
 
 	if dlqErr := c.dlqPublish(ctx, msg, cause); dlqErr != nil {
 		return fmt.Errorf("analytics: publish to dead-letter topic: %w", dlqErr)

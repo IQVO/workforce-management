@@ -347,10 +347,10 @@ func (c *Consumer) Run(ctx context.Context) error {
 		}
 		if err := c.handle(msg); errors.Is(err, cloudevents.ErrNotCloudEvent) {
 			c.Logger.WarnContext(ctx, "labor-performance cache: skipping message that is not a valid CloudEvents 1.0 event",
-				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
+				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", sanitizeErr(err))
 		} else if err != nil {
 			c.Logger.ErrorContext(ctx, "labor-performance cache message handling failed",
-				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", err)
+				"topic", msg.Topic, "offset", msg.Offset, "partition", msg.Partition, "error", sanitizeErr(err))
 		}
 		c.checkReady(msg)
 	}
