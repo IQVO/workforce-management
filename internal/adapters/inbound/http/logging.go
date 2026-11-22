@@ -45,13 +45,13 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			ctx := r.Context()
 			attrs := []any{
-				"method", r.Method,
+				"method", sanitizeForLog(r.Method),
 				"path", sanitizeForLog(r.URL.Path),
 				"route", routePattern(ctx),
 				statusKey, ww.Status(),
 				"duration_ms", duration.Milliseconds(),
 				"bytes", ww.BytesWritten(),
-				"request_id", middleware.GetReqID(ctx),
+				"request_id", sanitizeForLog(middleware.GetReqID(ctx)),
 			}
 			if ww.Status() >= http.StatusInternalServerError {
 				logger.ErrorContext(ctx, "http request", attrs...)
