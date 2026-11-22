@@ -202,6 +202,15 @@ Fully qualified name of the A2A agent Deployment/Service (<release>-a2a, ADR-003
 {{- include "workforce-management.fullname" . }}-a2a
 {{- end }}
 
+{{/* agents.colocate (warehouse-infra ADR 0012): "true" iff colocate, mcp and a2a are all on; else empty. */}}
+{{- define "workforce-management.agentsColocated" -}}
+{{- if and (.Values.agents | default dict).colocate .Values.mcp.enabled .Values.a2a.enabled }}true{{ end -}}
+{{- end }}
+
+{{- define "workforce-management.agentsFullname" -}}
+{{- printf "%s-agents" (include "workforce-management.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
 
 {{/*
 Fully qualified name of the frontend Module Federation remote deployment/service.
