@@ -33,7 +33,7 @@ func (p *LogPublisher) Publish(ctx context.Context, evts ...shared.DomainEvent) 
 	defer p.mu.Unlock()
 	for _, e := range evts {
 		if p.Logger != nil {
-			p.Logger.Info("domain event published", "event_name", e.EventName(), "occurred_at", e.OccurredAt())
+			p.Logger.Info("domain event published", "event_name", sanitizeLog(e.EventName()), "occurred_at", e.OccurredAt())
 		}
 		p.events = append(p.events, e)
 	}

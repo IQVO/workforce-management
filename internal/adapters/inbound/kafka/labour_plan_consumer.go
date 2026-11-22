@@ -175,8 +175,8 @@ func (c *LabourPlanConsumer) handleFetched(ctx context.Context, msg segmentio.Me
 		}
 		return c.deadLetterLabourPlan(ctx, span, msg, err)
 	}
-	c.logger.DebugContext(ctx, "labour plan: message handled", "event_id", m.id, "applied", applied,
-		"site_code", m.req.Key.SiteCode, "shift_id", m.req.Key.ShiftId, "path_id", m.req.Key.PathId, "version", m.req.Version)
+	c.logger.DebugContext(ctx, "labour plan: message handled", "event_id", sanitizeLog(m.id), "applied", applied,
+		"site_code", sanitizeLog(m.req.Key.SiteCode), "shift_id", sanitizeLog(m.req.Key.ShiftId), "path_id", sanitizeLog(string(m.req.Key.PathId)), "version", m.req.Version)
 	return c.reader.CommitMessages(ctx, msg)
 }
 
@@ -203,7 +203,7 @@ func (c *LabourPlanConsumer) deadLetterLabourPlan(ctx context.Context, span trac
 	span.RecordError(cause)
 	span.SetStatus(codes.Error, cause.Error())
 	c.logger.ErrorContext(ctx, "labour plan: sending message to the dead-letter topic",
-		"topic", msg.Topic, "dlq_topic", msg.Topic+LabourPlanDLQTopicSuffix, "offset", msg.Offset, "partition", msg.Partition, "error", cause)
+		"topic", msg.Topic, "dlq_topic", msg.Topic+LabourPlanDLQTopicSuffix, "offset", msg.Offset, "partition", msg.Partition, "error", sanitizeErr(cause))
 	headers := append([]segmentio.Header{}, msg.Headers...)
 	headers = append(headers,
 		segmentio.Header{Key: "x-dlq-source-topic", Value: []byte(msg.Topic)},
