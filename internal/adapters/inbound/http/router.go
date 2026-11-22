@@ -180,8 +180,17 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 // category is looked up from err (falling back to a status-keyed generic
 // category); detail carries the existing dynamic err.Error() text; instance
 // is the request path that produced the error.
+//
+// When the answer is being captured by the idempotency middleware (ADR 0044)
+// the resolved category's replay class is MARKED on the capture recorder:
+// that mark — not a status range or a slug list — is what the middleware
+// reads to decide whether a refusal is stored (FINAL/OUTCOME) or the key is
+// released (RETRYABLE).
 func writeError(w http.ResponseWriter, r *http.Request, status int, err error) {
 	cat := categoryFor(status, err)
+	if cap, ok := w.(*captureRecorder); ok {
+		cap.markedClass = cat.class
+	}
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(problemDetails{
