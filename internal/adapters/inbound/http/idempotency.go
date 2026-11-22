@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/claudioed/workforce-management/internal/idempotency"
 	"github.com/claudioed/workforce-management/internal/pgtx"
 )
 
@@ -116,6 +117,25 @@ func visibleASCII(b byte) bool { return b > ' ' && b <= '~' }
 // same-key request that was blocked on the first one's key row therefore
 // runs fresh once the first fails; it never replays the failure and never
 // runs beside it.
+//
+// # The replay window: a row past idempotency.KeyTTL never answers (ADR 0044 addendum)
+//
+// idempotency.KeyTTL (24 h — ONE constant shared with the ADR-0028
+// sweeper's purge through the neutral internal/idempotency package,
+// because the fitness tests forbid either adapter importing the other)
+// bounds how late a stored answer may serve a retry. On the existing-row
+// branch the middleware first tries to CLAIM a row past the window — one
+// UPDATE that refreshes created_at and clears the stored answer, inside
+// the request transaction — and a claimed key EXECUTES as a fresh request
+// under the same key instead of answering. The claim's predicate
+// re-checks created_at under the row lock, so two concurrent replays of
+// one expired key cannot both claim it: the loser sees the refreshed row
+// and replays the claimer's answer; if the claimer's transaction rolls
+// back (a 5xx or a RETRYABLE refusal), Postgres re-evaluates the
+// predicate against the still-expired row and the waiter claims it — the
+// same serialization argument the unique-index insert makes above. The
+// plain read in replayCachedResponse carries the complement predicate
+// (created_at > now() - TTL), so no code path can answer an expired row.
 func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -171,9 +191,22 @@ func RequireIdempotencyKey(pool *pgxpool.Pool) func(http.Handler) http.Handler {
 			if tag.RowsAffected() == 0 {
 				// A row already exists — see the doc comment's concurrency
 				// argument for why the transaction that inserted it is
-				// GUARANTEED to have already resolved by this point. This
-				// call's own transaction never wrote anything, so it is
-				// rolled back before the plain, non-transactional read.
+				// GUARANTEED to have already resolved by this point. A row
+				// past the replay window never answers (ADR 0044 addendum):
+				// claim it and EXECUTE fresh under the same key.
+				claimed, err := claimExpiredKey(ctx, tx, r, key, requestHash)
+				if err != nil {
+					_ = tx.Rollback(ctx)
+					writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
+					return
+				}
+				if claimed {
+					runFreshRequest(w, r, ctx, tx, key, next)
+					return
+				}
+				// A live row: this call's own transaction never wrote
+				// anything, so it is rolled back before the plain,
+				// non-transactional read.
 				_ = tx.Rollback(ctx)
 				replayCachedResponse(w, r, pool, key, requestHash)
 				return
@@ -217,7 +250,9 @@ type storedResponseHeaders = http.Header
 // path. The transaction that originally inserted this key has definitely
 // already resolved — commit or rollback — by the time this function runs,
 // so a plain read (no transaction of its own) is sufficient and cannot race
-// a half-written row.
+// a half-written row. The read itself is age-guarded — created_at within
+// idempotency.KeyTTL, the complement of the claim below — so it can never
+// answer an expired row, even at the window boundary.
 func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.Pool, key, requestHash string) {
 	ctx := r.Context()
 
@@ -227,8 +262,9 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 	var responseHeadersRaw []byte
 	err := pool.QueryRow(ctx, `
 		SELECT request_hash, method, path, status_code, response_body, response_headers
-		FROM idempotency_keys WHERE key = $1
-	`, key).Scan(&storedHash, &storedMethod, &storedPath, &statusCode, &responseBody, &responseHeadersRaw)
+		FROM idempotency_keys
+		WHERE key = $1 AND created_at > now() - ($2 * interval '1 second')
+	`, key, idempotency.KeyTTL.Seconds()).Scan(&storedHash, &storedMethod, &storedPath, &statusCode, &responseBody, &responseHeadersRaw)
 	if err != nil {
 		writeProblem(w, http.StatusInternalServerError, internalErrorProblem, err.Error(), r.URL.Path)
 		return
@@ -267,6 +303,30 @@ func replayCachedResponse(w http.ResponseWriter, r *http.Request, pool *pgxpool.
 	w.Header().Set(IdempotencyReplayedHeader, "true")
 	w.WriteHeader(*statusCode)
 	_, _ = w.Write(responseBody)
+}
+
+// claimExpiredKey takes over an idempotency_keys row that has aged past the
+// replay window (idempotency.KeyTTL) so THIS request executes fresh under
+// the same key: created_at is refreshed to now() and any stored answer
+// cleared, inside the caller's still-open request transaction (runFreshRequest
+// then records the new outcome in the same commit). It reports whether the
+// claim won — false means the row is still inside the window, or a
+// concurrent replay already claimed it and committed (the predicate
+// re-checks created_at under the row lock; see the middleware's doc
+// comment), and the row must be replayed instead.
+func claimExpiredKey(ctx context.Context, tx pgx.Tx, r *http.Request, key, requestHash string) (bool, error) {
+	tag, err := tx.Exec(ctx, `
+		UPDATE idempotency_keys
+		SET method = $2, path = $3, request_hash = $4,
+		    status_code = NULL, response_body = NULL, response_headers = NULL,
+		    completed_at = NULL, created_at = now()
+		WHERE key = $1
+		  AND created_at <= now() - ($5 * interval '1 second')
+	`, key, r.Method, r.URL.Path, requestHash, idempotency.KeyTTL.Seconds())
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() == 1, nil
 }
 
 // captureRecorder is the recorder runFreshRequest captures the handler's

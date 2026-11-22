@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/claudioed/workforce-management/internal/idempotency"
 )
 
 // Housekeeping defaults (ADR-0028). cmd/workforce reads the matching
@@ -15,8 +17,11 @@ const (
 	DefaultSweepInterval = time.Hour
 	// DefaultIdempotencyKeyTTL is how long an idempotency_keys row is kept.
 	// It bounds how late a client retry can still be replayed from cache
-	// rather than treated as a brand-new request (ADR-0027).
-	DefaultIdempotencyKeyTTL = 24 * time.Hour
+	// rather than treated as a brand-new request (ADR-0027). It is the ONE
+	// constant internal/idempotency.KeyTTL — the same value the replay
+	// read's age guard refuses rows on (ADR 0044 addendum) — so what the
+	// read refuses is exactly the age this sweeper deletes.
+	DefaultIdempotencyKeyTTL = idempotency.KeyTTL
 	// DefaultOutboxRetention is how long a PUBLISHED outbox_events row is
 	// kept for forensics before deletion (ADR-0016). Unpublished rows are
 	// never swept, however old.
