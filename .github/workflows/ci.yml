@@ -525,6 +525,8 @@ jobs:
         run: python3 charts/workforce-management/tests/test_service_selectors.py
       - name: Kong config test (routes + plugins live in the chart, no auth plugin)
         run: python3 charts/workforce-management/tests/test_kong_config.py
+      - name: agents.colocate test (capacity step 3, mcp+a2a in one pod, preStop drain)
+        run: python3 charts/workforce-management/tests/test_agents_colocation.py
 
   # Shift-left container scan: builds the image (no push) on every push AND
   # every PR, so a vulnerable base image or dependency is caught before
