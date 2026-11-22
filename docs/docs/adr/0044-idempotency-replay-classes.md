@@ -181,3 +181,35 @@ paging, FINAL) and `dependency-unavailable` (GET /readyz, RETRYABLE).
   replayed) and
   `TestIdempotency_Assign_CertificationRequiredIsReleasedThenRetried`
   (certification POST unblocks the same key+body).
+
+## Addendum (2026-11-22): the replay window is enforced at read
+
+The open point in Consequences above is closed: the replay read now carries
+the age guard. `internal/idempotency.KeyTTL` (24 h — ONE constant, the same
+value the ADR-0028 sweeper's `DefaultIdempotencyKeyTTL` purge uses, shared
+through a neutral top-level package because the hexagonal fitness tests
+forbid either adapter importing the other) bounds the window. On the
+existing-row branch the middleware first CLAIMS a row past the window — one
+`UPDATE ... WHERE key = $1 AND created_at <= now() - TTL` that refreshes
+`created_at` and clears the stored answer, inside the still-open request
+transaction — and a claimed key EXECUTES as a fresh request under the same
+key; `replayCachedResponse`'s SELECT carries the complement predicate
+(`created_at > now() - TTL`), so no code path answers an expired row.
+Between a row's expiry and the sweeper's hourly pass a retry therefore
+executes instead of answering, and after that re-execution the window
+restarts (a further replay answers the new outcome). The claim predicate
+re-checks `created_at` under the row lock, so two concurrent replays of one
+expired key cannot both claim it: the loser sees the refreshed row and
+replays the claimer's answer; if the claimer's transaction rolls back (a
+5xx or a RETRYABLE refusal), the waiter's blocked UPDATE re-evaluates
+against the still-expired row and claims it — the same serialization
+argument as the unique-index insert. `IDEMPOTENCY_KEY_TTL` still governs
+the sweep (retention); the read guard uses the shared default window, so a
+longer configured retention keeps rows longer but never lengthens the
+replay window — the safe direction (a stored answer can only stop being
+served sooner, never later than documented).
+
+Pinned by `idempotency_replay_age_integration_test.go` (real router +
+Postgres: an expired key EXECUTES and refreshes the window; a live row
+still answers) and `sweeper_test.go` (the sweeper default IS the shared
+constant).

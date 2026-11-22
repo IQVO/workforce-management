@@ -191,7 +191,7 @@ a DLQ write failure or a commit failure stops the consumer
 It runs once at boot and then every `HOUSEKEEPING_INTERVAL` (1 h). It deletes
 in batches of 1000:
 
-- `idempotency_keys` rows older than `IDEMPOTENCY_KEY_TTL` (24 h). This is also the replay window of the `Idempotency-Key` contract: a retry after that is a new request. Stored answers are a 2xx and a FINAL refusal (ADR 0044: request-shape 400/422, planned-heads-exceed-installed, planned-hours-exceed-capacity); a RETRYABLE refusal, a 5xx (or a panic) rolls the key back, so a retry under the same key always runs again.
+- `idempotency_keys` rows older than `IDEMPOTENCY_KEY_TTL` (default 24 h). The replay window is enforced at read time with the same default (`internal/idempotency.KeyTTL`, ONE constant shared with the sweeper — [ADR 0044](../adr/0044-idempotency-replay-classes.md) addendum): a retry of a key past the 24 h window EXECUTES as a new request even before the sweep deletes the row, and a non-default `IDEMPOTENCY_KEY_TTL` changes only how long rows are retained, never the replay window. Stored answers are a 2xx and a FINAL refusal (ADR 0044: request-shape 400/422, planned-heads-exceed-installed, planned-hours-exceed-capacity); a RETRYABLE refusal, a 5xx (or a panic) rolls the key back, so a retry under the same key always runs again.
 - `outbox_events` rows that are **published** and older than `OUTBOX_RETENTION` (7 days). Unpublished rows are never swept.
 
 A failed pass is logged as `housekeeping sweep failed` and retried on the
