@@ -32,12 +32,12 @@ packages changed against HEAD) is the agent stop-hook gate.
 
 ## BDD features
 
-21 feature files hold **154** `Scenario`/`Scenario Outline` blocks (27 of them
+24 feature files hold **167** `Scenario`/`Scenario Outline` blocks (29 of them
 outlines, which expand to more runs). No block is tagged `@known-bug` any more
 (the runner still excludes that tag by default: `BDD_TAGS` defaults to
 `~@known-bug`, see below), so `make bdd` runs all 154 blocks as **218**
-executed scenarios and 1000 steps (`218 scenarios (218 passed)`,
-`1000 steps (1000 passed)`, godog's own summary from
+executed scenarios and 1000 steps (`234 scenarios (234 passed)`,
+`1096 steps (1096 passed)`, godog's own summary from
 `go test ./features -run TestFeatures -count=1 -v`).
 
 | Feature file | Scenarios | Executed |
