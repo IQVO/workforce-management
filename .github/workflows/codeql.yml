@@ -46,7 +46,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Autobuild
-        uses: github/codeql-action/autobuild@3ea37a44b6e4e6847c46edae209410d258d548d1 # v4
+        uses: github/codeql-action/autobuild@1f7399200784d9da30eaf9fe2c9488073bd245fe # v4
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@1f7399200784d9da30eaf9fe2c9488073bd245fe # v4
