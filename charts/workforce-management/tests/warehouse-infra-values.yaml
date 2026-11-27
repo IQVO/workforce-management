@@ -34,8 +34,8 @@ mcp:
     enabled: true
     path: /api/mcp/workforce-management
     parentRefs:
-      - name: warehouse-gateway
-        namespace: kong
+      - name: agent-router
+        namespace: envoy-gateway-system
         sectionName: http
 a2a:
   enabled: true
@@ -43,8 +43,8 @@ a2a:
     enabled: true
     path: /api/a2a/workforce-management
     parentRefs:
-      - name: warehouse-gateway
-        namespace: kong
+      - name: agent-router
+        namespace: envoy-gateway-system
         sectionName: http
 frontend:
   enabled: true
